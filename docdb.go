@@ -3,7 +3,6 @@ package docdb
 import (
 	"context"
 
-	"github.com/ungerik/go-command"
 	fs "github.com/ungerik/go-fs"
 
 	"github.com/domonda/go-errs"
@@ -36,13 +35,6 @@ func DocumentCompanyID(ctx context.Context, docID uu.ID) (companyID uu.ID, err e
 	defer errs.WrapWithFuncParams(&err, docID)
 
 	return conn.DocumentCompanyID(ctx, docID)
-}
-
-var SetDocumentCompanyIDArgs struct {
-	command.ArgsDef
-
-	DocID     uu.ID `arg:"docID"`
-	CompanyID uu.ID `arg:"companyID"`
 }
 
 // SetDocumentCompanyID changes the companyID for a document
