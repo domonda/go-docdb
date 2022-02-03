@@ -63,7 +63,7 @@ func (v VersionTime) NullableTime() nullable.Time {
 	return nullable.TimeFrom(v.Time)
 }
 
-// PrettyPrint implements the pretty.Printer interface
+// PrettyPrint implements the pretty.Printable interface
 func (v VersionTime) PrettyPrint(w io.Writer) {
 	if v.IsNull() {
 		pretty.Fprint(w, nil)
