@@ -1,8 +1,10 @@
 package docdb
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/domonda/go-errs"
 	"github.com/domonda/go-types/uu"
@@ -23,8 +25,13 @@ func (e ErrDocumentNotFound) Error() string {
 	return fmt.Sprintf("document %s not found", e.docID)
 }
 
-func (ErrDocumentNotFound) Is(target error) bool { return target == errs.ErrNotFound }
-func (e ErrDocumentNotFound) DocID() uu.ID       { return e.docID }
+func (ErrDocumentNotFound) Is(target error) bool {
+	return target == os.ErrNotExist || target == sql.ErrNoRows || target == errs.ErrNotFound
+}
+
+func (e ErrDocumentNotFound) DocID() uu.ID {
+	return e.docID
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 // ErrDocumentFileNotFound
