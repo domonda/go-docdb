@@ -41,6 +41,10 @@ func (c errConn) DocumentVersions(context.Context, uu.ID) ([]VersionTime, error)
 	return nil, c.err
 }
 
+func (c errConn) LatestDocumentVersionInfo(ctx context.Context, docID uu.ID) (versionInfo *VersionInfo, err error) {
+	return nil, c.err
+}
+
 func (c errConn) LatestDocumentVersion(context.Context, uu.ID) (VersionTime, error) {
 	return VersionTime{}, c.err
 }

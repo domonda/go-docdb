@@ -391,20 +391,27 @@ func (c *Conn) DocumentVersionInfo(ctx context.Context, docID uu.ID, version doc
 	return versionInfo, nil
 }
 
-func (c *Conn) LatestDocumentVersion(ctx context.Context, docID uu.ID) (latest docdb.VersionTime, err error) {
+func (c *Conn) LatestDocumentVersionInfo(ctx context.Context, docID uu.ID) (versionInfo *docdb.VersionInfo, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
 	if ctx.Err() != nil {
-		return docdb.VersionTime{}, ctx.Err()
+		return nil, ctx.Err()
 	}
 	docMtx.Lock(docID)
 	defer docMtx.Unlock(docID)
 
-	versionInfo, _, err := c.latestDocumentVersionInfo(docID)
+	versionInfo, _, err = c.latestDocumentVersionInfo(docID)
+	return versionInfo, err
+}
+
+func (c *Conn) LatestDocumentVersion(ctx context.Context, docID uu.ID) (latest docdb.VersionTime, err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, docID)
+
+	info, err := c.LatestDocumentVersionInfo(ctx, docID)
 	if err != nil {
-		return docdb.VersionTime{}, err
+		return docdb.VersionTime{}, ctx.Err()
 	}
-	return versionInfo.Version, nil
+	return info.Version, nil
 }
 
 func (c *Conn) DocumentVersionFileProvider(ctx context.Context, docID uu.ID, version docdb.VersionTime) (p docdb.FileProvider, err error) {

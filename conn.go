@@ -34,6 +34,9 @@ type Conn interface {
 	// DocumentVersionInfo returns the VersionInfo for a VersionTime
 	DocumentVersionInfo(ctx context.Context, docID uu.ID, version VersionTime) (*VersionInfo, error)
 
+	// LatestDocumentVersionInfo returns the VersionInfo for the latest document version
+	LatestDocumentVersionInfo(ctx context.Context, docID uu.ID) (*VersionInfo, error)
+
 	// DocumentVersionFileProvider returns a FileProvider for the files of a document version
 	DocumentVersionFileProvider(ctx context.Context, docID uu.ID, version VersionTime) (FileProvider, error)
 

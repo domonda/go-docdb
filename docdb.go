@@ -32,49 +32,56 @@ func EnumCompanyDocumentIDs(ctx context.Context, companyID uu.ID, callback func(
 
 // DocumentCompanyID returns the companyID for a docID
 func DocumentCompanyID(ctx context.Context, docID uu.ID) (companyID uu.ID, err error) {
-	defer errs.WrapWithFuncParams(&err, docID)
+	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
 	return conn.DocumentCompanyID(ctx, docID)
 }
 
 // SetDocumentCompanyID changes the companyID for a document
 func SetDocumentCompanyID(ctx context.Context, docID, companyID uu.ID) (err error) {
-	defer errs.WrapWithFuncParams(&err, docID, companyID)
+	defer errs.WrapWithFuncParams(&err, ctx, docID, companyID)
 
 	return conn.SetDocumentCompanyID(ctx, docID, companyID)
 }
 
 // DocumentVersions returns all version timestamps of a document sorted in ascending order
 func DocumentVersions(ctx context.Context, docID uu.ID) (versions []VersionTime, err error) {
-	defer errs.WrapWithFuncParams(&err, docID)
+	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
 	return conn.DocumentVersions(ctx, docID)
 }
 
 // LatestDocumentVersion returns the lates VersionTime of a document
 func LatestDocumentVersion(ctx context.Context, docID uu.ID) (version VersionTime, err error) {
-	defer errs.WrapWithFuncParams(&err, docID)
+	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
 	return conn.LatestDocumentVersion(ctx, docID)
 }
 
 // DocumentVersionInfo returns the VersionInfo for a VersionTime
 func DocumentVersionInfo(ctx context.Context, docID uu.ID, version VersionTime) (info *VersionInfo, err error) {
-	defer errs.WrapWithFuncParams(&err, docID, version)
+	defer errs.WrapWithFuncParams(&err, ctx, docID, version)
 
 	return conn.DocumentVersionInfo(ctx, docID, version)
 }
 
+// LatestDocumentVersionInfo returns the VersionInfo for the latest document version
+func LatestDocumentVersionInfo(ctx context.Context, docID uu.ID) (info *VersionInfo, err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, docID)
+
+	return conn.LatestDocumentVersionInfo(ctx, docID)
+}
+
 // DocumentVersionFileProvider returns a FileProvider for the files of a document version
 func DocumentVersionFileProvider(ctx context.Context, docID uu.ID, version VersionTime) (p FileProvider, err error) {
-	defer errs.WrapWithFuncParams(&err, docID, version)
+	defer errs.WrapWithFuncParams(&err, ctx, docID, version)
 
 	return conn.DocumentVersionFileProvider(ctx, docID, version)
 }
 
 // ReadDocumentFile reads a file of the latest document version
 func ReadDocumentFile(ctx context.Context, docID uu.ID, filename string) (data []byte, versionInfo *VersionInfo, err error) {
-	defer errs.WrapWithFuncParams(&err, docID, filename)
+	defer errs.WrapWithFuncParams(&err, ctx, docID, filename)
 
 	fileReader, versionInfo, err := conn.DocumentFileReader(ctx, docID, filename)
 	if err != nil {
@@ -92,7 +99,7 @@ func ReadDocumentFile(ctx context.Context, docID uu.ID, filename string) (data [
 // Will return ErrDocumentHasNoCommitedVersion if there is no
 // other commited version for the document.
 func SubstituteDeletedDocumentVersion(ctx context.Context, docID uu.ID, version VersionTime) (validVersion VersionTime, err error) {
-	defer errs.WrapWithFuncParams(&err, docID, version)
+	defer errs.WrapWithFuncParams(&err, ctx, docID, version)
 
 	_, err = conn.DocumentVersionInfo(ctx, docID, version)
 	if err == nil {
@@ -125,7 +132,7 @@ func SubstituteDeletedDocumentVersion(ctx context.Context, docID uu.ID, version 
 // Wrapped ErrDocumentNotFound, ErrDocumentVersionNotFound, ErrDocumentFileNotFound
 // will be returned in case of such error conditions.
 func DocumentVersionFileReader(ctx context.Context, docID uu.ID, version VersionTime, filename string) (fileReader fs.FileReader, err error) {
-	defer errs.WrapWithFuncParams(&err, docID, version, filename)
+	defer errs.WrapWithFuncParams(&err, ctx, docID, version, filename)
 
 	return conn.DocumentVersionFileReader(ctx, docID, version, filename)
 }
@@ -134,7 +141,7 @@ func DocumentVersionFileReader(ctx context.Context, docID uu.ID, version Version
 // Wrapped ErrDocumentNotFound, ErrDocumentHasNoCommitedVersion, ErrDocumentFileNotFound
 // will be returned in case of such error conditions.
 func DocumentFileReader(ctx context.Context, docID uu.ID, filename string) (fileReader fs.FileReader, versionInfo *VersionInfo, err error) {
-	defer errs.WrapWithFuncParams(&err, docID, filename)
+	defer errs.WrapWithFuncParams(&err, ctx, docID, filename)
 
 	return conn.DocumentFileReader(ctx, docID, filename)
 }
@@ -145,14 +152,14 @@ func DocumentFileReader(ctx context.Context, docID uu.ID, filename string) (file
 // Wrapped ErrDocumentNotFound, ErrDocumentHasNoCommitedVersion, ErrDocumentFileNotFound
 // will be returned in case of such error conditions.
 func DocumentFileReaderTryCheckedOutByUser(ctx context.Context, docID uu.ID, filename string, userID uu.ID) (fileReader fs.FileReader, version VersionTime, checkedOutStatus *CheckOutStatus, err error) {
-	defer errs.WrapWithFuncParams(&err, docID, filename, userID)
+	defer errs.WrapWithFuncParams(&err, ctx, docID, filename, userID)
 
 	return conn.DocumentFileReaderTryCheckedOutByUser(ctx, docID, filename, userID)
 }
 
 // DocumentFileExists returns if a document file with filename exists in the latest document version.
 func DocumentFileExists(ctx context.Context, docID uu.ID, filename string) (exists bool, err error) {
-	defer errs.WrapWithFuncParams(&err, docID, filename)
+	defer errs.WrapWithFuncParams(&err, ctx, docID, filename)
 
 	file, _, err := DocumentFileReader(ctx, docID, filename)
 	if errs.IsType(err, ErrDocumentFileNotFound{}) {
@@ -169,7 +176,7 @@ func DocumentFileExists(ctx context.Context, docID uu.ID, filename string) (exis
 // The methods Valid() and String() can be called on a nil CheckOutStatus.
 // ErrDocumentNotFound is returned if the document does not exist.
 func DocumentCheckOutStatus(ctx context.Context, docID uu.ID) (status *CheckOutStatus, err error) {
-	defer errs.WrapWithFuncParams(&err, docID)
+	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
 	return conn.DocumentCheckOutStatus(ctx, docID)
 }
