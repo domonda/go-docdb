@@ -110,6 +110,10 @@ func (v VersionTime) IsNotNull() bool {
 	return !v.Time.IsZero()
 }
 
+func (v *VersionTime) SetNull() {
+	v.Time = time.Time{}
+}
+
 // Scan implements the database/sql.Scanner interface.
 func (v *VersionTime) Scan(value interface{}) error {
 	switch t := value.(type) {
