@@ -87,7 +87,7 @@ func ReadDocumentFile(ctx context.Context, docID uu.ID, filename string) (data [
 	if err != nil {
 		return nil, nil, err
 	}
-	data, err = fileReader.ReadAll()
+	data, err = fileReader.ReadAll(ctx)
 	if err != nil {
 		return nil, nil, err
 	}

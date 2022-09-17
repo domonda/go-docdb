@@ -1,11 +1,13 @@
 package docdb
 
 import (
+	"context"
 	"fmt"
 	"sort"
 
-	"github.com/domonda/go-types/uu"
 	fs "github.com/ungerik/go-fs"
+
+	"github.com/domonda/go-types/uu"
 )
 
 type FileInfo struct {
@@ -36,7 +38,7 @@ func (vi *VersionInfo) String() string {
 }
 
 func (vi *VersionInfo) WriteJSON(file fs.File) error {
-	return file.WriteJSON(vi, "  ")
+	return file.WriteJSON(context.Background(), vi, "  ")
 }
 
 func ReadVersionInfoJSON(file fs.File, writeFixedVersion bool) (versionInfo *VersionInfo, err error) {
@@ -44,7 +46,7 @@ func ReadVersionInfoJSON(file fs.File, writeFixedVersion bool) (versionInfo *Ver
 		VersionInfo
 		ModidfiedFiles []string // with typo
 	}
-	err = file.ReadJSON(&i)
+	err = file.ReadJSON(context.Background(), &i)
 	if err != nil {
 		return nil, err
 	}

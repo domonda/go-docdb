@@ -211,7 +211,7 @@ func (c *Conn) documentCompanyID(docID uu.ID) (companyID uu.ID, err error) {
 
 	file := c.documentDir(docID).Join("company.id")
 	if file.Exists() {
-		uuidStr, err := file.ReadAllString()
+		uuidStr, err := file.ReadAllString(context.Background())
 		if err != nil {
 			return uu.IDNil, err
 		}
@@ -226,7 +226,7 @@ func (c *Conn) documentCompanyID(docID uu.ID) (companyID uu.ID, err error) {
 	var doc struct {
 		CompanyID uu.ID `json:"companyId"`
 	}
-	err = versionDir.Join("doc.json").ReadJSON(&doc)
+	err = versionDir.Join("doc.json").ReadJSON(context.Background(), &doc)
 	if err != nil {
 		return uu.IDNil, err
 	}
@@ -279,7 +279,7 @@ func (c *Conn) SetDocumentCompanyID(ctx context.Context, docID, companyID uu.ID)
 		}
 	}
 
-	err = docDir.Join("company.id").WriteAllString(companyID.String())
+	err = docDir.Join("company.id").WriteAllString(ctx, companyID.String())
 	if err != nil {
 		return err
 	}
@@ -525,7 +525,7 @@ func (c *Conn) documentCheckOutStatus(docID uu.ID) (status *docdb.CheckOutStatus
 		}
 		return nil, nil
 	}
-	err = statusFile.ReadJSON(&status)
+	err = statusFile.ReadJSON(context.Background(), &status)
 	if err != nil {
 		return nil, err
 	}
@@ -544,7 +544,7 @@ func (c *Conn) writeDocumentCheckOutStatusFile(docID uu.ID, version docdb.Versio
 		Time:        time.Now().UTC(),
 		CheckOutDir: checkOutDir,
 	}
-	err = c.documentCheckOutStatusFile(docID).WriteJSON(status, "  ")
+	err = c.documentCheckOutStatusFile(docID).WriteJSON(context.Background(), status, "  ")
 	if err != nil {
 		return nil, err
 	}
@@ -609,7 +609,7 @@ func (c *Conn) CheckOutNewDocument(ctx context.Context, docID, companyID, userID
 		return nil, err
 	}
 
-	err = docDir.Join("company.id").WriteAllString(companyID.String())
+	err = docDir.Join("company.id").WriteAllString(ctx, companyID.String())
 	if err != nil {
 		return nil, err
 	}
@@ -717,7 +717,7 @@ func (c *Conn) CheckOutDocument(ctx context.Context, docID, userID uu.ID, reason
 		}
 	}
 
-	err = fs.CopyRecursive(versionDir, checkOutDir)
+	err = fs.CopyRecursive(ctx, versionDir, checkOutDir)
 	if err != nil {
 		if e := checkOutDir.RemoveRecursive(); e != nil {
 			err = errs.Errorf("error (%s) while cleaning up after error: %w", e, err)
@@ -835,7 +835,7 @@ func (c *Conn) CheckInDocument(ctx context.Context, docID uu.ID) (versionInfo *d
 	newVersion := docdb.VersionTimeFrom(time.Now())
 	newVersionDir = docDir.Join(newVersion.String())
 
-	err = fs.CopyRecursive(workDir, newVersionDir)
+	err = fs.CopyRecursive(ctx, workDir, newVersionDir)
 	if err != nil {
 		return nil, err
 	}
