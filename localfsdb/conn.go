@@ -279,7 +279,7 @@ func (c *Conn) SetDocumentCompanyID(ctx context.Context, docID, companyID uu.ID)
 		}
 	}
 
-	err = docDir.Join("company.id").WriteAllString(ctx, companyID.String())
+	err = docDir.Join("company.id").WriteAllString(context.Background(), companyID.String())
 	if err != nil {
 		return err
 	}
@@ -609,7 +609,7 @@ func (c *Conn) CheckOutNewDocument(ctx context.Context, docID, companyID, userID
 		return nil, err
 	}
 
-	err = docDir.Join("company.id").WriteAllString(ctx, companyID.String())
+	err = docDir.Join("company.id").WriteAllString(context.Background(), companyID.String())
 	if err != nil {
 		return nil, err
 	}
