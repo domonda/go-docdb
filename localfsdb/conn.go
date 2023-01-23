@@ -211,7 +211,7 @@ func (c *Conn) documentCompanyID(docID uu.ID) (companyID uu.ID, err error) {
 
 	file := c.documentDir(docID).Join("company.id")
 	if file.Exists() {
-		uuidStr, err := file.ReadAllString(context.Background())
+		uuidStr, err := file.ReadAllString()
 		if err != nil {
 			return uu.IDNil, err
 		}
@@ -279,7 +279,7 @@ func (c *Conn) SetDocumentCompanyID(ctx context.Context, docID, companyID uu.ID)
 		}
 	}
 
-	err = docDir.Join("company.id").WriteAllString(context.Background(), companyID.String())
+	err = docDir.Join("company.id").WriteAllString(companyID.String())
 	if err != nil {
 		return err
 	}
@@ -609,7 +609,7 @@ func (c *Conn) CheckOutNewDocument(ctx context.Context, docID, companyID, userID
 		return nil, err
 	}
 
-	err = docDir.Join("company.id").WriteAllString(context.Background(), companyID.String())
+	err = docDir.Join("company.id").WriteAll(companyID.StringBytes())
 	if err != nil {
 		return nil, err
 	}

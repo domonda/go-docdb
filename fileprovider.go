@@ -26,5 +26,5 @@ func (d dirFileProvider) HasFile(filename string) (bool, error) {
 }
 
 func (d dirFileProvider) ReadFile(ctx context.Context, filename string) ([]byte, error) {
-	return d.dir.Join(filename).ReadAll(ctx)
+	return d.dir.Join(filename).ReadAllContext(ctx)
 }

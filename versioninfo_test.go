@@ -1,7 +1,6 @@
 package docdb
 
 import (
-	"context"
 	"reflect"
 	"testing"
 
@@ -78,10 +77,10 @@ func TestVersionInfoCompatibility(t *testing.T) {
 	defer dir.RemoveRecursive()
 
 	oldVersionInfoJSONFile := dir.Join("old.json")
-	oldVersionInfoJSONFile.WriteAllString(context.Background(), oldVersionInfoJSON)
+	oldVersionInfoJSONFile.WriteAllString(oldVersionInfoJSON)
 
 	newVersionInfoJSONFile := dir.Join("new.json")
-	newVersionInfoJSONFile.WriteAllString(context.Background(), newVersionInfoJSON)
+	newVersionInfoJSONFile.WriteAllString(newVersionInfoJSON)
 
 	oldVersionInfo, err := ReadVersionInfoJSON(oldVersionInfoJSONFile, false)
 	if err != nil {
