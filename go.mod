@@ -6,8 +6,8 @@ require (
 	github.com/domonda/go-errs v0.0.0-20221201115330-819262069697
 	github.com/domonda/go-pretty v0.0.0-20220317123925-dd9e6bef129a
 	github.com/domonda/go-types v0.0.0-20230123091716-ceb113bdba48
-	github.com/domonda/golog v0.0.0-20230123092159-f87b7d8de636
-	github.com/ungerik/go-fs v0.0.0-20230123084935-ad138e78535a
+	github.com/domonda/golog v0.0.0-20230124102541-81056aaba2cb
+	github.com/ungerik/go-fs v0.0.0-20230126152159-caed95e133d3
 )
 
 require (
@@ -19,6 +19,6 @@ require (
 	github.com/mattn/go-runewidth v0.0.14 // indirect
 	github.com/muesli/termenv v0.13.0 // indirect
 	github.com/rivo/uniseg v0.4.3 // indirect
-	golang.org/x/exp v0.0.0-20230118134722-a68e582fa157 // indirect
+	golang.org/x/exp v0.0.0-20230125214544-b3c2aaf6208d // indirect
 	golang.org/x/sys v0.4.0 // indirect
 )

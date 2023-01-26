@@ -10,8 +10,8 @@ github.com/domonda/go-pretty v0.0.0-20220317123925-dd9e6bef129a h1:6/Is0KGl5Ot3E
 github.com/domonda/go-pretty v0.0.0-20220317123925-dd9e6bef129a/go.mod h1:3QkM8UJdyJMeKZiIo7hYzSkQBpRS3k0gOHw4ysyEIB4=
 github.com/domonda/go-types v0.0.0-20230123091716-ceb113bdba48 h1:vfjPQCCnspQRMdb31fKHBG+/2Qst2vVJGjUiBufecPE=
 github.com/domonda/go-types v0.0.0-20230123091716-ceb113bdba48/go.mod h1:OCpuKQfcYEWr4D7Z+1aBLO5NvGoRRZytOcvjFs/KJOg=
-github.com/domonda/golog v0.0.0-20230123092159-f87b7d8de636 h1:lg+XcMmQpK2TozBO3QkBVpLzSHLLGGm3PbABf/VDXS0=
-github.com/domonda/golog v0.0.0-20230123092159-f87b7d8de636/go.mod h1:JSi4lgHJalBxn1LbHT0K65TplkCr0BpnyiqHpZsAYBU=
+github.com/domonda/golog v0.0.0-20230124102541-81056aaba2cb h1:j4TMT+4CFqyMPud26bCu0aAlT/UJXx4AHBZ+Ptqh7zY=
+github.com/domonda/golog v0.0.0-20230124102541-81056aaba2cb/go.mod h1:JSi4lgHJalBxn1LbHT0K65TplkCr0BpnyiqHpZsAYBU=
 github.com/fsnotify/fsnotify v1.6.0 h1:n+5WquG0fcWoWp6xPWfHdbskMCQaFnG6PfBrh1Ky4HY=
 github.com/fsnotify/fsnotify v1.6.0/go.mod h1:sl3t1tCWJFWoRz9R8WJCbQihKKwmorjAbSClcnxKAGw=
 github.com/lucasb-eyer/go-colorful v1.2.0 h1:1nnpGOrhyZZuNyfu1QjKiUICQ74+3FNCN69Aj6K7nkY=
@@ -28,10 +28,10 @@ github.com/rivo/uniseg v0.2.0/go.mod h1:J6wj4VEh+S6ZtnVlnTBMWIodfgj8LQOQFoIToxlJ
 github.com/rivo/uniseg v0.4.3 h1:utMvzDsuh3suAEnhH0RdHmoPbU648o6CvXxTx4SBMOw=
 github.com/rivo/uniseg v0.4.3/go.mod h1:FN3SvrM+Zdj16jyLfmOkMNblXMcoc8DfTHruCPUcx88=
 github.com/stretchr/testify v1.8.1 h1:w7B6lhMri9wdJUVmEZPGGhZzrYTPvgJArz7wNPgYKsk=
-github.com/ungerik/go-fs v0.0.0-20230123084935-ad138e78535a h1:yJZ7Ju1cQ8vPpDALjW9nxT22Dj0Vc9Y+h6hBT1lCJY4=
-github.com/ungerik/go-fs v0.0.0-20230123084935-ad138e78535a/go.mod h1:wSSvK/VAz72bLlVrZvSBzPrSHSawjVpyoNW7LorFDww=
-golang.org/x/exp v0.0.0-20230118134722-a68e582fa157 h1:fiNkyhJPUvxbRPbCqY/D9qdjmPzfHcpK3P4bM4gioSY=
-golang.org/x/exp v0.0.0-20230118134722-a68e582fa157/go.mod h1:CxIveKay+FTh1D0yPZemJVgC/95VzuuOLq5Qi4xnoYc=
+github.com/ungerik/go-fs v0.0.0-20230126152159-caed95e133d3 h1:RfAk0JtkKYGzrYV+n1DRf2WlNd1sBiq5vfOhdJUHd0I=
+github.com/ungerik/go-fs v0.0.0-20230126152159-caed95e133d3/go.mod h1:wSSvK/VAz72bLlVrZvSBzPrSHSawjVpyoNW7LorFDww=
+golang.org/x/exp v0.0.0-20230125214544-b3c2aaf6208d h1:9Bio0JlZpJ1P4NXsK5i8Rf2MclrRzMGzJWOIkhZ5Um8=
+golang.org/x/exp v0.0.0-20230125214544-b3c2aaf6208d/go.mod h1:CxIveKay+FTh1D0yPZemJVgC/95VzuuOLq5Qi4xnoYc=
 golang.org/x/sys v0.0.0-20220811171246-fbc7d0a398ab/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
 golang.org/x/sys v0.0.0-20220908164124-27713097b956/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
 golang.org/x/sys v0.4.0 h1:Zr2JFtRQNX3BCZ8YtxRE9hNJYC8J6I1MVbMg6owUp18=
