@@ -78,19 +78,59 @@ func (c *Conn) SetDocumentCompanyID(ctx context.Context, docID, companyID uu.ID)
 }
 
 func (c *Conn) DocumentVersions(ctx context.Context, docID uu.ID) (versions []docdb.VersionTime, err error) {
-	panic("TODO")
+	err = db.QueryRows(ctx, c.queries.DocumentVersions, docID).ScanSlice(&versions)
+	if err != nil {
+		return nil, err
+	}
+	return versions, nil
 }
 
 func (c *Conn) DocumentVersionInfo(ctx context.Context, docID uu.ID, version docdb.VersionTime) (versionInfo *docdb.VersionInfo, err error) {
-	panic("TODO")
+	versionInfo = &docdb.VersionInfo{
+		DocID:   docID,
+		Version: version,
+	}
+	err = db.QueryRow(ctx, c.queries.DocumentVersionInfo, docID, version).Scan(
+		&versionInfo.PrevVersion,
+		&versionInfo.CommitUserID,
+		&versionInfo.CommitReason,
+		&versionInfo.Files,
+		&versionInfo.AddedFiles,
+		&versionInfo.RemovedFiles,
+		&versionInfo.ModifiedFiles,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return versionInfo, nil
 }
 
 func (c *Conn) LatestDocumentVersionInfo(ctx context.Context, docID uu.ID) (versionInfo *docdb.VersionInfo, err error) {
-	panic("TODO")
+	versionInfo = &docdb.VersionInfo{
+		DocID: docID,
+	}
+	err = db.QueryRow(ctx, c.queries.LatestDocumentVersionInfo, docID).Scan(
+		&versionInfo.Version,
+		&versionInfo.PrevVersion,
+		&versionInfo.CommitUserID,
+		&versionInfo.CommitReason,
+		&versionInfo.Files,
+		&versionInfo.AddedFiles,
+		&versionInfo.RemovedFiles,
+		&versionInfo.ModifiedFiles,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return versionInfo, nil
 }
 
 func (c *Conn) LatestDocumentVersion(ctx context.Context, docID uu.ID) (latest docdb.VersionTime, err error) {
-	panic("TODO")
+	latest, err = db.QueryValue[docdb.VersionTime](ctx, c.queries.LatestDocumentVersion, docID)
+	if err != nil {
+		return docdb.VersionTime{}, db.ReplaceErrNoRows(err, docdb.NewErrDocumentNotFound(docID))
+	}
+	return latest, nil
 }
 
 func (c *Conn) DocumentVersionFileProvider(ctx context.Context, docID uu.ID, version docdb.VersionTime) (p docdb.FileProvider, err error) {
