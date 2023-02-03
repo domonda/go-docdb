@@ -7,7 +7,7 @@ require (
 	github.com/domonda/go-pretty v0.0.0-20220317123925-dd9e6bef129a
 	github.com/domonda/go-types v0.0.0-20230123091716-ceb113bdba48
 	github.com/domonda/golog v0.0.0-20230124102541-81056aaba2cb
-	github.com/ungerik/go-fs v0.0.0-20230126152159-caed95e133d3
+	github.com/ungerik/go-fs v0.0.0-20230203145800-f1967f6e8bbe
 )
 
 require (

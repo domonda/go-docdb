@@ -49,9 +49,11 @@ func (e ErrDocumentFileNotFound) Error() string {
 	return fmt.Sprintf("document %s file not found: %q", e.docID, e.filename)
 }
 
-func (ErrDocumentFileNotFound) Is(target error) bool { return target == errs.ErrNotFound }
-func (e ErrDocumentFileNotFound) DocID() uu.ID       { return e.docID }
-func (e ErrDocumentFileNotFound) Filename() string   { return e.filename }
+func (ErrDocumentFileNotFound) Is(target error) bool {
+	return target == errs.ErrNotFound || target == os.ErrNotExist
+}
+func (e ErrDocumentFileNotFound) DocID() uu.ID     { return e.docID }
+func (e ErrDocumentFileNotFound) Filename() string { return e.filename }
 
 ///////////////////////////////////////////////////////////////////////////////
 // ErrDocumentVersionNotFound

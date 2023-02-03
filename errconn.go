@@ -57,12 +57,8 @@ func (c errConn) DocumentVersionFileProvider(context.Context, uu.ID, VersionTime
 	return nil, c.err
 }
 
-func (c errConn) DocumentVersionFileReader(context.Context, uu.ID, VersionTime, string) (fs.FileReader, error) {
+func (c errConn) ReadDocumentVersionFile(ctx context.Context, docID uu.ID, version VersionTime, filename string) (data []byte, err error) {
 	return nil, c.err
-}
-
-func (c errConn) DocumentFileReader(context.Context, uu.ID, string) (fs.FileReader, *VersionInfo, error) {
-	return nil, nil, c.err
 }
 
 func (c errConn) DocumentFileReaderTryCheckedOutByUser(context.Context, uu.ID, string, uu.ID) (fs.FileReader, VersionTime, *CheckOutStatus, error) {

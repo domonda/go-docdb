@@ -83,11 +83,11 @@ func DocumentVersionFileProvider(ctx context.Context, docID uu.ID, version Versi
 func ReadDocumentFile(ctx context.Context, docID uu.ID, filename string) (data []byte, versionInfo *VersionInfo, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, filename)
 
-	fileReader, versionInfo, err := conn.DocumentFileReader(ctx, docID, filename)
+	versionInfo, err = conn.LatestDocumentVersionInfo(ctx, docID)
 	if err != nil {
 		return nil, nil, err
 	}
-	data, err = fileReader.ReadAllContext(ctx)
+	data, err = conn.ReadDocumentVersionFile(ctx, docID, versionInfo.Version, filename)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -128,13 +128,26 @@ func SubstituteDeletedDocumentVersion(ctx context.Context, docID uu.ID, version 
 	return versions[len(versions)-1], nil
 }
 
+// ReadDocumentVersionFile returns the contents of a file of a document version.
+// Wrapped ErrDocumentNotFound, ErrDocumentVersionNotFound, ErrDocumentFileNotFound
+// will be returned in case of such error conditions.
+func ReadDocumentVersionFile(ctx context.Context, docID uu.ID, version VersionTime, filename string) (data []byte, err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, docID, version, filename)
+
+	return conn.ReadDocumentVersionFile(ctx, docID, version, filename)
+}
+
 // DocumentVersionFileReader returns a fs.FileReader for a file of a document version.
 // Wrapped ErrDocumentNotFound, ErrDocumentVersionNotFound, ErrDocumentFileNotFound
 // will be returned in case of such error conditions.
 func DocumentVersionFileReader(ctx context.Context, docID uu.ID, version VersionTime, filename string) (fileReader fs.FileReader, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, version, filename)
 
-	return conn.DocumentVersionFileReader(ctx, docID, version, filename)
+	data, err := conn.ReadDocumentVersionFile(ctx, docID, version, filename)
+	if err != nil {
+		return nil, err
+	}
+	return fs.NewMemFile(filename, data), nil
 }
 
 // DocumentFileReader returns a fs.FileReader for a file of the latest document version.
@@ -143,7 +156,15 @@ func DocumentVersionFileReader(ctx context.Context, docID uu.ID, version Version
 func DocumentFileReader(ctx context.Context, docID uu.ID, filename string) (fileReader fs.FileReader, versionInfo *VersionInfo, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, filename)
 
-	return conn.DocumentFileReader(ctx, docID, filename)
+	versionInfo, err = conn.LatestDocumentVersionInfo(ctx, docID)
+	if err != nil {
+		return nil, nil, err
+	}
+	data, err := conn.ReadDocumentVersionFile(ctx, docID, versionInfo.Version, filename)
+	if err != nil {
+		return nil, nil, err
+	}
+	return fs.NewMemFile(filename, data), versionInfo, nil
 }
 
 // DocumentFileReaderTryCheckedOutByUser returns a fs.FileReader for a file of the latest document version,

@@ -40,15 +40,10 @@ type Conn interface {
 	// DocumentVersionFileProvider returns a FileProvider for the files of a document version
 	DocumentVersionFileProvider(ctx context.Context, docID uu.ID, version VersionTime) (FileProvider, error)
 
-	// DocumentVersionFileReader returns a fs.FileReader for a file of a document version.
+	// ReadDocumentVersionFile returns the contents of a file of a document version.
 	// Wrapped ErrDocumentNotFound, ErrDocumentVersionNotFound, ErrDocumentFileNotFound
 	// will be returned in case of such error conditions.
-	DocumentVersionFileReader(ctx context.Context, docID uu.ID, version VersionTime, filename string) (fs.FileReader, error)
-
-	// DocumentFileReader returns a fs.FileReader for a file of the latest document version.
-	// Wrapped ErrDocumentNotFound, ErrDocumentHasNoCommitedVersion, ErrDocumentFileNotFound
-	// will be returned in case of such error conditions.
-	DocumentFileReader(ctx context.Context, docID uu.ID, filename string) (fs.FileReader, *VersionInfo, error)
+	ReadDocumentVersionFile(ctx context.Context, docID uu.ID, version VersionTime, filename string) (data []byte, err error)
 
 	// DocumentFileReaderTryCheckedOutByUser returns a fs.FileReader for a file of the latest document version,
 	// or the checked out file if the document was checked out by the passed userID.

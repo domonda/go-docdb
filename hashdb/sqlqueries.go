@@ -17,6 +17,7 @@ type SQLQueries struct {
 	DocumentVersionInfo       string
 	LatestDocumentVersionInfo string
 	LatestDocumentVersion     string
+	DocumentVersionFileHash   string
 }
 
 var DefaultSQLQueries = SQLQueries{
@@ -54,4 +55,10 @@ var DefaultSQLQueries = SQLQueries{
 		order by version desc
 		limit 1`,
 	LatestDocumentVersion: `select version from public.document_version where document_id = $1 order by version desc limit 1`,
+	DocumentVersionFileHash: `
+		select f.hash
+		from public.document_version as v
+		inner join public.document_version_file as f
+			on f.document_version_id = v.id and f.name = $3
+		where v.document_id = $1 and v.version = $2`,
 }

@@ -2,6 +2,8 @@ package hashdb
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/ungerik/go-fs"
@@ -18,10 +20,10 @@ var _ docdb.Conn = (*Conn)(nil)
 type Conn struct {
 	workspaceDir fs.File
 	queries      *SQLQueries
-	files        Files
+	files        FileStore
 }
 
-func NewConn(workspaceDir fs.File, queries *SQLQueries, files Files) *Conn {
+func NewConn(workspaceDir fs.File, queries *SQLQueries, files FileStore) *Conn {
 	if !workspaceDir.IsDir() {
 		panic("workspaceDir does not exist: '" + string(workspaceDir) + "'")
 	}
@@ -40,8 +42,9 @@ func NewConn(workspaceDir fs.File, queries *SQLQueries, files Files) *Conn {
 
 func (c *Conn) String() string {
 	return fmt.Sprintf(
-		"hashdb.Conn{Workspace: %q}",
+		"hashdb.Conn{Workspace: %q, FileStore: %s}",
 		c.workspaceDir.LocalPath(),
+		c.files.String(),
 	)
 }
 
@@ -100,7 +103,17 @@ func (c *Conn) DocumentVersionInfo(ctx context.Context, docID uu.ID, version doc
 		&versionInfo.ModifiedFiles,
 	)
 	if err != nil {
-		return nil, err
+		if !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		exists, err := c.DocumentExists(ctx, docID)
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, docdb.NewErrDocumentNotFound(docID)
+		}
+		return nil, docdb.NewErrDocumentVersionNotFound(docID, version)
 	}
 	return versionInfo, nil
 }
@@ -133,15 +146,30 @@ func (c *Conn) LatestDocumentVersion(ctx context.Context, docID uu.ID) (latest d
 	return latest, nil
 }
 
+func (c *Conn) documentVersionFileHash(ctx context.Context, docID uu.ID, version docdb.VersionTime, filename string) (hash string, err error) {
+	hash, err = db.QueryValue[string](ctx, c.queries.DocumentVersionFileHash, docID, version, filename)
+	if err != nil {
+		if db.IsOtherThanErrNoRows(err) {
+			return "", err
+		}
+		_, err = c.DocumentVersionInfo(ctx, docID, version)
+		if errs.IsErrNotFound(err) {
+			return "", err
+		}
+		return "", docdb.NewErrDocumentFileNotFound(docID, filename)
+	}
+	return hash, nil
+}
+
+func (c *Conn) ReadDocumentVersionFile(ctx context.Context, docID uu.ID, version docdb.VersionTime, filename string) (data []byte, err error) {
+	hash, err := c.documentVersionFileHash(ctx, docID, version, filename)
+	if err != nil {
+		return nil, err
+	}
+	return c.files.Read(ctx, hash)
+}
+
 func (c *Conn) DocumentVersionFileProvider(ctx context.Context, docID uu.ID, version docdb.VersionTime) (p docdb.FileProvider, err error) {
-	panic("TODO")
-}
-
-func (c *Conn) DocumentVersionFileReader(ctx context.Context, docID uu.ID, version docdb.VersionTime, filename string) (fileReader fs.FileReader, err error) {
-	panic("TODO")
-}
-
-func (c *Conn) DocumentFileReader(ctx context.Context, docID uu.ID, filename string) (fileReader fs.FileReader, versionInfo *docdb.VersionInfo, err error) {
 	panic("TODO")
 }
 

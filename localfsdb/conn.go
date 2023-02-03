@@ -414,23 +414,7 @@ func (c *Conn) LatestDocumentVersion(ctx context.Context, docID uu.ID) (latest d
 	return info.Version, nil
 }
 
-func (c *Conn) DocumentVersionFileProvider(ctx context.Context, docID uu.ID, version docdb.VersionTime) (p docdb.FileProvider, err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, docID, version)
-
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-	docMtx.Lock(docID)
-	defer docMtx.Unlock(docID)
-
-	_, versionDir, err := c.documentAndVersionDir(docID, version)
-	if err != nil {
-		return nil, err
-	}
-	return docdb.DirFileProvider(versionDir), nil
-}
-
-func (c *Conn) DocumentVersionFileReader(ctx context.Context, docID uu.ID, version docdb.VersionTime, filename string) (fileReader fs.FileReader, err error) {
+func (c *Conn) ReadDocumentVersionFile(ctx context.Context, docID uu.ID, version docdb.VersionTime, filename string) (data []byte, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, version, filename)
 
 	if ctx.Err() != nil {
@@ -447,27 +431,23 @@ func (c *Conn) DocumentVersionFileReader(ctx context.Context, docID uu.ID, versi
 	if !file.Exists() {
 		return nil, docdb.NewErrDocumentFileNotFound(docID, filename)
 	}
-	return file, nil
+	return file.ReadAllContext(ctx)
 }
 
-func (c *Conn) DocumentFileReader(ctx context.Context, docID uu.ID, filename string) (fileReader fs.FileReader, versionInfo *docdb.VersionInfo, err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, docID, filename)
+func (c *Conn) DocumentVersionFileProvider(ctx context.Context, docID uu.ID, version docdb.VersionTime) (p docdb.FileProvider, err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, docID, version)
 
 	if ctx.Err() != nil {
-		return nil, nil, ctx.Err()
+		return nil, ctx.Err()
 	}
 	docMtx.Lock(docID)
 	defer docMtx.Unlock(docID)
 
-	versionInfo, docDir, err := c.latestDocumentVersionInfo(docID)
+	_, versionDir, err := c.documentAndVersionDir(docID, version)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	file := docDir.Join(filename)
-	if !file.Exists() {
-		return nil, nil, docdb.NewErrDocumentFileNotFound(docID, filename)
-	}
-	return file, versionInfo, nil
+	return docdb.DirFileProvider(versionDir), nil
 }
 
 func (c *Conn) DocumentFileReaderTryCheckedOutByUser(ctx context.Context, docID uu.ID, filename string, userID uu.ID) (fileReader fs.FileReader, version docdb.VersionTime, checkOutStatus *docdb.CheckOutStatus, err error) {
