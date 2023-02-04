@@ -45,13 +45,6 @@ type Conn interface {
 	// will be returned in case of such error conditions.
 	ReadDocumentVersionFile(ctx context.Context, docID uu.ID, version VersionTime, filename string) (data []byte, err error)
 
-	// DocumentFileReaderTryCheckedOutByUser returns a fs.FileReader for a file of the latest document version,
-	// or the checked out file if the document was checked out by the passed userID.
-	// Pass uu.IDNil as userID replacemet for any user.
-	// Wrapped ErrDocumentNotFound, ErrDocumentHasNoCommitedVersion, ErrDocumentFileNotFound
-	// will be returned in case of such error conditions.
-	DocumentFileReaderTryCheckedOutByUser(ctx context.Context, docID uu.ID, filename string, userID uu.ID) (fs.FileReader, VersionTime, *CheckOutStatus, error)
-
 	// DocumentCheckOutStatus returns the CheckOutStatus of a document.
 	// If the document is not checked out, then a nil CheckOutStatus will be returned.
 	// The methods Valid() and String() can be called on a nil CheckOutStatus.

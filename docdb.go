@@ -1,9 +1,11 @@
 package docdb
 
 import (
+	"bytes"
 	"context"
 
 	fs "github.com/ungerik/go-fs"
+	"github.com/ungerik/go-fs/fsimpl"
 
 	"github.com/domonda/go-errs"
 	"github.com/domonda/go-types/uu"
@@ -137,6 +139,20 @@ func ReadDocumentVersionFile(ctx context.Context, docID uu.ID, version VersionTi
 	return conn.ReadDocumentVersionFile(ctx, docID, version, filename)
 }
 
+func ReadLatestDocumentVersionFile(ctx context.Context, docID uu.ID, filename string) (data []byte, version VersionTime, err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, docID, version, filename)
+
+	version, err = conn.LatestDocumentVersion(ctx, docID)
+	if err != nil {
+		return nil, VersionTime{}, err
+	}
+	data, err = conn.ReadDocumentVersionFile(ctx, docID, version, filename)
+	if err != nil {
+		return nil, VersionTime{}, err
+	}
+	return data, version, nil
+}
+
 // DocumentVersionFileReader returns a fs.FileReader for a file of a document version.
 // Wrapped ErrDocumentNotFound, ErrDocumentVersionNotFound, ErrDocumentFileNotFound
 // will be returned in case of such error conditions.
@@ -165,17 +181,6 @@ func DocumentFileReader(ctx context.Context, docID uu.ID, filename string) (file
 		return nil, nil, err
 	}
 	return fs.NewMemFile(filename, data), versionInfo, nil
-}
-
-// DocumentFileReaderTryCheckedOutByUser returns a fs.FileReader for a file of the latest document version,
-// or the checked out file if the document was checked out by the passed userID.
-// Pass uu.IDNil as userID replacemet for any user.
-// Wrapped ErrDocumentNotFound, ErrDocumentHasNoCommitedVersion, ErrDocumentFileNotFound
-// will be returned in case of such error conditions.
-func DocumentFileReaderTryCheckedOutByUser(ctx context.Context, docID uu.ID, filename string, userID uu.ID) (fileReader fs.FileReader, version VersionTime, checkedOutStatus *CheckOutStatus, err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, docID, filename, userID)
-
-	return conn.DocumentFileReaderTryCheckedOutByUser(ctx, docID, filename, userID)
 }
 
 // DocumentFileExists returns if a document file with filename exists in the latest document version.
@@ -293,3 +298,14 @@ func DeleteDocumentVersion(ctx context.Context, docID uu.ID, version VersionTime
 
 // 	return conn.InsertDocumentVersion(ctx, docID, version, userID, reason, files)
 // }
+
+// ContentHash returns a Dropbox compatible 64 hex character content hash
+// by reading from an io.Reader until io.EOF or the ctx gets cancelled.
+// See https://www.dropbox.com/developers/reference/content-hash
+func ContentHash(data []byte) string {
+	hash, err := fsimpl.DropboxContentHash(context.Background(), bytes.NewReader(data))
+	if err != nil {
+		panic(errs.Errorf("should never happen: %w", err))
+	}
+	return hash
+}

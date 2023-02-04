@@ -173,41 +173,6 @@ func (c *Conn) DocumentVersionFileProvider(ctx context.Context, docID uu.ID, ver
 	panic("TODO")
 }
 
-func (c *Conn) DocumentFileReaderTryCheckedOutByUser(ctx context.Context, docID uu.ID, filename string, userID uu.ID) (fileReader fs.FileReader, version docdb.VersionTime, checkOutStatus *docdb.CheckOutStatus, err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, docID, filename, userID)
-
-	if ctx.Err() != nil {
-		return nil, docdb.VersionTime{}, nil, ctx.Err()
-	}
-	// docMtx.Lock(docID)
-	// defer docMtx.Unlock(docID)
-
-	panic("TODO")
-
-	// checkOutStatus, err = c.documentCheckOutStatus(docID)
-	// if err != nil {
-	// 	return nil, docdb.VersionTime{}, nil, err
-	// }
-	// checkedOutByUser := checkOutStatus.Valid() && (userID.IsNil() || checkOutStatus.UserID == userID)
-
-	// versionInfo, useDir, err := c.LatestDocumentVersionInfo(docID)
-	// if checkedOutByUser {
-	// 	useDir = checkOutStatus.CheckOutDir
-	// 	if errs.Type[docdb.ErrDocumentHasNoCommitedVersion](err) {
-	// 		err = nil
-	// 	}
-	// }
-	// if err != nil {
-	// 	return nil, docdb.VersionTime{}, checkOutStatus, err
-	// }
-
-	// file := useDir.Join(filename)
-	// if !file.Exists() {
-	// 	return nil, docdb.VersionTime{}, nil, docdb.NewErrDocumentFileNotFound(docID, filename)
-	// }
-	// return file, versionInfo.Version, checkOutStatus, nil
-}
-
 func (c *Conn) DocumentCheckOutStatus(ctx context.Context, docID uu.ID) (status *docdb.CheckOutStatus, err error) {
 	panic("TODO")
 }

@@ -61,10 +61,6 @@ func (c errConn) ReadDocumentVersionFile(ctx context.Context, docID uu.ID, versi
 	return nil, c.err
 }
 
-func (c errConn) DocumentFileReaderTryCheckedOutByUser(context.Context, uu.ID, string, uu.ID) (fs.FileReader, VersionTime, *CheckOutStatus, error) {
-	return nil, VersionTime{}, nil, c.err
-}
-
 func (c errConn) DocumentCheckOutStatus(context.Context, uu.ID) (*CheckOutStatus, error) {
 	return nil, c.err
 }
