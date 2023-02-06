@@ -28,12 +28,8 @@ github.com/rivo/uniseg v0.2.0/go.mod h1:J6wj4VEh+S6ZtnVlnTBMWIodfgj8LQOQFoIToxlJ
 github.com/rivo/uniseg v0.4.3 h1:utMvzDsuh3suAEnhH0RdHmoPbU648o6CvXxTx4SBMOw=
 github.com/rivo/uniseg v0.4.3/go.mod h1:FN3SvrM+Zdj16jyLfmOkMNblXMcoc8DfTHruCPUcx88=
 github.com/stretchr/testify v1.8.1 h1:w7B6lhMri9wdJUVmEZPGGhZzrYTPvgJArz7wNPgYKsk=
-github.com/ungerik/go-fs v0.0.0-20230126152159-caed95e133d3 h1:RfAk0JtkKYGzrYV+n1DRf2WlNd1sBiq5vfOhdJUHd0I=
-github.com/ungerik/go-fs v0.0.0-20230126152159-caed95e133d3/go.mod h1:wSSvK/VAz72bLlVrZvSBzPrSHSawjVpyoNW7LorFDww=
-github.com/ungerik/go-fs v0.0.0-20230203115930-cee5a1790d8b h1:pLCAbjIN8iUc1QvsgHTnmPmgn8U6m0MO9uC6idYHCnc=
-github.com/ungerik/go-fs v0.0.0-20230203115930-cee5a1790d8b/go.mod h1:wSSvK/VAz72bLlVrZvSBzPrSHSawjVpyoNW7LorFDww=
-github.com/ungerik/go-fs v0.0.0-20230203145800-f1967f6e8bbe h1:p6vE3UP6QGs8webY7AgwNOo7g9Asgesjo29VovI1soI=
-github.com/ungerik/go-fs v0.0.0-20230203145800-f1967f6e8bbe/go.mod h1:wSSvK/VAz72bLlVrZvSBzPrSHSawjVpyoNW7LorFDww=
+github.com/ungerik/go-fs v0.0.0-20230206141012-abb864f815e3 h1:IEm9Je1L3HAIEwiXOuGgJuUPjXXHzf/1e704VyIbcGc=
+github.com/ungerik/go-fs v0.0.0-20230206141012-abb864f815e3/go.mod h1:wSSvK/VAz72bLlVrZvSBzPrSHSawjVpyoNW7LorFDww=
 golang.org/x/exp v0.0.0-20230125214544-b3c2aaf6208d h1:9Bio0JlZpJ1P4NXsK5i8Rf2MclrRzMGzJWOIkhZ5Um8=
 golang.org/x/exp v0.0.0-20230125214544-b3c2aaf6208d/go.mod h1:CxIveKay+FTh1D0yPZemJVgC/95VzuuOLq5Qi4xnoYc=
 golang.org/x/sys v0.0.0-20220811171246-fbc7d0a398ab/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=

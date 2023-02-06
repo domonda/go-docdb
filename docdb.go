@@ -46,7 +46,8 @@ func SetDocumentCompanyID(ctx context.Context, docID, companyID uu.ID) (err erro
 	return conn.SetDocumentCompanyID(ctx, docID, companyID)
 }
 
-// DocumentVersions returns all version timestamps of a document sorted in ascending order
+// DocumentVersions returns all version timestamps of a document in ascending order.
+// Returns nil and no error if the document does not exist or has no versions.
 func DocumentVersions(ctx context.Context, docID uu.ID) (versions []VersionTime, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 

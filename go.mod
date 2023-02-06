@@ -1,13 +1,13 @@
 module github.com/domonda/go-docdb
 
-go 1.19
+go 1.20
 
 require (
 	github.com/domonda/go-errs v0.0.0-20221201115330-819262069697
 	github.com/domonda/go-pretty v0.0.0-20220317123925-dd9e6bef129a
 	github.com/domonda/go-types v0.0.0-20230123091716-ceb113bdba48
 	github.com/domonda/golog v0.0.0-20230124102541-81056aaba2cb
-	github.com/ungerik/go-fs v0.0.0-20230203145800-f1967f6e8bbe
+	github.com/ungerik/go-fs v0.0.0-20230206141012-abb864f815e3
 )
 
 require (

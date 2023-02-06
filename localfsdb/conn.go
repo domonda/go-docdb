@@ -303,7 +303,7 @@ func (c *Conn) documentVersions(docID uu.ID) (versions []docdb.VersionTime, err 
 
 	docDir := c.documentDir(docID)
 	if !docDir.IsDir() {
-		return nil, docdb.NewErrDocumentNotFound(docID)
+		return nil, nil
 	}
 	err = docDir.ListDirInfo(func(dir fs.File, dirInfo fs.FileInfo) error {
 		if !dirInfo.IsDir || dirInfo.IsHidden {
