@@ -1,11 +1,9 @@
 package docdb
 
 import (
-	"bytes"
 	"context"
 
 	fs "github.com/ungerik/go-fs"
-	"github.com/ungerik/go-fs/fsimpl"
 
 	"github.com/domonda/go-errs"
 	"github.com/domonda/go-types/uu"
@@ -299,14 +297,3 @@ func DeleteDocumentVersion(ctx context.Context, docID uu.ID, version VersionTime
 
 // 	return conn.InsertDocumentVersion(ctx, docID, version, userID, reason, files)
 // }
-
-// ContentHash returns a Dropbox compatible 64 hex character content hash
-// by reading from an io.Reader until io.EOF or the ctx gets cancelled.
-// See https://www.dropbox.com/developers/reference/content-hash
-func ContentHash(data []byte) string {
-	hash, err := fsimpl.DropboxContentHash(context.Background(), bytes.NewReader(data))
-	if err != nil {
-		panic(errs.Errorf("should never happen: %w", err))
-	}
-	return hash
-}
