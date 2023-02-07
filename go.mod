@@ -3,7 +3,7 @@ module github.com/domonda/go-docdb
 go 1.20
 
 require (
-	github.com/domonda/go-errs v0.0.0-20230207115837-647bc3e66ca3
+	github.com/domonda/go-errs v0.0.0-20230207132857-bf0bda36a13a
 	github.com/domonda/go-pretty v0.0.0-20220317123925-dd9e6bef129a
 	github.com/domonda/go-types v0.0.0-20230203114159-093fac1ac65c
 	github.com/domonda/golog v0.0.0-20230124102541-81056aaba2cb

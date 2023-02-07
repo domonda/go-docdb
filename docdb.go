@@ -107,7 +107,7 @@ func SubstituteDeletedDocumentVersion(ctx context.Context, docID uu.ID, version 
 		return version, nil
 	}
 
-	if !errs.IsType(err, ErrDocumentVersionNotFound{}) {
+	if !errs.Has[ErrDocumentVersionNotFound](err) {
 		return VersionTime{}, err
 	}
 
@@ -187,7 +187,7 @@ func DocumentFileExists(ctx context.Context, docID uu.ID, filename string) (exis
 	defer errs.WrapWithFuncParams(&err, ctx, docID, filename)
 
 	file, _, err := DocumentFileReader(ctx, docID, filename)
-	if errs.IsType(err, ErrDocumentFileNotFound{}) {
+	if errs.Has[ErrDocumentFileNotFound](err) {
 		return false, nil
 	}
 	if err != nil {
