@@ -8,7 +8,7 @@ import (
 	"sort"
 	"time"
 
-	fs "github.com/ungerik/go-fs"
+	"github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/uuiddir"
 
 	"github.com/domonda/go-docdb"
@@ -498,6 +498,105 @@ func (c *Conn) writeDocumentCheckOutStatusFile(docID uu.ID, version docdb.Versio
 	return status, nil
 }
 
+func (c *Conn) CreateDocumentVersion(ctx context.Context, companyID, docID uu.ID, version docdb.VersionTime, files map[string][]byte, userID uu.ID, reason string) (err error) {
+	// Don't shadow err result
+	_, docDir, e := c.documentVersionInfo(docID, version)
+	if errs.IsOtherThanErrNotFound(e) {
+		return e
+	}
+	if e == nil {
+		return docdb.NewErrDocumentVersionAlreadyExists(docID, version)
+	}
+
+	existingCompanyID, e := c.DocumentCompanyID(ctx, docID)
+	if errs.IsOtherThanErrNotFound(e) {
+		return err
+	}
+
+	if e == nil {
+		// Document already exists
+
+		if existingCompanyID != companyID {
+			return errs.Errorf("document %s already exists for other company %s", docID, existingCompanyID)
+		}
+		if c.documentCheckOutStatusFile(docID).Exists() {
+			return errs.Errorf("document %s is checked out", docID)
+		}
+
+	} else {
+		// Document does not exist yet
+
+		defer func() {
+			if err != nil {
+				if docDir.Exists() {
+					e = uuiddir.RemoveDir(c.documentsDir, docDir)
+					err = errors.Join(err, e)
+				}
+				e = c.removeCompanyDocumentDir(companyID, docID)
+				err = errors.Join(err, e)
+			}
+		}()
+
+		err = docDir.MakeAllDirs()
+		if err != nil {
+			return err
+		}
+		err = docDir.Join("company.id").WriteAll(companyID.StringBytes())
+		if err != nil {
+			return err
+		}
+		err = c.makeCompanyDocumentDir(companyID, docID)
+		if err != nil {
+			return err
+		}
+	}
+
+	var newVersionDir fs.File
+	defer func() {
+		if err != nil {
+			if newVersionDir.IsDir() {
+				e := newVersionDir.RemoveRecursive()
+				err = errors.Join(err, e)
+			}
+			log.Error("CreateDocumentVersion error").Err(err).Log()
+		}
+	}()
+
+	// newVersion := docdb.VersionTimeFrom(time.Now())
+	// newVersionDir = docDir.Join(newVersion.String())
+
+	// err = fs.CopyRecursive(ctx, workDir, newVersionDir)
+	// if err != nil {
+	// 	return nil, err
+	// }
+
+	// var prevVersionDir fs.File
+	// if checkOutStatus.Version.IsNotNull() {
+	// 	prevVersionDir = docDir.Join(checkOutStatus.Version.String())
+	// }
+
+	// versionInfo, err := docdb.NewVersionInfo(
+	// 	// checkOutStatus.CompanyID,
+	// 	docID,
+	// 	newVersion,
+	// 	checkOutStatus.Version,
+	// 	checkOutStatus.UserID,
+	// 	checkOutStatus.Reason,
+	// 	newVersionDir,
+	// 	prevVersionDir,
+	// )
+	// if err != nil {
+	// 	return nil, err
+	// }
+
+	// err = versionInfo.WriteJSON(docDir.Joinf("%s.json", newVersion))
+	// if err != nil {
+	// 	return nil, err
+	// }
+
+	panic("TODO")
+}
+
 func (c *Conn) CheckOutNewDocument(ctx context.Context, docID, companyID, userID uu.ID, reason string) (status *docdb.CheckOutStatus, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, companyID, userID, reason)
 
@@ -852,10 +951,10 @@ func (c *Conn) DeleteDocument(ctx context.Context, docID uu.ID) (err error) {
 		if e == nil {
 			e = uuiddir.Remove(c.companiesDir.Join(companyID.String()), docID)
 		}
-		err = errs.Combine(err, e)
+		err = errors.Join(err, e)
 
 		e = uuiddir.RemoveDir(c.documentsDir, docDir)
-		err = errs.Combine(err, e)
+		err = errors.Join(err, e)
 	} else {
 		err = docdb.NewErrDocumentNotFound(docID)
 	}
@@ -863,7 +962,7 @@ func (c *Conn) DeleteDocument(ctx context.Context, docID uu.ID) (err error) {
 	checkOutDir := c.CheckedOutDocumentDir(docID)
 	if checkOutDir.Exists() {
 		e := checkOutDir.RemoveRecursive()
-		err = errs.Combine(err, e)
+		err = errors.Join(err, e)
 	}
 
 	return err
@@ -907,10 +1006,10 @@ func (c *Conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version d
 		if e == nil {
 			e = uuiddir.Remove(c.companiesDir.Join(companyID.String()), docID)
 		}
-		err = errs.Combine(err, e)
+		err = errors.Join(err, e)
 
 		e = uuiddir.RemoveDir(c.documentsDir, docDir)
-		err = errs.Combine(err, e)
+		err = errors.Join(err, e)
 	}
 
 	return leftVersions, err

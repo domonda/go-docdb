@@ -46,6 +46,24 @@ type Conn interface {
 	// will be returned in case of such error conditions.
 	ReadDocumentVersionFile(ctx context.Context, docID uu.ID, version VersionTime, filename string) (data []byte, err error)
 
+	// DeleteDocument deletes all versions of a document
+	// including its workspace directory if checked out.
+	DeleteDocument(ctx context.Context, docID uu.ID) error
+
+	// DeleteDocumentVersion deletes a version of a document that must not be checked out
+	// and returns the left over versions.
+	// If the version is the only version of the document,
+	// then the document will be deleted and no leftVersions are returned.
+	// Returns wrapped ErrDocumentNotFound, ErrDocumentVersionNotFound, ErrDocumentCheckedOut
+	// in case of such error conditions.
+	// DeleteDocumentVersion should not be used for normal docdb operations,
+	// just to clean up mistakes or sync database states.
+	DeleteDocumentVersion(ctx context.Context, docID uu.ID, version VersionTime) (leftVersions []VersionTime, err error)
+
+	CreateDocumentVersion(ctx context.Context, companyID, docID uu.ID, version VersionTime, files map[string][]byte, userID uu.ID, reason string) error
+
+	// TODO remove checkout methods
+
 	// DocumentCheckOutStatus returns the CheckOutStatus of a document.
 	// If the document is not checked out, then a nil CheckOutStatus will be returned.
 	// The methods Valid() and String() can be called on a nil CheckOutStatus.
@@ -76,20 +94,6 @@ type Conn interface {
 	// CheckedOutDocumentDir returns a fs.File for the directory
 	// where a document would be checked out.
 	CheckedOutDocumentDir(docID uu.ID) fs.File
-
-	// DeleteDocument deletes all versions of a document
-	// including its workspace directory if checked out.
-	DeleteDocument(ctx context.Context, docID uu.ID) error
-
-	// DeleteDocumentVersion deletes a version of a document that must not be checked out
-	// and returns the left over versions.
-	// If the version is the only version of the document,
-	// then the document will be deleted and no leftVersions are returned.
-	// Returns wrapped ErrDocumentNotFound, ErrDocumentVersionNotFound, ErrDocumentCheckedOut
-	// in case of such error conditions.
-	// DeleteDocumentVersion should not be used for normal docdb operations,
-	// just to clean up mistakes or sync database states.
-	DeleteDocumentVersion(ctx context.Context, docID uu.ID, version VersionTime) (leftVersions []VersionTime, err error)
 
 	// InsertDocumentVersion inserts a new version for an existing document.
 	// Returns wrapped ErrDocumentNotFound, ErrDocumentVersionAlreadyExists

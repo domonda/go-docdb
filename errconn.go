@@ -108,3 +108,7 @@ func (c errConn) DebugGetDocumentDir(uu.ID) fs.File {
 func (c errConn) DebugGetDocumentVersionFile(uu.ID, VersionTime, string) (fs.File, error) {
 	return fs.InvalidFile, c.err
 }
+
+func (c errConn) CreateDocumentVersion(ctx context.Context, companyID, docID uu.ID, version VersionTime, files map[string][]byte, userID uu.ID, reason string) error {
+	return c.err
+}

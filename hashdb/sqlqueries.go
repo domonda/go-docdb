@@ -3,6 +3,7 @@ package hashdb
 type SQLQueries struct {
 	// Args: (docID uu.ID) => bool
 	DocumentExists string
+	InsertDocument string
 	// Args: () => uu.ID rows
 	AllDocumentIDs string
 	// Args: (companyID uu.ID) => uu.ID rows
@@ -21,7 +22,19 @@ type SQLQueries struct {
 }
 
 var DefaultSQLQueries = SQLQueries{
-	DocumentExists:     `select exists(select from public.document where id = $1)`,
+	DocumentExists: `select exists(select from public.document where id = $1)`,
+	// InsertDocument: `insert into public.document (id, client_company_id, imported_by)`
+
+	// import_date        timestamptz not null, -- When the document was originally imported, maybe be different from created_at
+	// source_date        timestamptz not null, -- When the document was created at the source system
+	// source             text not null,        -- Name of the source system from where the document came
+	// source_id          text not null,        -- ID of the document within the source system from where the it came
+	// source_file        text not null,
+	// source_file_hash   text not null,
+
+	// "name"   text not null,                       -- A sanitized version of the source_file name used as filename base for downloads
+	// title    text check(length(trim(title)) > 0), -- A good human readable title for the document, different from name
+
 	AllDocumentIDs:     `select id from public.document`,
 	CompanyDocumentIDs: `select id from public.document where client_company_id = $1`,
 	DocumentCompanyID:  `select client_company_id from public.document where id = $1`,

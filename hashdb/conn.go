@@ -18,38 +18,51 @@ import (
 var _ docdb.Conn = (*Conn)(nil)
 
 type Conn struct {
-	workspaceDir fs.File
-	queries      *SQLQueries
-	files        FileStore
+	queries *SQLQueries
+	files   FileStore
 }
 
-func NewConn(workspaceDir fs.File, queries *SQLQueries, files FileStore) *Conn {
-	if !workspaceDir.IsDir() {
-		panic("workspaceDir does not exist: '" + string(workspaceDir) + "'")
-	}
-	if workspaceDir.FileSystem() != fs.Local {
-		panic("workspaceDir is not on local file-system: '" + string(workspaceDir) + "'")
-	}
+func NewConn(queries *SQLQueries, files FileStore) *Conn {
 	if queries == nil {
 		panic("queries is nil")
 	}
 	return &Conn{
-		workspaceDir: workspaceDir,
-		queries:      queries,
-		files:        files,
+		queries: queries,
+		files:   files,
 	}
 }
 
 func (c *Conn) String() string {
 	return fmt.Sprintf(
-		"hashdb.Conn{Workspace: %q, FileStore: %s}",
-		c.workspaceDir.LocalPath(),
+		"hashdb.Conn{FileStore: %s}",
 		c.files.String(),
 	)
 }
 
+func (c *Conn) CreateDocumentVersion(ctx context.Context, companyID, docID uu.ID, version docdb.VersionTime, files map[string][]byte, userID uu.ID, reason string) error {
+	return db.Transaction(ctx, func(ctx context.Context) error {
+		_, err := c.DocumentVersionInfo(ctx, docID, version)
+		if db.IsOtherThanErrNoRows(err) {
+			return err
+		}
+		if err == nil {
+			return docdb.NewErrDocumentVersionAlreadyExists(docID, version)
+		}
+		existingCompanyID, err := c.DocumentCompanyID(ctx, docID)
+		if db.IsOtherThanErrNoRows(err) {
+			return err
+		}
+		if err != nil {
+
+		} else if existingCompanyID != companyID {
+			return errs.Errorf("document %s already exists for other company %s", docID, existingCompanyID)
+		}
+		panic("TODO")
+	})
+}
+
 func (c *Conn) CheckedOutDocumentDir(docID uu.ID) fs.File {
-	return c.workspaceDir.Join(docID.String())
+	panic("TODO remove")
 }
 
 func (c *Conn) DocumentExists(ctx context.Context, docID uu.ID) (exists bool, err error) {
@@ -177,6 +190,14 @@ func (c *Conn) DocumentCheckOutStatus(ctx context.Context, docID uu.ID) (status 
 	panic("TODO")
 }
 
+func (c *Conn) DeleteDocument(ctx context.Context, docID uu.ID) (err error) {
+	panic("TODO")
+}
+
+func (c *Conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version docdb.VersionTime) (leftVersions []docdb.VersionTime, err error) {
+	panic("TODO")
+}
+
 func (c *Conn) CheckOutNewDocument(ctx context.Context, docID, companyID, userID uu.ID, reason string) (status *docdb.CheckOutStatus, err error) {
 	panic("TODO")
 }
@@ -189,23 +210,10 @@ func (c *Conn) CheckOutDocument(ctx context.Context, docID, userID uu.ID, reason
 	panic("TODO")
 }
 
-func (c *Conn) removeCheckOutFiles(docID uu.ID) (err error) {
-	err = c.CheckedOutDocumentDir(docID).RemoveRecursive()
-	return errs.ReplaceErrNotFound(err, nil)
-}
-
 func (c *Conn) CancelCheckOutDocument(ctx context.Context, docID uu.ID) (wasCheckedOut bool, lastVersion docdb.VersionTime, err error) {
 	panic("TODO")
 }
 
 func (c *Conn) CheckInDocument(ctx context.Context, docID uu.ID) (versionInfo *docdb.VersionInfo, err error) {
-	panic("TODO")
-}
-
-func (c *Conn) DeleteDocument(ctx context.Context, docID uu.ID) (err error) {
-	panic("TODO")
-}
-
-func (c *Conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version docdb.VersionTime) (leftVersions []docdb.VersionTime, err error) {
 	panic("TODO")
 }
