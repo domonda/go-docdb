@@ -43,7 +43,7 @@ var DefaultSQLQueries = SQLQueries{
 		set client_company_id=$2, updated_at=now()
 		where id = $1 and client_company_id <> $2
 		returning true`,
-	DocumentVersions: `select array_agg(version order by version) from public.document_version where document_id = $1`,
+	DocumentVersions: `select array_agg(version order by version) from docdb.document_version where document_id = $1`,
 	DocumentVersionInfo: `
 		select
 			prev_version, 
@@ -52,7 +52,7 @@ var DefaultSQLQueries = SQLQueries{
 			added_files,
 			removed_files,
 			modified_files
-		from public.document_version
+		from docdb.document_version
 		where document_id = $1 and version = $2`,
 	LatestDocumentVersionInfo: `
 		select
@@ -63,15 +63,15 @@ var DefaultSQLQueries = SQLQueries{
 			added_files,
 			removed_files,
 			modified_files
-		from public.document_version
+		from docdb.document_version
 		where document_id = $1
 		order by version desc
 		limit 1`,
-	LatestDocumentVersion: `select version from public.document_version where document_id = $1 order by version desc limit 1`,
+	LatestDocumentVersion: `select version from docdb.document_version where document_id = $1 order by version desc limit 1`,
 	DocumentVersionFileHash: `
 		select f.hash
-		from public.document_version as v
-		inner join public.document_version_file as f
+		from docdb.document_version as v
+		inner join docdb.document_version_file as f
 			on f.document_version_id = v.id and f.name = $3
 		where v.document_id = $1 and v.version = $2`,
 }
