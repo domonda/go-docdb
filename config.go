@@ -30,7 +30,7 @@ func GetDebugFileAccessConnOrNil() DebugFileAccessConn {
 }
 
 // ContentHash returns a Dropbox compatible 64 hex character content hash
-// by reading from an io.Reader until io.EOF or the ctx gets cancelled.
+// by reading from an io.Reader until io.EOF.
 // See https://www.dropbox.com/developers/reference/content-hash
 func ContentHash(data []byte) string {
 	hash, err := fsimpl.DropboxContentHash(context.Background(), bytes.NewReader(data))
