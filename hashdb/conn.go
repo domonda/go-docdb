@@ -39,14 +39,11 @@ func (c *Conn) String() string {
 	)
 }
 
-func (c *Conn) CreateDocumentVersion(ctx context.Context, companyID, docID uu.ID, version docdb.VersionTime, files map[string][]byte, userID uu.ID, reason string) error {
-	return db.Transaction(ctx, func(ctx context.Context) error {
-		_, err := c.DocumentVersionInfo(ctx, docID, version)
+func (c *Conn) CreateDocumentVersion(ctx context.Context, companyID, docID, userID uu.ID, reason string, baseVersion docdb.VersionTime, files map[string][]byte, onCreate docdb.OnCreateVersionFunc) (versionInfo *docdb.VersionInfo, err error) {
+	err = db.Transaction(ctx, func(ctx context.Context) error {
+		_, err := c.DocumentVersionInfo(ctx, docID, baseVersion)
 		if db.IsOtherThanErrNoRows(err) {
 			return err
-		}
-		if err == nil {
-			return docdb.NewErrDocumentVersionAlreadyExists(docID, version)
 		}
 		existingCompanyID, err := c.DocumentCompanyID(ctx, docID)
 		if db.IsOtherThanErrNoRows(err) {
@@ -59,6 +56,10 @@ func (c *Conn) CreateDocumentVersion(ctx context.Context, companyID, docID uu.ID
 		}
 		panic("TODO")
 	})
+	if err != nil {
+		return nil, err
+	}
+	return nil, nil
 }
 
 func (c *Conn) CheckedOutDocumentDir(docID uu.ID) fs.File {

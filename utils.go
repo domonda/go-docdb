@@ -1,6 +1,7 @@
 package docdb
 
 import (
+	"bytes"
 	"context"
 	"reflect"
 
@@ -101,4 +102,39 @@ func FirstDocumentVersionCommitUserID(ctx context.Context, docID uu.ID) (userID 
 		return uu.IDNil, err
 	}
 	return versionInfo.CommitUserID, nil
+}
+
+func CheckConnDocumentVersionFiles(ctx context.Context, conn Conn, docID uu.ID, version VersionTime, expectedFiles map[string][]byte) (err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, conn, docID, version, expectedFiles)
+
+	info, err := conn.DocumentVersionInfo(ctx, docID, version)
+	if err != nil {
+		return err
+	}
+	if len(info.Files) != len(expectedFiles) {
+		return errs.Errorf("document %s version %s has %d files, expected %d", docID, version, len(info.Files), len(expectedFiles))
+	}
+	provider, err := conn.DocumentVersionFileProvider(ctx, docID, version)
+	if err != nil {
+		return err
+	}
+
+	for expectedName, expectedData := range expectedFiles {
+		hasFile, err := provider.HasFile(expectedName)
+		if err != nil {
+			return err
+		}
+		if !hasFile {
+			return errs.Errorf("document %s version %s is missing file %s", docID, version, expectedName)
+		}
+		data, err := provider.ReadFile(ctx, expectedName)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(data, expectedData) {
+			return errs.Errorf("document %s version %s file %s content not as expected", docID, version, expectedName)
+		}
+	}
+
+	return nil
 }

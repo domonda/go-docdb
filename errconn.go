@@ -109,6 +109,6 @@ func (c errConn) DebugGetDocumentVersionFile(uu.ID, VersionTime, string) (fs.Fil
 	return fs.InvalidFile, c.err
 }
 
-func (c errConn) CreateDocumentVersion(ctx context.Context, companyID, docID uu.ID, version VersionTime, files map[string][]byte, userID uu.ID, reason string) error {
-	return c.err
+func (c errConn) CreateDocumentVersion(ctx context.Context, companyID, docID, userID uu.ID, reason string, baseVersion VersionTime, files map[string][]byte, onCreate OnCreateVersionFunc) (*VersionInfo, error) {
+	return nil, c.err
 }

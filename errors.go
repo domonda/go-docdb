@@ -76,18 +76,33 @@ func (e ErrDocumentVersionNotFound) DocID() uu.ID         { return e.docID }
 func (e ErrDocumentVersionNotFound) Version() VersionTime { return e.version }
 
 ///////////////////////////////////////////////////////////////////////////////
-// ErrDocumentVersionAlreadyExists
+// ErrDocumentAlreadyExists
 
-type ErrDocumentVersionAlreadyExists struct {
+type ErrDocumentAlreadyExists struct {
+	docID uu.ID
+}
+
+func NewErrDocumentAlreadyExists(docID uu.ID) ErrDocumentAlreadyExists {
+	return ErrDocumentAlreadyExists{docID}
+}
+
+func (e ErrDocumentAlreadyExists) Error() string {
+	return fmt.Sprintf("document %s already exists", e.docID)
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// ErrVersionAlreadyExists
+
+type ErrVersionAlreadyExists struct {
 	docID   uu.ID
 	version VersionTime
 }
 
-func NewErrDocumentVersionAlreadyExists(docID uu.ID, version VersionTime) ErrDocumentVersionAlreadyExists {
-	return ErrDocumentVersionAlreadyExists{docID, version}
+func NewErrVersionAlreadyExists(docID uu.ID, version VersionTime) ErrVersionAlreadyExists {
+	return ErrVersionAlreadyExists{docID, version}
 }
 
-func (e ErrDocumentVersionAlreadyExists) Error() string {
+func (e ErrVersionAlreadyExists) Error() string {
 	return fmt.Sprintf("document %s version %s already exists", e.docID, e.version)
 }
 
@@ -155,4 +170,20 @@ func IsErrDocumentCheckedOutByUser(err error, userID uu.ID) bool {
 		return e.status.UserID == userID
 	}
 	return false
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// ErrDocumentChanged
+
+type ErrDocumentChanged struct {
+	docID       uu.ID
+	baseVersion VersionTime
+}
+
+func NewErrDocumentChanged(docID uu.ID, version VersionTime) ErrDocumentChanged {
+	return ErrDocumentChanged{docID, version}
+}
+
+func (e ErrDocumentChanged) Error() string {
+	return fmt.Sprintf("document %s version %s already exists", e.docID, e.baseVersion)
 }

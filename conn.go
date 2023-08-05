@@ -8,6 +8,9 @@ import (
 	"github.com/domonda/go-types/uu"
 )
 
+// OnCreateVersionFunc is the callback signature for new document versions
+type OnCreateVersionFunc func(context.Context, *VersionInfo) error
+
 // Conn is an interface for a docdb connection.
 type Conn interface {
 	// DocumentExists returns true if a document with the passed docID exists in
@@ -60,8 +63,6 @@ type Conn interface {
 	// just to clean up mistakes or sync database states.
 	DeleteDocumentVersion(ctx context.Context, docID uu.ID, version VersionTime) (leftVersions []VersionTime, err error)
 
-	CreateDocumentVersion(ctx context.Context, companyID, docID uu.ID, version VersionTime, files map[string][]byte, userID uu.ID, reason string) error
-
 	// TODO remove checkout methods
 
 	// DocumentCheckOutStatus returns the CheckOutStatus of a document.
@@ -101,6 +102,51 @@ type Conn interface {
 	// InsertDocumentVersion should not be used for normal docdb operations,
 	// just to clean up mistakes or sync database states.
 	// InsertDocumentVersion(ctx context.Context, docID uu.ID, version VersionTime, userID uu.ID, reason string, files []fs.FileReader) (info *VersionInfo, err error)
+
+	// CreateDocumentVersion creates a new document version.
+	//
+	// The new version is based on the passed baseVersion
+	// which is null (zero value) for a new document.
+	// A wrapped ErrVersionNotFound error is returned
+	// if the passed non null baseVersion does not exist.
+	// A wrapped ErrDocumentAlreadyExists errors is returned
+	// in case of a null null baseVersion where a document
+	// with the passed docID already exists.
+	//
+	// If there is already a later version than baseVersion
+	// then a wrapped ErrDocumentChanged error is returned.
+	//
+	// It is valid to change the company a document with a new version
+	// by passing a different companyID compared to the baseVersion.
+	//
+	// It is valid to pass an empty string as reason.
+	//
+	// The changes for the new version passed as fileChanges
+	// map from filenames to content.
+	//   - Files with identical names from the base version
+	//     will be overwritten with the passed content.
+	//   - If a non nil empty slice is passed,
+	//     then an empty file will be written.
+	//   - If nil is passed as content for a filname,
+	//     then the file from the base version will be deleted.
+	//     No error is returned if the file to be deleted
+	//     does not exist in the base version.
+	//
+	// If creating the new version was successful so far
+	// then the passed onCreate function will be called
+	// if it is not nil.
+	// The callback is passed the resulting VersionInfo
+	// and can prevent the new version from being commited
+	// by returning an error.
+	//
+	// Calling CreateDocumentVersion is atomic per docID
+	// meaning that other CreateDocumentVersion calls are blocked
+	// until the first call with the same docID retunred.
+	//
+	// Document IDs are unique accross the whole database
+	// so different companies can not have documents with
+	// the same ID.
+	CreateDocumentVersion(ctx context.Context, companyID, docID, userID uu.ID, reason string, baseVersion VersionTime, fileChanges map[string][]byte, onCreate OnCreateVersionFunc) (*VersionInfo, error)
 }
 
 type DebugFileAccessConn interface {

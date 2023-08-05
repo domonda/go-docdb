@@ -297,3 +297,9 @@ func DeleteDocumentVersion(ctx context.Context, docID uu.ID, version VersionTime
 
 // 	return conn.InsertDocumentVersion(ctx, docID, version, userID, reason, files)
 // }
+
+func CreateDocumentVersion(ctx context.Context, companyID, docID, userID uu.ID, reason string, baseVersion VersionTime, fileChanges map[string][]byte, onCreate OnCreateVersionFunc) (versionInfo *VersionInfo, err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, companyID, docID, userID, reason, baseVersion, fileChanges, onCreate)
+
+	return conn.CreateDocumentVersion(ctx, companyID, docID, userID, reason, baseVersion, fileChanges, onCreate)
+}
