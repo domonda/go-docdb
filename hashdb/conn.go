@@ -39,29 +39,6 @@ func (c *Conn) String() string {
 	)
 }
 
-func (c *Conn) CreateDocumentVersion(ctx context.Context, companyID, docID, userID uu.ID, reason string, baseVersion docdb.VersionTime, files map[string][]byte, onCreate docdb.OnCreateVersionFunc) (versionInfo *docdb.VersionInfo, err error) {
-	err = db.Transaction(ctx, func(ctx context.Context) error {
-		_, err := c.DocumentVersionInfo(ctx, docID, baseVersion)
-		if db.IsOtherThanErrNoRows(err) {
-			return err
-		}
-		existingCompanyID, err := c.DocumentCompanyID(ctx, docID)
-		if db.IsOtherThanErrNoRows(err) {
-			return err
-		}
-		if err != nil {
-
-		} else if existingCompanyID != companyID {
-			return errs.Errorf("document %s already exists for other company %s", docID, existingCompanyID)
-		}
-		panic("TODO")
-	})
-	if err != nil {
-		return nil, err
-	}
-	return nil, nil
-}
-
 func (c *Conn) CheckedOutDocumentDir(docID uu.ID) fs.File {
 	panic("TODO remove")
 }
@@ -217,4 +194,35 @@ func (c *Conn) CancelCheckOutDocument(ctx context.Context, docID uu.ID) (wasChec
 
 func (c *Conn) CheckInDocument(ctx context.Context, docID uu.ID) (versionInfo *docdb.VersionInfo, err error) {
 	panic("TODO")
+}
+
+func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, files []fs.FileReader) (versionInfo *docdb.VersionInfo, err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, companyID, docID, userID, reason, files)
+
+	panic("TODO")
+}
+
+func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, tx docdb.AddVersionTx) (versionInfo *docdb.VersionInfo, err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, docID, userID, reason, tx)
+
+	err = db.Transaction(ctx, func(ctx context.Context) error {
+		// _, err := c.DocumentVersionInfo(ctx, docID, baseVersion)
+		// if db.IsOtherThanErrNoRows(err) {
+		// 	return err
+		// }
+		// existingCompanyID, err := c.DocumentCompanyID(ctx, docID)
+		// if db.IsOtherThanErrNoRows(err) {
+		// 	return err
+		// }
+		// if err != nil {
+
+		// } else if existingCompanyID != companyID {
+		// 	return errs.Errorf("document %s already exists for other company %s", docID, existingCompanyID)
+		// }
+		panic("TODO")
+	})
+	if err != nil {
+		return nil, err
+	}
+	return nil, nil
 }

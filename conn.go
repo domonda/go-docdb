@@ -8,8 +8,7 @@ import (
 	"github.com/domonda/go-types/uu"
 )
 
-// OnCreateVersionFunc is the callback signature for new document versions
-type OnCreateVersionFunc func(context.Context, *VersionInfo) error
+type AddVersionTx func(ctx context.Context, prevVersion VersionTime, prevFiles FileProvider) (writeFiles []fs.FileReader, deleteFiles []string, newCompanyID *uu.ID, err error)
 
 // Conn is an interface for a docdb connection.
 type Conn interface {
@@ -96,6 +95,10 @@ type Conn interface {
 	// where a document would be checked out.
 	CheckedOutDocumentDir(docID uu.ID) fs.File
 
+	CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, files []fs.FileReader) (*VersionInfo, error)
+
+	AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, tx AddVersionTx) (*VersionInfo, error)
+
 	// InsertDocumentVersion inserts a new version for an existing document.
 	// Returns wrapped ErrDocumentNotFound, ErrDocumentVersionAlreadyExists
 	// in case of such error conditions.
@@ -146,7 +149,7 @@ type Conn interface {
 	// Document IDs are unique accross the whole database
 	// so different companies can not have documents with
 	// the same ID.
-	CreateDocumentVersion(ctx context.Context, companyID, docID, userID uu.ID, reason string, baseVersion VersionTime, fileChanges map[string][]byte, onCreate OnCreateVersionFunc) (*VersionInfo, error)
+	// CreateDocumentVersion(ctx context.Context, companyID, docID, userID uu.ID, reason string, baseVersion VersionTime, fileChanges map[string][]byte, onCreate OnCreateVersionFunc) (*VersionInfo, error)
 }
 
 type DebugFileAccessConn interface {

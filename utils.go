@@ -5,6 +5,8 @@ import (
 	"context"
 	"reflect"
 
+	"github.com/ungerik/go-fs"
+
 	"github.com/domonda/go-errs"
 	"github.com/domonda/go-types/uu"
 )
@@ -104,7 +106,7 @@ func FirstDocumentVersionCommitUserID(ctx context.Context, docID uu.ID) (userID 
 	return versionInfo.CommitUserID, nil
 }
 
-func CheckConnDocumentVersionFiles(ctx context.Context, conn Conn, docID uu.ID, version VersionTime, expectedFiles map[string][]byte) (err error) {
+func CheckConnDocumentVersionFiles(ctx context.Context, conn Conn, docID uu.ID, version VersionTime, expectedFiles []fs.FileReader) (err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, conn, docID, version, expectedFiles)
 
 	info, err := conn.DocumentVersionInfo(ctx, docID, version)
@@ -119,20 +121,24 @@ func CheckConnDocumentVersionFiles(ctx context.Context, conn Conn, docID uu.ID, 
 		return err
 	}
 
-	for expectedName, expectedData := range expectedFiles {
-		hasFile, err := provider.HasFile(expectedName)
+	for _, expectedFile := range expectedFiles {
+		hasFile, err := provider.HasFile(expectedFile.Name())
 		if err != nil {
 			return err
 		}
 		if !hasFile {
-			return errs.Errorf("document %s version %s is missing file %s", docID, version, expectedName)
+			return errs.Errorf("document %s version %s is missing file %s", docID, version, expectedFile.Name())
 		}
-		data, err := provider.ReadFile(ctx, expectedName)
+		expectedData, err := expectedFile.ReadAll()
+		if err != nil {
+			return err
+		}
+		data, err := provider.ReadFile(ctx, expectedFile.Name())
 		if err != nil {
 			return err
 		}
 		if !bytes.Equal(data, expectedData) {
-			return errs.Errorf("document %s version %s file %s content not as expected", docID, version, expectedName)
+			return errs.Errorf("document %s version %s file %s content not as expected", docID, version, expectedFile.Name())
 		}
 	}
 
