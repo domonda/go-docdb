@@ -8,7 +8,7 @@ require (
 	github.com/domonda/go-types v0.0.0-20230804121416-56575927f09a
 	github.com/domonda/golog v0.0.0-20230801205258-13d3a7cbc58f
 	github.com/stretchr/testify v1.8.4
-	github.com/ungerik/go-fs v0.0.0-20230626092810-5635ec23b780
+	github.com/ungerik/go-fs v0.0.0-20230807121636-85bb9b253cc4
 )
 
 require (

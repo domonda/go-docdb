@@ -1,6 +1,7 @@
 package docdb
 
 import (
+	"context"
 	sqldriver "database/sql/driver"
 	"io"
 	"time"
@@ -18,11 +19,33 @@ const (
 	sqlTimeFormat = "2006-01-02 15:04:05.999"
 )
 
+var versionTimeKey int
+
 // VersionTime of a document.
 // VersionTime implements the database/sql.Scanner and database/sql/driver.Valuer interfaces
 // and will treat a zero VersionTime value as SQL NULL value.
 type VersionTime struct {
 	Time time.Time
+}
+
+// NewVersionTime returns the timestamp for a new version.
+// If the passed context was created with ContextWithVersionTime
+// then the version from the context is returned
+// else the current time.
+func NewVersionTime(ctx context.Context) VersionTime {
+	if version, ok := ctx.Value(&versionTimeKey).(VersionTime); ok {
+		return version
+	}
+	return VersionTimeFrom(time.Now())
+}
+
+// ContextWithVersionTime returns a new context with the passed
+// version time added to it.
+//
+// This is useful in combination with NewVersionTime(ctx)
+// for deterministic versions in unit tests.
+func ContextWithVersionTime(parent context.Context, version VersionTime) context.Context {
+	return context.WithValue(parent, &versionTimeKey, version)
 }
 
 // VersionTimeFrom returns a VersionTime for the given time translated to UTC and truncated to milliseconds
@@ -48,6 +71,17 @@ func VersionTimeFromString(str string) (VersionTime, error) {
 		}
 	}
 	return VersionTime{Time: t}, nil
+}
+
+// MustVersionTimeFromString parses a string as VersionTime.
+// The strings "", "null", "NULL" will be parsed as null VersionTime.
+// Any error causes a panic.
+func MustVersionTimeFromString(str string) VersionTime {
+	version, err := VersionTimeFromString(str)
+	if err != nil {
+		panic(err)
+	}
+	return version
 }
 
 // String implements the fmt.Stringer interface.

@@ -11,6 +11,7 @@ import (
 
 	"github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/uuiddir"
+	"golang.org/x/exp/slices"
 
 	"github.com/domonda/go-docdb"
 	"github.com/domonda/go-errs"
@@ -282,13 +283,21 @@ func (c *Conn) documentCompanyID(docID uu.ID) (companyID uu.ID, err error) {
 func (c *Conn) SetDocumentCompanyID(ctx context.Context, docID, companyID uu.ID) (err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, companyID)
 
-	switch {
-	case ctx.Err() != nil:
-		return ctx.Err()
-	case companyID.IsNil():
-		return errs.Errorf("can't set nil company UUID for document %s", docID)
-	case companyID.Validate() != nil:
-		return companyID.Validate()
+	if err = ctx.Err(); err != nil {
+		return err
+	}
+
+	docMtx.Lock(docID)
+	defer docMtx.Unlock(docID)
+
+	return c.setDocumentCompanyID(docID, companyID)
+}
+
+func (c *Conn) setDocumentCompanyID(docID, companyID uu.ID) (err error) {
+	defer errs.WrapWithFuncParams(&err, docID, companyID)
+
+	if err = companyID.Validate(); err != nil {
+		return err
 	}
 
 	docDir := c.documentDir(docID)
@@ -451,7 +460,7 @@ func (c *Conn) LatestDocumentVersion(ctx context.Context, docID uu.ID) (latest d
 
 	info, err := c.LatestDocumentVersionInfo(ctx, docID)
 	if err != nil {
-		return docdb.VersionTime{}, ctx.Err()
+		return docdb.VersionTime{}, err
 	}
 	return info.Version, nil
 }
@@ -821,7 +830,7 @@ func (c *Conn) CheckInDocument(ctx context.Context, docID uu.ID) (versionInfo *d
 	docDir := c.documentDir(docID)
 	workDir := c.CheckedOutDocumentDir(docID)
 
-	newVersion := docdb.VersionTimeFrom(time.Now())
+	newVersion := docdb.NewVersionTime(ctx)
 	newVersionDir = docDir.Join(newVersion.String())
 
 	err = fs.CopyRecursive(ctx, workDir, newVersionDir)
@@ -1009,7 +1018,7 @@ func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.I
 		return nil, docdb.NewErrDocumentAlreadyExists(docID)
 	}
 
-	newVersion := docdb.VersionTimeFrom(time.Now())
+	newVersion := docdb.NewVersionTime(ctx)
 	newVersionDir := docDir.Join(newVersion.String())
 
 	defer func() {
@@ -1067,12 +1076,117 @@ func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.I
 	return versionInfo, nil
 }
 
-func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, tx docdb.AddVersionTx) (*docdb.VersionInfo, error) {
-	panic("TODO")
+func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, tx docdb.AddVersionTx) (versionInfo *docdb.VersionInfo, err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, docID, userID, reason, tx)
+
+	if err = ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err = docID.Validate(); err != nil {
+		return nil, err
+	}
+	if err = userID.Validate(); err != nil {
+		return nil, err
+	}
+	if tx == nil {
+		return nil, errs.New("nil tx passed to AddDocumentVersion")
+	}
+
+	docDir := c.documentDir(docID)
+	newVersion := docdb.NewVersionTime(ctx)
+	newVersionDir := docDir.Join(newVersion.String())
+	versionInfoFile := docDir.Joinf("%s.json", newVersion)
+
+	docMtx.Lock(docID)
+	defer docMtx.Unlock(docID)
+
+	defer func() {
+		if err != nil {
+			if docDir.Exists() {
+				err = errors.Join(err, newVersionDir.RemoveRecursive())
+			}
+			if versionInfoFile.Exists() {
+				err = errors.Join(err, versionInfoFile.Remove())
+			}
+		}
+	}()
+
+	prevVersionInfo, prevVersionDir, err := c.latestDocumentVersionInfo(docID)
+	if err != nil {
+		return nil, err
+	}
+
+	writeFiles, deleteFiles, newCompanyID, err := safelyCallAddVersionTx(ctx, prevVersionInfo.Version, docdb.DirFileProvider(prevVersionDir), tx)
+	if err != nil {
+		return nil, err
+	}
+	for _, f := range writeFiles {
+		if !f.Exists() {
+			return nil, errs.Errorf("file returned for new document version does not exist: %#v", f)
+		}
+	}
+
+	err = newVersionDir.MakeDir()
+	if err != nil {
+		return nil, err
+	}
+
+	// Copy previous version files that are not in writeFiles or deleteFiles
+	for filename := range prevVersionInfo.Files {
+		if fs.FileReaderNameIndex(writeFiles, filename) >= 0 || slices.Contains(deleteFiles, filename) {
+			continue
+		}
+		err = fs.CopyFile(ctx, prevVersionDir.Join(filename), newVersionDir)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Write new files of version
+	for _, writeFile := range writeFiles {
+		err = fs.CopyFile(ctx, writeFile, newVersionDir)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// NewVersionInfo reads newVersionDir and prevVersionDir, this could be optimized
+	// by copying and content hashing the files in one loop
+	versionInfo, err = docdb.NewVersionInfo(
+		docID,
+		newVersion,
+		prevVersionInfo.Version,
+		userID,
+		reason,
+		newVersionDir,
+		prevVersionDir,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if versionInfo.EqualFiles(prevVersionInfo) {
+		return nil, docdb.ErrNoChanges
+	}
+
+	err = versionInfo.WriteJSON(versionInfoFile)
+	if err != nil {
+		return nil, err
+	}
+
+	// Change company ID as last step after everything else succeeded
+	if newCompanyID != nil {
+		err = c.setDocumentCompanyID(docID, *newCompanyID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return versionInfo, nil
 }
 
-// func safelyCallOnCreateVersion(ctx context.Context, versionInfo *docdb.VersionInfo, onCreate docdb.OnCreateVersionFunc) (err error) {
-// 	defer errs.RecoverPanicAsError(&err)
+func safelyCallAddVersionTx(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider, tx docdb.AddVersionTx) (writeFiles []fs.FileReader, deleteFiles []string, newCompanyID *uu.ID, err error) {
+	defer errs.RecoverPanicAsError(&err)
 
-// 	return onCreate(ctx, versionInfo)
-// }
+	return tx(ctx, prevVersion, prevFiles)
+}

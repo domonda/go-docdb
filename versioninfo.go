@@ -159,6 +159,31 @@ func NewVersionInfo(docID uu.ID, version, prevVersion VersionTime, commitUserID 
 	return versionInfo, nil
 }
 
+func (vi *VersionInfo) EqualFiles(other *VersionInfo) bool {
+	if vi == other {
+		return true
+	}
+	if vi == nil || other == nil {
+		return false
+	}
+	if len(vi.Files) != len(other.Files) {
+		return false
+	}
+	for i := range vi.Files {
+		found := false
+		for j := range other.Files {
+			if other.Files[j] == vi.Files[i] {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
 // // NewVersionInfo uses the files from versionDir.
 // // If prevVersionDir is "", then all files are added to the AddedFiles slice,
 // // else the according diff slices RemovedFiles and ModidfiedFiles will also be filled.
