@@ -422,6 +422,20 @@ func (c *Conn) documentVersionInfo(docID uu.ID, version docdb.VersionTime) (vers
 		return nil, docDir, err
 	}
 
+	// Older implementations did not include VersionInfo.CompanyID
+	// so read latest state from "company.id"
+	if versionInfo.CompanyID.IsNil() {
+		file := docDir.Join("company.id")
+		uuidStr, err := file.ReadAllString()
+		if err != nil {
+			return nil, "", errs.Errorf("document %s can't read company ID because %w", docID, err)
+		}
+		versionInfo.CompanyID, err = uu.IDFromString(uuidStr)
+		if err != nil {
+			return nil, "", errs.Errorf("document %s can't read company ID because %w", docID, err)
+		}
+	}
+
 	return versionInfo, docDir, nil
 }
 
@@ -530,11 +544,11 @@ func (c *Conn) documentCheckOutStatus(docID uu.ID) (status *docdb.CheckOutStatus
 	return status, nil
 }
 
-func (c *Conn) writeDocumentCheckOutStatusFile(docID uu.ID, version docdb.VersionTime, userID uu.ID, reason string, checkOutDir fs.File) (status *docdb.CheckOutStatus, err error) {
-	defer errs.WrapWithFuncParams(&err, docID, version, userID, reason, checkOutDir)
+func (c *Conn) writeDocumentCheckOutStatusFile(companyID, docID uu.ID, version docdb.VersionTime, userID uu.ID, reason string, checkOutDir fs.File) (status *docdb.CheckOutStatus, err error) {
+	defer errs.WrapWithFuncParams(&err, companyID, docID, version, userID, reason, checkOutDir)
 
 	status = &docdb.CheckOutStatus{
-		// CompanyID:   companyID,
+		CompanyID:   companyID,
 		DocID:       docID,
 		Version:     version,
 		UserID:      userID,
@@ -622,7 +636,7 @@ func (c *Conn) CheckOutNewDocument(ctx context.Context, docID, companyID, userID
 		return nil, err
 	}
 
-	status, err = c.writeDocumentCheckOutStatusFile(docID, docdb.VersionTime{}, userID, reason, checkOutDir)
+	status, err = c.writeDocumentCheckOutStatusFile(companyID, docID, docdb.VersionTime{}, userID, reason, checkOutDir)
 	if err != nil {
 		return nil, err
 	}
@@ -723,7 +737,7 @@ func (c *Conn) CheckOutDocument(ctx context.Context, docID, userID uu.ID, reason
 		return nil, errs.Errorf("CheckOutDocument: error while copying files to workspace directory: %w", err)
 	}
 
-	checkOutStatus, err = c.writeDocumentCheckOutStatusFile(docID, versionInfo.Version, userID, reason, checkOutDir)
+	checkOutStatus, err = c.writeDocumentCheckOutStatusFile(versionInfo.CompanyID, docID, versionInfo.Version, userID, reason, checkOutDir)
 	if err != nil {
 		if e := checkOutDir.RemoveRecursive(); e != nil {
 			err = errs.Errorf("error (%s) while cleaning up after error: %w", e, err)
@@ -844,7 +858,7 @@ func (c *Conn) CheckInDocument(ctx context.Context, docID uu.ID) (versionInfo *d
 	}
 
 	versionInfo, err = docdb.NewVersionInfo(
-		// checkOutStatus.CompanyID,
+		checkOutStatus.CompanyID,
 		docID,
 		newVersion,
 		checkOutStatus.Version,
@@ -1057,6 +1071,7 @@ func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.I
 	// NewVersionInfo reads newVersionDir, this could be optimized
 	// by copying and content hashing the files in one loop
 	versionInfo, err = docdb.NewVersionInfo(
+		companyID,
 		docID,
 		newVersion,
 		docdb.VersionTime{},
@@ -1115,6 +1130,9 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 	if err != nil {
 		return nil, err
 	}
+	if !newVersion.After(prevVersionInfo.Version) {
+		return nil, errs.Errorf("new version %s not after previous version %s", newVersion, prevVersionInfo.Version)
+	}
 
 	writeFiles, deleteFiles, newCompanyID, err := safelyCallAddVersionTx(ctx, prevVersionInfo.Version, docdb.DirFileProvider(prevVersionDir), tx)
 	if err != nil {
@@ -1122,7 +1140,7 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 	}
 	for _, f := range writeFiles {
 		if !f.Exists() {
-			return nil, errs.Errorf("file returned for new document version does not exist: %#v", f)
+			return nil, errs.Errorf("file returned for new version of document %s does not exist: %#v", docID, f)
 		}
 	}
 
@@ -1150,9 +1168,15 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 		}
 	}
 
+	companyID := prevVersionInfo.CompanyID
+	if newCompanyID != nil {
+		companyID = *newCompanyID
+	}
+
 	// NewVersionInfo reads newVersionDir and prevVersionDir, this could be optimized
 	// by copying and content hashing the files in one loop
 	versionInfo, err = docdb.NewVersionInfo(
+		companyID,
 		docID,
 		newVersion,
 		prevVersionInfo.Version,
@@ -1185,7 +1209,7 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 	return versionInfo, nil
 }
 
-func safelyCallAddVersionTx(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider, tx docdb.AddVersionTx) (writeFiles []fs.FileReader, deleteFiles []string, newCompanyID *uu.ID, err error) {
+func safelyCallAddVersionTx(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider, tx docdb.AddVersionTx) (writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error) {
 	defer errs.RecoverPanicAsError(&err)
 
 	return tx(ctx, prevVersion, prevFiles)

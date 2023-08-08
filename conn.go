@@ -8,7 +8,7 @@ import (
 	"github.com/domonda/go-types/uu"
 )
 
-type AddVersionTx func(ctx context.Context, prevVersion VersionTime, prevFiles FileProvider) (writeFiles []fs.FileReader, deleteFiles []string, newCompanyID *uu.ID, err error)
+type AddVersionTx func(ctx context.Context, prevVersion VersionTime, prevFiles FileProvider) (writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error)
 
 // Conn is an interface for a docdb connection.
 type Conn interface {

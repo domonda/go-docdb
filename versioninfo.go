@@ -17,7 +17,7 @@ type FileInfo struct {
 }
 
 type VersionInfo struct {
-	// CompanyID    uu.ID
+	CompanyID    uu.ID
 	DocID        uu.ID
 	Version      VersionTime
 	PrevVersion  VersionTime
@@ -70,8 +70,9 @@ func ReadVersionInfoJSON(file fs.File, writeFixedVersion bool) (versionInfo *Ver
 // else the according diff slices RemovedFiles and ModidfiedFiles will also be filled.
 // Files inversionDir and prevVersionDir with names from ignoreFiles will be ignored.
 // The file slices are sorted.
-func NewVersionInfo(docID uu.ID, version, prevVersion VersionTime, commitUserID uu.ID, commitReason string, versionDir, prevVersionDir fs.File, ignoreFiles ...string) (versionInfo *VersionInfo, err error) {
+func NewVersionInfo(companyID, docID uu.ID, version, prevVersion VersionTime, commitUserID uu.ID, commitReason string, versionDir, prevVersionDir fs.File, ignoreFiles ...string) (versionInfo *VersionInfo, err error) {
 	versionInfo = &VersionInfo{
+		CompanyID:    companyID,
 		DocID:        docID,
 		Version:      version,
 		PrevVersion:  prevVersion,

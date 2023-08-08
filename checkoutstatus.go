@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ungerik/go-fs"
+
 	"github.com/domonda/go-types/uu"
-	fs "github.com/ungerik/go-fs"
 )
 
 type CheckOutStatus struct {
