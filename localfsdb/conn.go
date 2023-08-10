@@ -5,13 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"testing"
 	"time"
 
 	"github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/uuiddir"
-	"golang.org/x/exp/slices"
 
 	"github.com/domonda/go-docdb"
 	"github.com/domonda/go-errs"
