@@ -10,7 +10,7 @@ require (
 	github.com/domonda/go-types v0.0.0-20230810134814-bd15ee23faf5
 	github.com/domonda/golog v0.0.0-20230810134614-42a3dac1f72e
 	github.com/stretchr/testify v1.8.4
-	github.com/ungerik/go-fs v0.0.0-20230810132455-f7ff27f6fa2b
+	github.com/ungerik/go-fs v0.0.0-20230823102526-9529193e0ede
 )
 
 require (

@@ -81,20 +81,20 @@ func NewVersionInfo(companyID, docID uu.ID, version, prevVersion VersionTime, co
 		Files:        make(map[string]FileInfo),
 	}
 
-	err = versionDir.ListDir(func(file fs.File) error {
-		info, err := file.InfoWithContentHash()
-		if err != nil {
-			return err
-		}
+	err = versionDir.ListDirInfo(func(info fs.FileInfo) error {
 		for _, ignoreFile := range ignoreFiles {
 			if info.Name == ignoreFile {
 				return nil
 			}
 		}
+		hash, err := info.File.ContentHash()
+		if err != nil {
+			return err
+		}
 		versionInfo.Files[info.Name] = FileInfo{
 			Name: info.Name,
 			Size: info.Size,
-			Hash: info.ContentHash,
+			Hash: hash,
 		}
 		return nil
 	})
@@ -108,20 +108,20 @@ func NewVersionInfo(companyID, docID uu.ID, version, prevVersion VersionTime, co
 		}
 	} else {
 		prevVersionFiles := make(map[string]FileInfo)
-		err = prevVersionDir.ListDir(func(file fs.File) error {
-			info, err := file.InfoWithContentHash()
-			if err != nil {
-				return err
-			}
+		err = prevVersionDir.ListDirInfo(func(info fs.FileInfo) error {
 			for _, ignoreFile := range ignoreFiles {
 				if info.Name == ignoreFile {
 					return nil
 				}
 			}
+			hash, err := info.File.ContentHash()
+			if err != nil {
+				return err
+			}
 			prevVersionFiles[info.Name] = FileInfo{
 				Name: info.Name,
 				Size: info.Size,
-				Hash: info.ContentHash,
+				Hash: hash,
 			}
 			return nil
 		})

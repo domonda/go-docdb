@@ -186,7 +186,7 @@ func (c *Conn) latestDocumentVersionInfo(docID uu.ID) (versionInfo *docdb.Versio
 	}
 
 	var latestVersion docdb.VersionTime
-	err = docDir.ListDirInfo(func(dir fs.File, dirInfo fs.FileInfo) error {
+	err = docDir.ListDirInfo(func(dirInfo fs.FileInfo) error {
 		if !dirInfo.IsDir || dirInfo.IsHidden {
 			return nil
 		}
@@ -195,14 +195,14 @@ func (c *Conn) latestDocumentVersionInfo(docID uu.ID) (versionInfo *docdb.Versio
 			log.Error("Can't parse document sub-directory name as version, skipping version and continuing...").
 				UUID("docID", docID).
 				Str("dirName", dirInfo.Name).
-				Str("dirPath", dir.Path()).
+				Str("dirPath", dirInfo.File.Path()).
 				Err(err).
 				Log()
 			return nil
 		}
 		infoFile := docDir.Join(version.String() + ".json")
 		if !infoFile.Exists() {
-			versionFiles, err := dir.ListDirMax(20)
+			versionFiles, err := dirInfo.File.ListDirMax(20)
 			if err != nil {
 				log.Error("Error listing document version directory").Err(err).Log()
 			}
@@ -217,7 +217,7 @@ func (c *Conn) latestDocumentVersionInfo(docID uu.ID) (versionInfo *docdb.Versio
 		}
 		if version.Time.After(latestVersion.Time) {
 			latestVersion = version
-			versionDir = dir
+			versionDir = dirInfo.File
 		}
 		return nil
 	})
@@ -356,7 +356,7 @@ func (c *Conn) documentVersions(docID uu.ID) (versions []docdb.VersionTime, err 
 	if !docDir.IsDir() {
 		return nil, nil
 	}
-	err = docDir.ListDirInfo(func(dir fs.File, dirInfo fs.FileInfo) error {
+	err = docDir.ListDirInfo(func(dirInfo fs.FileInfo) error {
 		if !dirInfo.IsDir || dirInfo.IsHidden {
 			return nil
 		}
@@ -365,14 +365,14 @@ func (c *Conn) documentVersions(docID uu.ID) (versions []docdb.VersionTime, err 
 			log.Error("Can't parse document sub-directory name as version, skipping version and continuing...").
 				UUID("docID", docID).
 				Str("dirName", dirInfo.Name).
-				Str("dirPath", dir.Path()).
+				Str("dirPath", dirInfo.File.Path()).
 				Err(err).
 				Log()
 			return nil
 		}
 		infoFile := docDir.Join(version.String() + ".json")
 		if !infoFile.Exists() {
-			versionFiles, err := dir.ListDirMax(20)
+			versionFiles, err := dirInfo.File.ListDirMax(20)
 			if err != nil {
 				log.Error("Error listing document version directory").Err(err).Log()
 			}
@@ -647,8 +647,8 @@ func (c *Conn) CheckOutNewDocument(ctx context.Context, docID, companyID, userID
 func (c *Conn) CheckedOutDocuments(ctx context.Context) (stati []*docdb.CheckOutStatus, err error) {
 	defer errs.WrapWithFuncParams(&err)
 
-	err = c.workspaceDir.ListDirInfoContext(ctx, func(dir fs.File, file fs.FileInfo) (err error) {
-		docID, err := uu.IDFromString(dir.Name())
+	err = c.workspaceDir.ListDirInfoContext(ctx, func(file fs.FileInfo) (err error) {
+		docID, err := uu.IDFromString(file.Name)
 		if err != nil {
 			return errs.Errorf("non UUID filename in workspace: %w", err)
 		}
@@ -660,7 +660,7 @@ func (c *Conn) CheckedOutDocuments(ctx context.Context) (stati []*docdb.CheckOut
 			return nil
 		}
 		if !file.IsDir {
-			return errs.Errorf("UUID named workspace %w", fs.NewErrIsNotDirectory(dir))
+			return errs.Errorf("UUID named workspace %w", fs.NewErrIsNotDirectory(file.File))
 		}
 		status, err := c.documentCheckOutStatus(docID)
 		if err != nil {
