@@ -177,8 +177,8 @@ func (c *Conn) removeCompanyDocumentDirIfExists(companyID, docID uu.ID) error {
 	return uuiddir.RemoveDir(companyDir, docDir)
 }
 
-func (c *Conn) latestDocumentVersionInfo(docID uu.ID) (versionInfo *docdb.VersionInfo, versionDir fs.File, err error) {
-	defer errs.WrapWithFuncParams(&err, docID)
+func (c *Conn) latestDocumentVersionInfo(ctx context.Context, docID uu.ID) (versionInfo *docdb.VersionInfo, versionDir fs.File, err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
 	docDir := c.documentDir(docID)
 	if !docDir.IsDir() {
@@ -192,7 +192,7 @@ func (c *Conn) latestDocumentVersionInfo(docID uu.ID) (versionInfo *docdb.Versio
 		}
 		version, err := docdb.VersionTimeFromString(dirInfo.Name)
 		if err != nil {
-			log.Error("Can't parse document sub-directory name as version, skipping version and continuing...").
+			log.ErrorCtx(ctx, "Can't parse document sub-directory name as version, skipping version and continuing...").
 				UUID("docID", docID).
 				Str("dirName", dirInfo.Name).
 				Str("dirPath", dirInfo.File.Path()).
@@ -204,9 +204,9 @@ func (c *Conn) latestDocumentVersionInfo(docID uu.ID) (versionInfo *docdb.Versio
 		if !infoFile.Exists() {
 			versionFiles, err := dirInfo.File.ListDirMax(20)
 			if err != nil {
-				log.Error("Error listing document version directory").Err(err).Log()
+				log.ErrorCtx(ctx, "Error listing document version directory").Err(err).Log()
 			}
-			log.Error("Document version directory has no corresponding version info JSON file, skipping version and continuing...").
+			log.ErrorCtx(ctx, "Document version directory has no corresponding version info JSON file, skipping version and continuing...").
 				UUID("docID", docID).
 				Str("jsonFile", infoFile.Name()).
 				Str("versionDir", dirInfo.Name).
@@ -246,11 +246,11 @@ func (c *Conn) DocumentCompanyID(ctx context.Context, docID uu.ID) (companyID uu
 	docMtx.Lock(docID)
 	defer docMtx.Unlock(docID)
 
-	return c.documentCompanyID(docID)
+	return c.documentCompanyID(ctx, docID)
 }
 
-func (c *Conn) documentCompanyID(docID uu.ID) (companyID uu.ID, err error) {
-	defer errs.WrapWithFuncParams(&err, docID)
+func (c *Conn) documentCompanyID(ctx context.Context, docID uu.ID) (companyID uu.ID, err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
 	file := c.documentDir(docID).Join("company.id")
 	if file.Exists() {
@@ -262,7 +262,7 @@ func (c *Conn) documentCompanyID(docID uu.ID) (companyID uu.ID, err error) {
 	}
 
 	// Backward compatible way, when no company.id file exists:
-	version, versionDir, err := c.latestDocumentVersionInfo(docID)
+	version, versionDir, err := c.latestDocumentVersionInfo(ctx, docID)
 	if err != nil {
 		return uu.IDNil, err
 	}
@@ -290,11 +290,11 @@ func (c *Conn) SetDocumentCompanyID(ctx context.Context, docID, companyID uu.ID)
 	docMtx.Lock(docID)
 	defer docMtx.Unlock(docID)
 
-	return c.setDocumentCompanyID(docID, companyID)
+	return c.setDocumentCompanyID(ctx, docID, companyID)
 }
 
-func (c *Conn) setDocumentCompanyID(docID, companyID uu.ID) (err error) {
-	defer errs.WrapWithFuncParams(&err, docID, companyID)
+func (c *Conn) setDocumentCompanyID(ctx context.Context, docID, companyID uu.ID) (err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, docID, companyID)
 
 	if err = companyID.Validate(); err != nil {
 		return err
@@ -305,7 +305,7 @@ func (c *Conn) setDocumentCompanyID(docID, companyID uu.ID) (err error) {
 		return docdb.NewErrDocumentNotFound(docID)
 	}
 
-	currCompanyID, err := c.documentCompanyID(docID)
+	currCompanyID, err := c.documentCompanyID(ctx, docID)
 	if err != nil {
 		return err
 	}
@@ -346,11 +346,11 @@ func (c *Conn) DocumentVersions(ctx context.Context, docID uu.ID) (versions []do
 	docMtx.Lock(docID)
 	defer docMtx.Unlock(docID)
 
-	return c.documentVersions(docID)
+	return c.documentVersions(ctx, docID)
 }
 
-func (c *Conn) documentVersions(docID uu.ID) (versions []docdb.VersionTime, err error) {
-	defer errs.WrapWithFuncParams(&err, docID)
+func (c *Conn) documentVersions(ctx context.Context, docID uu.ID) (versions []docdb.VersionTime, err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
 	docDir := c.documentDir(docID)
 	if !docDir.IsDir() {
@@ -362,7 +362,7 @@ func (c *Conn) documentVersions(docID uu.ID) (versions []docdb.VersionTime, err 
 		}
 		version, err := docdb.VersionTimeFromString(dirInfo.Name)
 		if err != nil {
-			log.Error("Can't parse document sub-directory name as version, skipping version and continuing...").
+			log.ErrorCtx(ctx, "Can't parse document sub-directory name as version, skipping version and continuing...").
 				UUID("docID", docID).
 				Str("dirName", dirInfo.Name).
 				Str("dirPath", dirInfo.File.Path()).
@@ -374,9 +374,9 @@ func (c *Conn) documentVersions(docID uu.ID) (versions []docdb.VersionTime, err 
 		if !infoFile.Exists() {
 			versionFiles, err := dirInfo.File.ListDirMax(20)
 			if err != nil {
-				log.Error("Error listing document version directory").Err(err).Log()
+				log.ErrorCtx(ctx, "Error listing document version directory").Err(err).Log()
 			}
-			log.Error("Document version directory has no corresponding version info JSON file, skipping version and continuing...").
+			log.ErrorCtx(ctx, "Document version directory has no corresponding version info JSON file, skipping version and continuing...").
 				UUID("docID", docID).
 				Str("jsonFile", infoFile.Name()).
 				Str("versionDir", dirInfo.Name).
@@ -465,7 +465,7 @@ func (c *Conn) LatestDocumentVersionInfo(ctx context.Context, docID uu.ID) (vers
 	docMtx.Lock(docID)
 	defer docMtx.Unlock(docID)
 
-	versionInfo, _, err = c.latestDocumentVersionInfo(docID)
+	versionInfo, _, err = c.latestDocumentVersionInfo(ctx, docID)
 	return versionInfo, err
 }
 
@@ -600,18 +600,18 @@ func (c *Conn) CheckOutNewDocument(ctx context.Context, docID, companyID, userID
 			if docDir.Exists() {
 				e := uuiddir.RemoveDir(c.documentsDir, docDir)
 				if e != nil {
-					log.Error("delete docDir").Ctx(ctx).Err(e).Log()
+					log.ErrorCtx(ctx, "delete docDir").Ctx(ctx).Err(e).Log()
 				}
 			}
 			if checkOutDir.Exists() {
 				e := checkOutDir.RemoveRecursive()
 				if e != nil {
-					log.Error("delete checkOutDir").Ctx(ctx).Err(e).Log()
+					log.ErrorCtx(ctx, "delete checkOutDir").Ctx(ctx).Err(e).Log()
 				}
 			}
 			e := c.removeCompanyDocumentDirIfExists(companyID, docID)
 			if e != nil {
-				log.Error("removeCompanyDocumentDirIfExists").Ctx(ctx).Err(e).Log()
+				log.ErrorCtx(ctx, "removeCompanyDocumentDirIfExists").Ctx(ctx).Err(e).Log()
 			}
 		}
 	}()
@@ -715,7 +715,7 @@ func (c *Conn) CheckOutDocument(ctx context.Context, docID, userID uu.ID, reason
 		return nil, docdb.NewErrDocumentCheckedOut(checkOutStatus)
 	}
 
-	versionInfo, versionDir, err := c.latestDocumentVersionInfo(docID)
+	versionInfo, versionDir, err := c.latestDocumentVersionInfo(ctx, docID)
 	if err != nil {
 		return nil, err
 	}
@@ -786,7 +786,7 @@ func (c *Conn) CancelCheckOutDocument(ctx context.Context, docID uu.ID) (wasChec
 			// the checkout-status.json file does not exist anymore
 			e := checkOutDir.RemoveRecursive()
 			if e != nil {
-				log.Error("Delete checked out workspace files that shouldn't be there").Err(e).Log()
+				log.ErrorCtx(ctx, "Delete checked out workspace files that shouldn't be there").Err(e).Log()
 			}
 		}
 		return false, docdb.VersionTime{}, nil
@@ -829,7 +829,7 @@ func (c *Conn) CheckInDocument(ctx context.Context, docID uu.ID) (versionInfo *d
 				}
 			}
 
-			log.Error("CheckInDocument error").Err(err).Log()
+			log.ErrorCtx(ctx, "CheckInDocument error").Err(err).Log()
 		}
 	}()
 
@@ -913,7 +913,7 @@ func (c *Conn) DeleteDocument(ctx context.Context, docID uu.ID) (err error) {
 
 	docDir := c.documentDir(docID)
 	if docDir.Exists() {
-		companyID, e := c.documentCompanyID(docID)
+		companyID, e := c.documentCompanyID(ctx, docID)
 		if e == nil {
 			e = uuiddir.Remove(c.companiesDir.Join(companyID.String()), docID)
 		}
@@ -964,11 +964,11 @@ func (c *Conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version d
 		err = versionInfoFile.Remove()
 	}
 
-	leftVersions, err = c.documentVersions(docID)
+	leftVersions, err = c.documentVersions(ctx, docID)
 	if len(leftVersions) == 0 {
 		// If no versions left, delete the company document entry
 		// and the document directory
-		companyID, e := c.documentCompanyID(docID)
+		companyID, e := c.documentCompanyID(ctx, docID)
 		if e == nil {
 			e = uuiddir.Remove(c.companiesDir.Join(companyID.String()), docID)
 		}
@@ -1126,7 +1126,7 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 		}
 	}()
 
-	prevVersionInfo, prevVersionDir, err := c.latestDocumentVersionInfo(docID)
+	prevVersionInfo, prevVersionDir, err := c.latestDocumentVersionInfo(ctx, docID)
 	if err != nil {
 		return nil, err
 	}
@@ -1200,7 +1200,7 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 
 	// Change company ID as last step after everything else succeeded
 	if newCompanyID != nil {
-		err = c.setDocumentCompanyID(docID, *newCompanyID)
+		err = c.setDocumentCompanyID(ctx, docID, *newCompanyID)
 		if err != nil {
 			return nil, err
 		}

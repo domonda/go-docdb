@@ -55,7 +55,7 @@ package localfsdb
 // 			log.Infof("makeCompanyDocumentDir(%s, %s): %s", doc.CompanyID, doc.ID, dir.Path()).Log()
 // 			err := fsdb.makeCompanyDocumentDir(doc.CompanyID, doc.ID)
 // 			if err != nil {
-// 				log.Error("makeCompanyDocumentDir").Err(err).Log()
+// 				log.ErrorCtx(ctx, "makeCompanyDocumentDir").Err(err).Log()
 // 			}
 // 		}
 // 		return nil
@@ -85,7 +85,7 @@ package localfsdb
 // 		}
 // 		status, err := fsdb.documentCheckOutStatus(docID)
 // 		if err != nil {
-// 			log.Errorf("Could not get document check-out status %s", docID).Err(err).Log()
+// 			log.ErrorfCtx(ctx, "Could not get document check-out status %s", docID).Err(err).Log()
 // 			return err
 // 		}
 // 		if status != nil {
@@ -96,19 +96,19 @@ package localfsdb
 // 		}
 // 		versions, err := fsdb.DocumentVersions(ctx, docID)
 // 		if err != nil {
-// 			log.Errorf("Could not get all document versions %s", docID).Err(err).Log()
+// 			log.ErrorfCtx(ctx, "Could not get all document versions %s", docID).Err(err).Log()
 // 			return err
 // 		}
 // 		stat.NumDocumentVersions += len(versions)
 
 // 		_, versionDir, err := fsdb.latestDocumentVersionInfo(docID)
 // 		if err != nil {
-// 			log.Errorf("Could not get latest document version dir %s", docID).Err(err).Log()
+// 			log.ErrorfCtx(ctx, "Could not get latest document version dir %s", docID).Err(err).Log()
 // 			return err
 // 		}
 // 		pdfInfo, err := poppler.Pdfinfo(versionDir.Join(extraction.DocPDF).LocalPath())
 // 		if err != nil {
-// 			log.Errorf("Could not get %s number of pages for document %s", extraction.DocPDF, docID).Err(err).Log()
+// 			log.ErrorfCtx(ctx, "Could not get %s number of pages for document %s", extraction.DocPDF, docID).Err(err).Log()
 // 			return err
 // 		}
 // 		if pdfInfo.Pages != doc.NumPages() {
