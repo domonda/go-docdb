@@ -12,7 +12,7 @@ import (
 func PostgresGetDocumentVersionIDOrNull(ctx context.Context, documentID uu.ID, version VersionTime) (id uu.NullableID, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, documentID, version)
 
-	err = db.Conn(ctx).QueryRow(
+	err = db.QueryRow(ctx,
 		`select id
 			from docdb.document_version
 			where document_id = $1 and version = date_trunc('milliseconds', $2::timestamp)`,
@@ -37,7 +37,7 @@ func PostgresGetDocumentVersionIDs(ctx context.Context, documentID uu.ID) (ids u
 func ToRefactorVersionExists(ctx context.Context, documentID uu.ID, version VersionTime) (exists bool, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, documentID, version)
 
-	err = db.Conn(ctx).QueryRow(
+	err = db.QueryRow(ctx,
 		`select exists (
 			select from docdb.document_version
 				where document_id = $1 and version = date_trunc('milliseconds', $2::timestamp)
@@ -54,7 +54,7 @@ func ToRefactorVersionExists(ctx context.Context, documentID uu.ID, version Vers
 // func VersionIDExists(ctx context.Context, documentVersionID uu.ID) (exists bool, err error) {
 // 	defer errs.WrapWithFuncParams(&err, ctx, documentVersionID)
 
-// 	err = db.Conn(ctx).QueryRow(
+// 	err = db.QueryRow(ctx,
 // 		`select exists(select from docdb.document_version where id = $1)`,
 // 		documentVersionID,
 // 	).Scan(&exists)
@@ -67,7 +67,7 @@ func ToRefactorVersionExists(ctx context.Context, documentID uu.ID, version Vers
 func PostgresGetLatestVersion(ctx context.Context, documentID uu.ID) (version VersionTime, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, documentID)
 
-	err = db.Conn(ctx).QueryRow(
+	err = db.QueryRow(ctx,
 		`select version from public.document where id = $1`,
 		documentID,
 	).Scan(&version)
@@ -80,7 +80,7 @@ func PostgresGetLatestVersion(ctx context.Context, documentID uu.ID) (version Ve
 func PostgresGetLatestDocumentVersionTimeAndID(ctx context.Context, documentID uu.ID) (version VersionTime, id uu.ID, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, documentID)
 
-	err = db.Conn(ctx).QueryRow(
+	err = db.QueryRow(ctx,
 		`select doc.version, ver.id
 			from public.document as doc
 			inner join docdb.document_version as ver
@@ -101,7 +101,7 @@ func PostgresGetLatestDocumentVersionTimeAndID(ctx context.Context, documentID u
 // 	versions = make([]VersionTime, 0, len(documentIDs))
 // 	ids = make(uu.IDSlice, 0, len(documentIDs))
 
-// 	err = db.Conn(ctx).QueryRows(
+// 	err = db.QueryRows(ctx,
 // 		`select doc.version, ver.id
 // 			from unnest($1::uuid[]) as document_id
 // 			inner join public.document as doc
@@ -130,7 +130,7 @@ func PostgresInsertDocumentVersionIfMissing(ctx context.Context, versionInfo *Ve
 	defer errs.WrapWithFuncParams(&err, ctx, versionInfo)
 
 	err = db.Transaction(ctx, func(ctx context.Context) error {
-		err = db.Conn(ctx).QueryRow(
+		err = db.QueryRow(ctx,
 			`select id
 				from docdb.document_version
 				where
@@ -233,7 +233,7 @@ func PostgresDeleteDocumentVersionByID(ctx context.Context, versionID uu.ID) (er
 // func DeleteVersionByTimestamp(ctx context.Context, documentID uu.ID, version VersionTime) (versionID uu.ID, err error) {
 // 	defer errs.WrapWithFuncParams(&err, ctx, documentID, version)
 
-// 	err = db.Conn(ctx).QueryRow(
+// 	err = db.QueryRow(ctx,
 // 		`delete from docdb.document_version
 // 			where document_id = $1 and version = date_trunc('milliseconds', $2::timestamp)
 // 			returning id`,
