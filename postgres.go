@@ -218,7 +218,7 @@ func PostgresInsertDocumentVersionWithFiles(ctx context.Context, versionID uu.ID
 func PostgresDeleteDocumentVersionByID(ctx context.Context, versionID uu.ID) (err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, versionID)
 
-	err = db.Conn(ctx).Exec(`delete from docdb.document_version where id = $1`, versionID)
+	err = db.Exec(ctx, `delete from docdb.document_version where id = $1`, versionID)
 	if err != nil {
 		return err
 	}
