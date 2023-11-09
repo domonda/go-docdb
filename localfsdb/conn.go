@@ -186,7 +186,7 @@ func (c *Conn) latestDocumentVersionInfo(ctx context.Context, docID uu.ID) (vers
 	}
 
 	var latestVersion docdb.VersionTime
-	err = docDir.ListDirInfo(func(dirInfo fs.FileInfo) error {
+	err = docDir.ListDirInfo(func(dirInfo *fs.FileInfo) error {
 		if !dirInfo.IsDir || dirInfo.IsHidden {
 			return nil
 		}
@@ -356,7 +356,7 @@ func (c *Conn) documentVersions(ctx context.Context, docID uu.ID) (versions []do
 	if !docDir.IsDir() {
 		return nil, nil
 	}
-	err = docDir.ListDirInfo(func(dirInfo fs.FileInfo) error {
+	err = docDir.ListDirInfo(func(dirInfo *fs.FileInfo) error {
 		if !dirInfo.IsDir || dirInfo.IsHidden {
 			return nil
 		}
@@ -647,7 +647,7 @@ func (c *Conn) CheckOutNewDocument(ctx context.Context, docID, companyID, userID
 func (c *Conn) CheckedOutDocuments(ctx context.Context) (stati []*docdb.CheckOutStatus, err error) {
 	defer errs.WrapWithFuncParams(&err)
 
-	err = c.workspaceDir.ListDirInfoContext(ctx, func(file fs.FileInfo) (err error) {
+	err = c.workspaceDir.ListDirInfoContext(ctx, func(file *fs.FileInfo) (err error) {
 		docID, err := uu.IDFromString(file.Name)
 		if err != nil {
 			return errs.Errorf("non UUID filename in workspace: %w", err)

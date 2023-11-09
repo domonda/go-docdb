@@ -81,7 +81,7 @@ func NewVersionInfo(companyID, docID uu.ID, version, prevVersion VersionTime, co
 		Files:        make(map[string]FileInfo),
 	}
 
-	err = versionDir.ListDirInfo(func(info fs.FileInfo) error {
+	err = versionDir.ListDirInfo(func(info *fs.FileInfo) error {
 		for _, ignoreFile := range ignoreFiles {
 			if info.Name == ignoreFile {
 				return nil
@@ -108,7 +108,7 @@ func NewVersionInfo(companyID, docID uu.ID, version, prevVersion VersionTime, co
 		}
 	} else {
 		prevVersionFiles := make(map[string]FileInfo)
-		err = prevVersionDir.ListDirInfo(func(info fs.FileInfo) error {
+		err = prevVersionDir.ListDirInfo(func(info *fs.FileInfo) error {
 			for _, ignoreFile := range ignoreFiles {
 				if info.Name == ignoreFile {
 					return nil
