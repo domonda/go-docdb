@@ -149,7 +149,7 @@ func (v *VersionTime) SetNull() {
 }
 
 // Scan implements the database/sql.Scanner interface.
-func (v *VersionTime) Scan(value interface{}) error {
+func (v *VersionTime) Scan(value any) error {
 	switch t := value.(type) {
 	case nil:
 		*v = VersionTime{}
