@@ -1,6 +1,6 @@
 module github.com/domonda/go-docdb/hashdb
 
-go 1.21
+go 1.22
 
 // Parent module in same repo
 require github.com/domonda/go-docdb v0.0.0-20230419114526-0c054bdc9b24
