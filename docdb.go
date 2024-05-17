@@ -304,8 +304,8 @@ func CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason 
 	return conn.CreateDocument(ctx, companyID, docID, userID, reason, files)
 }
 
-func AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, tx AddVersionTx) (versionInfo *VersionInfo, err error) {
+func AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, txFunc AddVersionTx) (versionInfo *VersionInfo, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, userID, reason)
 
-	return conn.AddDocumentVersion(ctx, docID, userID, reason, tx)
+	return conn.AddDocumentVersion(ctx, docID, userID, reason, txFunc)
 }

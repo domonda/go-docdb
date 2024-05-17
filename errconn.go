@@ -113,6 +113,6 @@ func (c errConn) CreateDocument(ctx context.Context, companyID, docID, userID uu
 	return nil, c.err
 }
 
-func (c errConn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, tx AddVersionTx) (*VersionInfo, error) {
+func (c errConn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, txFunc AddVersionTx) (*VersionInfo, error) {
 	return nil, c.err
 }

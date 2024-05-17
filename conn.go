@@ -97,7 +97,7 @@ type Conn interface {
 
 	CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, files []fs.FileReader) (*VersionInfo, error)
 
-	AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, tx AddVersionTx) (*VersionInfo, error)
+	AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, txFunc AddVersionTx) (*VersionInfo, error)
 
 	// InsertDocumentVersion inserts a new version for an existing document.
 	// Returns wrapped ErrDocumentNotFound, ErrDocumentVersionAlreadyExists
