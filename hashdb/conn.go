@@ -202,10 +202,10 @@ func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.I
 	panic("TODO")
 }
 
-func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, txFunc docdb.AddVersionTx) (versionInfo *docdb.VersionInfo, err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, docID, userID, reason, txFunc)
+func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, createVersion docdb.CreateVersionFunc, onNewVersion docdb.OnNewVersionFunc) (err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, docID, userID, reason)
 
-	err = db.Transaction(ctx, func(ctx context.Context) error {
+	return db.Transaction(ctx, func(ctx context.Context) error {
 		// _, err := c.DocumentVersionInfo(ctx, docID, baseVersion)
 		// if db.IsOtherThanErrNoRows(err) {
 		// 	return err
@@ -221,8 +221,4 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 		// }
 		panic("TODO")
 	})
-	if err != nil {
-		return nil, err
-	}
-	return nil, nil
 }

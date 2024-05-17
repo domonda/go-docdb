@@ -8,7 +8,9 @@ import (
 	"github.com/domonda/go-types/uu"
 )
 
-type AddVersionTx func(ctx context.Context, prevVersion VersionTime, prevFiles FileProvider) (writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error)
+type CreateVersionFunc func(ctx context.Context, prevVersion VersionTime, prevFiles FileProvider) (writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error)
+
+type OnNewVersionFunc func(ctx context.Context, versionInfo *VersionInfo) error
 
 // Conn is an interface for a docdb connection.
 type Conn interface {
@@ -97,7 +99,7 @@ type Conn interface {
 
 	CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, files []fs.FileReader) (*VersionInfo, error)
 
-	AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, txFunc AddVersionTx) (*VersionInfo, error)
+	AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error
 
 	// InsertDocumentVersion inserts a new version for an existing document.
 	// Returns wrapped ErrDocumentNotFound, ErrDocumentVersionAlreadyExists
