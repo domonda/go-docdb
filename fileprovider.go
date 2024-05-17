@@ -2,6 +2,7 @@ package docdb
 
 import (
 	"context"
+	"slices"
 
 	fs "github.com/ungerik/go-fs"
 )
@@ -12,6 +13,9 @@ type FileProvider interface {
 	ListFiles(ctx context.Context) (filenames []string, err error)
 	ReadFile(ctx context.Context, filename string) ([]byte, error)
 }
+
+///////////////////////////////////////////////////////////////////////////////
+// DirFileProvider
 
 // DirFileProvider returns a FileProvider for a fs.File directory
 func DirFileProvider(dir fs.File) FileProvider {
@@ -34,11 +38,58 @@ func (d dirFileProvider) ListFiles(ctx context.Context) (filenames []string, err
 	if err != nil {
 		return nil, err
 	}
+	slices.Sort(filenames)
 	return filenames, nil
 }
 
 func (d dirFileProvider) ReadFile(ctx context.Context, filename string) ([]byte, error) {
 	return d.dir.Join(filename).ReadAllContext(ctx)
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// ExtFileProvider
+
+// ExtFileProvider returns a FileProvider that extends a base FileProvider
+// with additional files that will be returned before the files of the base FileProvider.
+func ExtFileProvider(base FileProvider, extFiles ...fs.FileReader) FileProvider {
+	return &extFileProvider{base, extFiles}
+}
+
+type extFileProvider struct {
+	base     FileProvider
+	extFiles []fs.FileReader
+}
+
+func (e *extFileProvider) HasFile(filename string) (bool, error) {
+	for _, f := range e.extFiles {
+		if f.Name() == filename {
+			return true, nil
+		}
+	}
+	return e.base.HasFile(filename)
+}
+
+func (d extFileProvider) ListFiles(ctx context.Context) (filenames []string, err error) {
+	filenames, err = d.base.ListFiles(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, f := range d.extFiles {
+		if !slices.Contains(filenames, f.Name()) {
+			filenames = append(filenames, f.Name())
+		}
+	}
+	slices.Sort(filenames)
+	return filenames, nil
+}
+
+func (d extFileProvider) ReadFile(ctx context.Context, filename string) ([]byte, error) {
+	for _, f := range d.extFiles {
+		if f.Name() == filename {
+			return f.ReadAllContext(ctx)
+		}
+	}
+	return d.base.ReadFile(ctx, filename)
 }
 
 // func MemFileProvider(file fs.MemFile) FileProvider {
