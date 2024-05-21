@@ -8,5 +8,5 @@ import (
 var (
 	log = rootlog.NewPackageLogger("localfsdb")
 
-	docMtx = uu.NewIDMutex()
+	docWriteMtx = uu.NewIDMutex()
 )

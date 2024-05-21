@@ -131,9 +131,10 @@ func (c *Conn) CheckedOutDocumentDir(docID uu.ID) fs.File {
 	return c.workspaceDir.Join(docID.String())
 }
 
-func (c *Conn) DocumentExists(_ context.Context, docID uu.ID) (exists bool, err error) {
-	docMtx.Lock(docID)
-	defer docMtx.Unlock(docID)
+func (c *Conn) DocumentExists(ctx context.Context, docID uu.ID) (exists bool, err error) {
+	if err = ctx.Err(); err != nil {
+		return false, err
+	}
 
 	return c.documentDir(docID).IsDir(), nil
 }
@@ -240,11 +241,9 @@ func (c *Conn) latestDocumentVersionInfo(ctx context.Context, docID uu.ID) (vers
 func (c *Conn) DocumentCompanyID(ctx context.Context, docID uu.ID) (companyID uu.ID, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
-	if ctx.Err() != nil {
-		return uu.IDNil, ctx.Err()
+	if err = ctx.Err(); err != nil {
+		return uu.IDNil, err
 	}
-	docMtx.Lock(docID)
-	defer docMtx.Unlock(docID)
 
 	return c.documentCompanyID(ctx, docID)
 }
@@ -287,8 +286,8 @@ func (c *Conn) SetDocumentCompanyID(ctx context.Context, docID, companyID uu.ID)
 		return err
 	}
 
-	docMtx.Lock(docID)
-	defer docMtx.Unlock(docID)
+	docWriteMtx.Lock(docID)
+	defer docWriteMtx.Unlock(docID)
 
 	return c.setDocumentCompanyID(ctx, docID, companyID)
 }
@@ -340,11 +339,9 @@ func (c *Conn) setDocumentCompanyID(ctx context.Context, docID, companyID uu.ID)
 func (c *Conn) DocumentVersions(ctx context.Context, docID uu.ID) (versions []docdb.VersionTime, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
+	if err = ctx.Err(); err != nil {
+		return nil, err
 	}
-	docMtx.Lock(docID)
-	defer docMtx.Unlock(docID)
 
 	return c.documentVersions(ctx, docID)
 }
@@ -442,11 +439,9 @@ func (c *Conn) documentVersionInfo(docID uu.ID, version docdb.VersionTime) (vers
 func (c *Conn) DocumentVersionInfo(ctx context.Context, docID uu.ID, version docdb.VersionTime) (versionInfo *docdb.VersionInfo, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, version)
 
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
+	if err = ctx.Err(); err != nil {
+		return nil, err
 	}
-	docMtx.Lock(docID)
-	defer docMtx.Unlock(docID)
 
 	versionInfo, _, err = c.documentVersionInfo(docID, version)
 	if err != nil {
@@ -459,11 +454,9 @@ func (c *Conn) DocumentVersionInfo(ctx context.Context, docID uu.ID, version doc
 func (c *Conn) LatestDocumentVersionInfo(ctx context.Context, docID uu.ID) (versionInfo *docdb.VersionInfo, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
+	if err = ctx.Err(); err != nil {
+		return nil, err
 	}
-	docMtx.Lock(docID)
-	defer docMtx.Unlock(docID)
 
 	versionInfo, _, err = c.latestDocumentVersionInfo(ctx, docID)
 	return versionInfo, err
@@ -482,11 +475,9 @@ func (c *Conn) LatestDocumentVersion(ctx context.Context, docID uu.ID) (latest d
 func (c *Conn) ReadDocumentVersionFile(ctx context.Context, docID uu.ID, version docdb.VersionTime, filename string) (data []byte, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, version, filename)
 
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
+	if err = ctx.Err(); err != nil {
+		return nil, err
 	}
-	docMtx.Lock(docID)
-	defer docMtx.Unlock(docID)
 
 	_, versionDir, err := c.documentAndVersionDir(docID, version)
 	if err != nil {
@@ -502,11 +493,9 @@ func (c *Conn) ReadDocumentVersionFile(ctx context.Context, docID uu.ID, version
 func (c *Conn) DocumentVersionFileProvider(ctx context.Context, docID uu.ID, version docdb.VersionTime) (p docdb.FileProvider, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, version)
 
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
+	if err = ctx.Err(); err != nil {
+		return nil, err
 	}
-	docMtx.Lock(docID)
-	defer docMtx.Unlock(docID)
 
 	_, versionDir, err := c.documentAndVersionDir(docID, version)
 	if err != nil {
@@ -518,11 +507,9 @@ func (c *Conn) DocumentVersionFileProvider(ctx context.Context, docID uu.ID, ver
 func (c *Conn) DocumentCheckOutStatus(ctx context.Context, docID uu.ID) (status *docdb.CheckOutStatus, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
+	if err = ctx.Err(); err != nil {
+		return nil, err
 	}
-	docMtx.Lock(docID)
-	defer docMtx.Unlock(docID)
 
 	return c.documentCheckOutStatus(docID)
 }
@@ -578,8 +565,8 @@ func (c *Conn) CheckOutNewDocument(ctx context.Context, docID, companyID, userID
 	case reason == "":
 		return nil, errs.New("CheckOutNewDocument: reason must not be empty")
 	}
-	docMtx.Lock(docID)
-	defer docMtx.Unlock(docID)
+	docWriteMtx.Lock(docID)
+	defer docWriteMtx.Unlock(docID)
 
 	if c.documentDir(docID).Exists() {
 		return nil, errs.Errorf("CheckOutNewDocument: document %s already exists", docID)
@@ -695,8 +682,8 @@ func (c *Conn) CheckOutDocument(ctx context.Context, docID, userID uu.ID, reason
 	case reason == "":
 		return nil, errs.New("CheckOutDocument: reason must not be empty")
 	}
-	docMtx.Lock(docID)
-	defer docMtx.Unlock(docID)
+	docWriteMtx.Lock(docID)
+	defer docWriteMtx.Unlock(docID)
 
 	log, ctx = log.With().
 		UUID("docID", docID).
@@ -766,8 +753,8 @@ func (c *Conn) CancelCheckOutDocument(ctx context.Context, docID uu.ID) (wasChec
 	if ctx.Err() != nil {
 		return false, docdb.VersionTime{}, err
 	}
-	docMtx.Lock(docID)
-	defer docMtx.Unlock(docID)
+	docWriteMtx.Lock(docID)
+	defer docWriteMtx.Unlock(docID)
 
 	log, ctx = log.With().
 		UUID("docID", docID).
@@ -812,8 +799,8 @@ func (c *Conn) CheckInDocument(ctx context.Context, docID uu.ID) (versionInfo *d
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	docMtx.Lock(docID)
-	defer docMtx.Unlock(docID)
+	docWriteMtx.Lock(docID)
+	defer docWriteMtx.Unlock(docID)
 
 	log, ctx = log.With().
 		UUID("docID", docID).
@@ -903,8 +890,8 @@ func (c *Conn) DeleteDocument(ctx context.Context, docID uu.ID) (err error) {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	docMtx.Lock(docID)
-	defer docMtx.Unlock(docID)
+	docWriteMtx.Lock(docID)
+	defer docWriteMtx.Unlock(docID)
 
 	log.Info("DeleteDocument").
 		Ctx(ctx).
@@ -940,8 +927,8 @@ func (c *Conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version d
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	docMtx.Lock(docID)
-	defer docMtx.Unlock(docID)
+	docWriteMtx.Lock(docID)
+	defer docWriteMtx.Unlock(docID)
 
 	log.Info("DeleteDocumentVersion").
 		Ctx(ctx).
@@ -1024,8 +1011,8 @@ func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.I
 		return nil, err
 	}
 
-	docMtx.Lock(docID)
-	defer docMtx.Unlock(docID)
+	docWriteMtx.Lock(docID)
+	defer docWriteMtx.Unlock(docID)
 
 	docDir := c.documentDir(docID)
 	if docDir.IsDir() {
@@ -1122,8 +1109,8 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 		}
 	}()
 
-	docMtx.Lock(docID)
-	defer docMtx.Unlock(docID)
+	docWriteMtx.Lock(docID)
+	defer docWriteMtx.Unlock(docID)
 
 	prevVersionInfo, prevVersionDir, err := c.latestDocumentVersionInfo(ctx, docID)
 	if err != nil {
