@@ -23,7 +23,7 @@ func TempFileCopy(ctx context.Context, provider FileProvider, filename string) (
 		return fs.InvalidFile, err
 	}
 	f := fs.TempFile(path.Ext(filename))
-	return f, f.WriteAll(data)
+	return f, f.WriteAllContext(ctx, data)
 }
 
 ///////////////////////////////////////////////////////////////////////////////

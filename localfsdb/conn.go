@@ -211,7 +211,7 @@ func (c *Conn) latestDocumentVersionInfo(ctx context.Context, docID uu.ID) (vers
 				UUID("docID", docID).
 				Str("jsonFile", infoFile.Name()).
 				Str("versionDir", dirInfo.Name).
-				Strs("versionFiles", fs.FilesToNames(versionFiles)).
+				Strs("versionFiles", fs.FileNames(versionFiles)).
 				Str("docDir", docDir.Path()).
 				Log()
 			return nil
@@ -377,7 +377,7 @@ func (c *Conn) documentVersions(ctx context.Context, docID uu.ID) (versions []do
 				UUID("docID", docID).
 				Str("jsonFile", infoFile.Name()).
 				Str("versionDir", dirInfo.Name).
-				Strs("versionFiles", fs.FilesToNames(versionFiles)).
+				Strs("versionFiles", fs.FileNames(versionFiles)).
 				Str("docDir", docDir.Path()).
 				Log()
 			return nil

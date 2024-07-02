@@ -5,10 +5,10 @@ go 1.22
 require (
 	github.com/domonda/go-errs v0.0.0-20240702051036-0e696c849b5f
 	github.com/domonda/go-pretty v0.0.0-20240110134850-17385799142f
-	github.com/domonda/go-types v0.0.0-20240610120342-a2a0957802a1
+	github.com/domonda/go-types v0.0.0-20240702093215-38dc909a6292
 	github.com/domonda/golog v0.0.0-20240610124637-5f2bd2c9438e
 	github.com/stretchr/testify v1.9.0
-	github.com/ungerik/go-fs v0.0.0-20240617111909-412b2c3ee9b5
+	github.com/ungerik/go-fs v0.0.0-20240702143946-3ecb6733945d
 )
 
 require (

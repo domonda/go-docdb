@@ -49,8 +49,8 @@ github.com/domonda/go-pretty v0.0.0-20240110134850-17385799142f h1:5eA74m451Pqlq
 github.com/domonda/go-pretty v0.0.0-20240110134850-17385799142f/go.mod h1:3QkM8UJdyJMeKZiIo7hYzSkQBpRS3k0gOHw4ysyEIB4=
 github.com/domonda/go-sqldb v0.0.0-20240421041325-ab31a86575fd h1:LWpv9Ez/H4SWjAzSdlDR82eQozpiY7ej6aLM+cHMB88=
 github.com/domonda/go-sqldb v0.0.0-20240421041325-ab31a86575fd/go.mod h1:PMn6eV80i/TA6NOjymrg59muprXdfnKFnmUJhDKaajc=
-github.com/domonda/go-types v0.0.0-20240610120342-a2a0957802a1 h1:NArWHwYw/1HSLB/fkPFM4X7+tpL6MjbKFOVcXZ3HhjM=
-github.com/domonda/go-types v0.0.0-20240610120342-a2a0957802a1/go.mod h1:WYlwEbLpUtqlh3m7ra8qiU8SeFScJ3/uR8q0bZ1+2JQ=
+github.com/domonda/go-types v0.0.0-20240702093215-38dc909a6292 h1:r+4qjyaL4Fk/n1AS4MtSQdkPfeu7wCyG2bGJetbanMw=
+github.com/domonda/go-types v0.0.0-20240702093215-38dc909a6292/go.mod h1:fL+sM1nueSnXD+0oGnGV/keMvIj/2CUsSzwogVZXX2s=
 github.com/domonda/golog v0.0.0-20240610124637-5f2bd2c9438e h1:EJhNEzHZ9IBz0tl1yYOPZt4FEe9yeR3Nq/fxkOGdzwk=
 github.com/domonda/golog v0.0.0-20240610124637-5f2bd2c9438e/go.mod h1:Ea23C2BOGbqXc1YuboTeubLcYs0jdsZbNH6RyEZj9Ak=
 github.com/fsnotify/fsnotify v1.7.0 h1:8JEhPFa5W2WU7YfeZzPNqzMP6Lwt7L2715Ggo0nosvA=
@@ -79,8 +79,8 @@ github.com/rivo/uniseg v0.4.7/go.mod h1:FN3SvrM+Zdj16jyLfmOkMNblXMcoc8DfTHruCPUc
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
 github.com/stretchr/testify v1.9.0 h1:HtqpIVDClZ4nwg75+f6Lvsy/wHu+3BoSGCbBAcpTsTg=
 github.com/stretchr/testify v1.9.0/go.mod h1:r2ic/lqez/lEtzL7wO/rwa5dbSLXVDPFyf8C91i36aY=
-github.com/ungerik/go-fs v0.0.0-20240617111909-412b2c3ee9b5 h1:Wj5TYuSZobvqrG1X+isTb4WwRPTXy27lEj6RVtpRK6U=
-github.com/ungerik/go-fs v0.0.0-20240617111909-412b2c3ee9b5/go.mod h1:+8Ezjyw6fCooNzoVofQIhWLXLe6E23nZ/9cfQ79Wzo0=
+github.com/ungerik/go-fs v0.0.0-20240702143946-3ecb6733945d h1:ldn6b+zKWH52GaUyv7GPyaIGKm8tLYtdMePw6lHdoAw=
+github.com/ungerik/go-fs v0.0.0-20240702143946-3ecb6733945d/go.mod h1:+8Ezjyw6fCooNzoVofQIhWLXLe6E23nZ/9cfQ79Wzo0=
 github.com/ungerik/go-reflection v0.0.0-20240110134735-61cada706fec h1:QiS/w0cXNtHs0xhs+Pa2Pp71CTeM9z7zVgbxV+CvezM=
 github.com/ungerik/go-reflection v0.0.0-20240110134735-61cada706fec/go.mod h1:6mOx6LfN4Xbb4fyHO6syugCjbx88cgpbxekcx4W1mpM=
 golang.org/x/sys v0.6.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
