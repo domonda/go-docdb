@@ -1140,6 +1140,9 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 	newVersionDir = docDir.Join(newVersion.String())
 	newVersionInfoFile = docDir.Joinf("%s.json", newVersion)
 
+	if newVersionDir.Exists() {
+		return errs.Errorf("new version %s directory already exists", newVersion)
+	}
 	err = newVersionDir.MakeDir()
 	if err != nil {
 		return err

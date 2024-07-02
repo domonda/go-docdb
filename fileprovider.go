@@ -2,9 +2,10 @@ package docdb
 
 import (
 	"context"
+	"path"
 	"slices"
 
-	fs "github.com/ungerik/go-fs"
+	"github.com/ungerik/go-fs"
 )
 
 // FileProvider is an interface for read access to named files
@@ -12,6 +13,17 @@ type FileProvider interface {
 	HasFile(filename string) (bool, error)
 	ListFiles(ctx context.Context) (filenames []string, err error)
 	ReadFile(ctx context.Context, filename string) ([]byte, error)
+}
+
+// TempFileCopy reads a file from a FileProvider and writes it to a temporary file
+// with a random basename and the same extension as the original filename.
+func TempFileCopy(ctx context.Context, provider FileProvider, filename string) (fs.File, error) {
+	data, err := provider.ReadFile(ctx, filename)
+	if err != nil {
+		return fs.InvalidFile, err
+	}
+	f := fs.TempFile(path.Ext(filename))
+	return f, f.WriteAll(data)
 }
 
 ///////////////////////////////////////////////////////////////////////////////
