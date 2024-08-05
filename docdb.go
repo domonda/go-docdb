@@ -304,6 +304,10 @@ func CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason 
 	return conn.CreateDocument(ctx, companyID, docID, userID, reason, files)
 }
 
+// AddDocumentVersion adds a new version to a document
+// using the files returned by createVersion.
+// Returns a wrapped ErrNoChanges if the files returned by
+// createVersion are the same as the latest version.
 func AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) (err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, userID, reason)
 
