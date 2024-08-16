@@ -101,6 +101,9 @@ type Conn interface {
 
 	AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error
 
+	// RestoreDocument
+	RestoreDocument(ctx context.Context, doc *Document, merge bool) error
+
 	// InsertDocumentVersion inserts a new version for an existing document.
 	// Returns wrapped ErrDocumentNotFound, ErrDocumentVersionAlreadyExists
 	// in case of such error conditions.
@@ -154,9 +157,9 @@ type Conn interface {
 	// CreateDocumentVersion(ctx context.Context, companyID, docID, userID uu.ID, reason string, baseVersion VersionTime, fileChanges map[string][]byte, onCreate OnCreateVersionFunc) (*VersionInfo, error)
 }
 
-type DebugFileAccessConn interface {
-	Conn
+// type DebugFileAccessConn interface {
+// 	Conn
 
-	DebugGetDocumentDir(docID uu.ID) fs.File
-	DebugGetDocumentVersionFile(docID uu.ID, version VersionTime, filename string) (fs.File, error)
-}
+// 	DebugGetDocumentDir(docID uu.ID) fs.File
+// 	DebugGetDocumentVersionFile(docID uu.ID, version VersionTime, filename string) (fs.File, error)
+// }

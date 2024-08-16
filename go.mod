@@ -5,7 +5,7 @@ go 1.22
 require (
 	github.com/domonda/go-errs v0.0.0-20240702051036-0e696c849b5f
 	github.com/domonda/go-pretty v0.0.0-20240110134850-17385799142f
-	github.com/domonda/go-types v0.0.0-20240729065820-81e069a19467
+	github.com/domonda/go-types v0.0.0-20240807125919-3d418e4a028b
 	github.com/domonda/golog v0.0.0-20240805081224-f870d6f12732
 	github.com/stretchr/testify v1.9.0
 	github.com/ungerik/go-fs v0.0.0-20240702143946-3ecb6733945d
@@ -23,6 +23,6 @@ require (
 	github.com/muesli/termenv v0.15.2 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
-	golang.org/x/sys v0.23.0 // indirect
+	golang.org/x/sys v0.24.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

@@ -222,3 +222,7 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 		panic("TODO")
 	})
 }
+
+func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.Document, merge bool) error {
+	panic("TODO")
+}

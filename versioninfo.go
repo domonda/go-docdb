@@ -10,12 +10,6 @@ import (
 	"github.com/domonda/go-types/uu"
 )
 
-type FileInfo struct {
-	Name string
-	Size int64
-	Hash string
-}
-
 type VersionInfo struct {
 	CompanyID    uu.ID
 	DocID        uu.ID
@@ -66,10 +60,10 @@ func ReadVersionInfoJSON(file fs.File, writeFixedVersion bool) (versionInfo *Ver
 }
 
 // NewVersionInfo uses the files from versionDir.
-// If prevVersionDir is "", then all files are added to the AddedFiles slice,
+// When prevVersionDir is "" then all files are added to the AddedFiles slice,
 // else the according diff slices RemovedFiles and ModidfiedFiles will also be filled.
-// Files inversionDir and prevVersionDir with names from ignoreFiles will be ignored.
-// The file slices are sorted.
+// Files in versionDir and prevVersionDir with names from ignoreFiles will be ignored.
+// The versionInfo file slices will be sorted.
 func NewVersionInfo(companyID, docID uu.ID, version, prevVersion VersionTime, commitUserID uu.ID, commitReason string, versionDir, prevVersionDir fs.File, ignoreFiles ...string) (versionInfo *VersionInfo, err error) {
 	versionInfo = &VersionInfo{
 		CompanyID:    companyID,
@@ -81,22 +75,15 @@ func NewVersionInfo(companyID, docID uu.ID, version, prevVersion VersionTime, co
 		Files:        make(map[string]FileInfo),
 	}
 
-	err = versionDir.ListDirInfo(func(info *fs.FileInfo) error {
+	err = versionDir.ListDir(func(file fs.File) error {
+		filename := file.Name()
 		for _, ignoreFile := range ignoreFiles {
-			if info.Name == ignoreFile {
+			if filename == ignoreFile {
 				return nil
 			}
 		}
-		hash, err := info.File.ContentHash()
-		if err != nil {
-			return err
-		}
-		versionInfo.Files[info.Name] = FileInfo{
-			Name: info.Name,
-			Size: info.Size,
-			Hash: hash,
-		}
-		return nil
+		versionInfo.Files[filename], err = ReadFileInfo(context.Background(), file)
+		return err
 	})
 	if err != nil {
 		return nil, err
@@ -108,22 +95,15 @@ func NewVersionInfo(companyID, docID uu.ID, version, prevVersion VersionTime, co
 		}
 	} else {
 		prevVersionFiles := make(map[string]FileInfo)
-		err = prevVersionDir.ListDirInfo(func(info *fs.FileInfo) error {
+		err = prevVersionDir.ListDir(func(file fs.File) error {
+			filename := file.Name()
 			for _, ignoreFile := range ignoreFiles {
-				if info.Name == ignoreFile {
+				if filename == ignoreFile {
 					return nil
 				}
 			}
-			hash, err := info.File.ContentHash()
-			if err != nil {
-				return err
-			}
-			prevVersionFiles[info.Name] = FileInfo{
-				Name: info.Name,
-				Size: info.Size,
-				Hash: hash,
-			}
-			return nil
+			prevVersionFiles[filename], err = ReadFileInfo(context.Background(), file)
+			return err
 		})
 		if err != nil {
 			return nil, err
