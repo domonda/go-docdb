@@ -117,6 +117,6 @@ func (c errConn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, re
 	return c.err
 }
 
-func (c errConn) RestoreDocument(ctx context.Context, doc *Document, merge bool) error {
+func (c errConn) RestoreDocument(ctx context.Context, doc *HashedDocument, merge bool) error {
 	return c.err
 }

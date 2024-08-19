@@ -136,6 +136,12 @@ func (v VersionTime) Equal(other VersionTime) bool {
 	return v.Time.Truncate(time.Millisecond).Equal(other.Time.Truncate(time.Millisecond))
 }
 
+// Compare compares the time instant v.Time with r.Time. If v is before r, it returns -1;
+// if v is after r, it returns +1; if they're the same, it returns 0.
+func (v VersionTime) Compare(r VersionTime) int {
+	return v.Time.Truncate(time.Millisecond).Compare(r.Time.Truncate(time.Millisecond))
+}
+
 func (v VersionTime) IsNull() bool {
 	return v.Time.IsZero()
 }

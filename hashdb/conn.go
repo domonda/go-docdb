@@ -223,6 +223,6 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 	})
 }
 
-func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.Document, merge bool) error {
+func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, merge bool) error {
 	panic("TODO")
 }

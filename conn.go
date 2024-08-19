@@ -102,7 +102,7 @@ type Conn interface {
 	AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error
 
 	// RestoreDocument
-	RestoreDocument(ctx context.Context, doc *Document, merge bool) error
+	RestoreDocument(ctx context.Context, doc *HashedDocument, merge bool) error
 
 	// InsertDocumentVersion inserts a new version for an existing document.
 	// Returns wrapped ErrDocumentNotFound, ErrDocumentVersionAlreadyExists

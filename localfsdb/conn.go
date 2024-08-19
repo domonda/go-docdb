@@ -1231,7 +1231,7 @@ func safelyCallOnNewVersionFunc(ctx context.Context, versionInfo *docdb.VersionI
 	return onNewVersion(ctx, versionInfo)
 }
 
-func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.Document, merge bool) (err error) {
+func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, merge bool) (err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, doc, merge)
 
 	panic("TODO")

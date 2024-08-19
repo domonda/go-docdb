@@ -1,6 +1,6 @@
 module github.com/domonda/go-docdb
 
-go 1.22
+go 1.23
 
 require (
 	github.com/domonda/go-errs v0.0.0-20240702051036-0e696c849b5f

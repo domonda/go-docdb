@@ -1,17 +1,17 @@
 module github.com/domonda/go-docdb/hashdb
 
-go 1.22
+go 1.23
 
 replace github.com/domonda/go-docdb => ..
 
-require github.com/domonda/go-docdb v0.0.0-20240702145028-adb148c04ae9 // replaced
+require github.com/domonda/go-docdb v0.0.0-00010101000000-000000000000 // replaced
 
 require (
 	github.com/aws/aws-sdk-go-v2/config v1.27.27
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.58.3
 	github.com/domonda/go-errs v0.0.0-20240702051036-0e696c849b5f
 	github.com/domonda/go-sqldb v0.0.0-20240421041325-ab31a86575fd
-	github.com/domonda/go-types v0.0.0-20240729065820-81e069a19467
+	github.com/domonda/go-types v0.0.0-20240807125919-3d418e4a028b
 	github.com/domonda/golog v0.0.0-20240805081224-f870d6f12732
 	github.com/ungerik/go-fs v0.0.0-20240702143946-3ecb6733945d
 )
@@ -33,7 +33,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.22.4 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.26.4 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.30.3 // indirect
-	github.com/aws/smithy-go v1.20.3 // indirect
+	github.com/aws/smithy-go v1.20.4 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/domonda/go-encjson v0.0.0-20210830085227-1beee57a72d8 // indirect
 	github.com/domonda/go-pretty v0.0.0-20240110134850-17385799142f // indirect
@@ -43,5 +43,5 @@ require (
 	github.com/mattn/go-runewidth v0.0.16 // indirect
 	github.com/muesli/termenv v0.15.2 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
-	golang.org/x/sys v0.23.0 // indirect
+	golang.org/x/sys v0.24.0 // indirect
 )
