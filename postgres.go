@@ -223,8 +223,7 @@ func PostgresDeleteDocumentVersionByID(ctx context.Context, versionID uu.ID) (er
 		return err
 	}
 
-	log.Info("Deleted document version").
-		Ctx(ctx).
+	log.InfoCtx(ctx, "Deleted document version").
 		UUID("versionID", versionID).
 		Log()
 	return nil

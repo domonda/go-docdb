@@ -572,8 +572,7 @@ func (c *Conn) CheckOutNewDocument(ctx context.Context, docID, companyID, userID
 		return nil, errs.Errorf("CheckOutNewDocument: document %s already exists", docID)
 	}
 
-	log.Info("CheckOutNewDocument").
-		Ctx(ctx).
+	log.InfoCtx(ctx, "CheckOutNewDocument").
 		UUID("docID", docID).
 		UUID("companyID", companyID).
 		UUID("userID", userID).
@@ -587,18 +586,18 @@ func (c *Conn) CheckOutNewDocument(ctx context.Context, docID, companyID, userID
 			if docDir.Exists() {
 				e := uuiddir.RemoveDir(c.documentsDir, docDir)
 				if e != nil {
-					log.ErrorCtx(ctx, "delete docDir").Ctx(ctx).Err(e).Log()
+					log.ErrorCtx(ctx, "delete docDir").Err(e).Log()
 				}
 			}
 			if checkOutDir.Exists() {
 				e := checkOutDir.RemoveRecursive()
 				if e != nil {
-					log.ErrorCtx(ctx, "delete checkOutDir").Ctx(ctx).Err(e).Log()
+					log.ErrorCtx(ctx, "delete checkOutDir").Err(e).Log()
 				}
 			}
 			e := c.removeCompanyDocumentDirIfExists(companyID, docID)
 			if e != nil {
-				log.ErrorCtx(ctx, "removeCompanyDocumentDirIfExists").Ctx(ctx).Err(e).Log()
+				log.ErrorCtx(ctx, "removeCompanyDocumentDirIfExists").Err(e).Log()
 			}
 		}
 	}()
@@ -640,8 +639,7 @@ func (c *Conn) CheckedOutDocuments(ctx context.Context) (stati []*docdb.CheckOut
 			return errs.Errorf("non UUID filename in workspace: %w", err)
 		}
 		if !file.Exists {
-			log.Debug("CheckedOutDocuments: document is not checked out anymore, checkout dir gone").
-				Ctx(ctx).
+			log.DebugCtx(ctx, "CheckedOutDocuments: document is not checked out anymore, checkout dir gone").
 				UUID("docID", docID).
 				Log()
 			return nil
@@ -654,8 +652,7 @@ func (c *Conn) CheckedOutDocuments(ctx context.Context) (stati []*docdb.CheckOut
 			return err
 		}
 		if !status.Valid() {
-			log.Debug("CheckedOutDocuments: document is not checked out anymore, missing checkout-status.json").
-				Ctx(ctx).
+			log.DebugCtx(ctx, "CheckedOutDocuments: document is not checked out anymore, missing checkout-status.json").
 				UUID("docID", docID).
 				Log()
 			return nil
@@ -893,8 +890,7 @@ func (c *Conn) DeleteDocument(ctx context.Context, docID uu.ID) (err error) {
 	docWriteMtx.Lock(docID)
 	defer docWriteMtx.Unlock(docID)
 
-	log.Info("DeleteDocument").
-		Ctx(ctx).
+	log.InfoCtx(ctx, "DeleteDocument").
 		UUID("docID", docID).
 		Log()
 
@@ -930,8 +926,7 @@ func (c *Conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version d
 	docWriteMtx.Lock(docID)
 	defer docWriteMtx.Unlock(docID)
 
-	log.Info("DeleteDocumentVersion").
-		Ctx(ctx).
+	log.InfoCtx(ctx, "DeleteDocumentVersion").
 		UUID("docID", docID).
 		Stringer("version", version).
 		Log()
