@@ -148,7 +148,7 @@ func PostgresInsertDocumentVersionIfMissing(ctx context.Context, versionInfo *Ve
 			return nil
 		}
 
-		versionID = uu.IDv4()
+		versionID = uu.NewID(ctx)
 		return PostgresInsertDocumentVersionWithFiles(ctx, versionID, versionInfo)
 	})
 	if err != nil {
