@@ -6,7 +6,7 @@ require (
 	github.com/domonda/go-errs v0.0.0-20240702051036-0e696c849b5f
 	github.com/domonda/go-pretty v0.0.0-20240110134850-17385799142f
 	github.com/domonda/go-types v0.0.0-20240925100910-0aa0f7734ec7
-	github.com/domonda/golog v0.0.0-20240919085057-95c38d7774d9
+	github.com/domonda/golog v0.0.0-20240925101313-c38b0dfc75bd
 	github.com/stretchr/testify v1.9.0
 	github.com/ungerik/go-fs v0.0.0-20240919125757-1b6f933a416d
 )
@@ -15,7 +15,7 @@ require (
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/domonda/go-encjson v0.0.0-20210830085227-1beee57a72d8 // indirect
-	github.com/domonda/go-sqldb v0.0.0-20240919084704-e8a889dca25a
+	github.com/domonda/go-sqldb v0.0.0-20240925101629-2983a059631a
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
@@ -23,7 +23,6 @@ require (
 	github.com/muesli/termenv v0.15.2 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
-	github.com/rogpeppe/go-internal v1.10.0 // indirect
 	golang.org/x/sys v0.25.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

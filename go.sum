@@ -8,12 +8,12 @@ github.com/domonda/go-errs v0.0.0-20240702051036-0e696c849b5f h1:9CZgqCVP/7eixUj
 github.com/domonda/go-errs v0.0.0-20240702051036-0e696c849b5f/go.mod h1:qLWt1z3aIg12+Dbxu9bMydFOHEi92vWE7vAHcHLd8n8=
 github.com/domonda/go-pretty v0.0.0-20240110134850-17385799142f h1:5eA74m451PqlqCXyJzWXp95Quj4PZ6Lm/ndKBuiNhe4=
 github.com/domonda/go-pretty v0.0.0-20240110134850-17385799142f/go.mod h1:3QkM8UJdyJMeKZiIo7hYzSkQBpRS3k0gOHw4ysyEIB4=
-github.com/domonda/go-sqldb v0.0.0-20240919084704-e8a889dca25a h1:jLWcNeTil5iFavVdTiv5Rch/6Yl52G4NTizoVTdiUrA=
-github.com/domonda/go-sqldb v0.0.0-20240919084704-e8a889dca25a/go.mod h1:QVxM7OwpAG4K/YA1w7AUMyZ/F0v7ltfy1qoAEhQwcM4=
+github.com/domonda/go-sqldb v0.0.0-20240925101629-2983a059631a h1:+XonxPZy2g56IVGj43Z0+gsu6TJDu2PLCKJDj0xW3WQ=
+github.com/domonda/go-sqldb v0.0.0-20240925101629-2983a059631a/go.mod h1:L24DTZfcZOT1tVKbPrBciBzyPiWa+2BflfYEsdXXoDs=
 github.com/domonda/go-types v0.0.0-20240925100910-0aa0f7734ec7 h1:AV5e1/SxBxezdSwZgQYc1C/20NQ7gIrkloXUReOKUaQ=
 github.com/domonda/go-types v0.0.0-20240925100910-0aa0f7734ec7/go.mod h1:QfZG5NrNWDrwcqOp3ZlNh2XaLjZI1ncNpGPAa9MIUUE=
-github.com/domonda/golog v0.0.0-20240919085057-95c38d7774d9 h1:PxMdQUORDN9eI8f2IbeMeyVJn6WpO3m+aDlTRyJvd24=
-github.com/domonda/golog v0.0.0-20240919085057-95c38d7774d9/go.mod h1:dw8iPe26+adYNZN22T4K3+MEaCsPjWeVsO3nTn9V5xU=
+github.com/domonda/golog v0.0.0-20240925101313-c38b0dfc75bd h1:yJo9aMSMI8YOTQEKrEqQShmXGNLoxyufzhQqRxDy5/M=
+github.com/domonda/golog v0.0.0-20240925101313-c38b0dfc75bd/go.mod h1:UNeTY/uuEpjiykfVqP80xmp3uPwv/g6Dv4x8QqPXLCA=
 github.com/fsnotify/fsnotify v1.7.0 h1:8JEhPFa5W2WU7YfeZzPNqzMP6Lwt7L2715Ggo0nosvA=
 github.com/fsnotify/fsnotify v1.7.0/go.mod h1:40Bi/Hjc2AVfZrqy+aj+yEI+/bRxZnMJyTJwOpGvigM=
 github.com/jinzhu/now v1.1.5 h1:/o9tlHleP7gOFmsnYNz3RGnqzefHA47wQpKrrdTIwXQ=
