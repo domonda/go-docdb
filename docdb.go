@@ -2,7 +2,6 @@ package docdb
 
 import (
 	"context"
-	"errors"
 
 	"github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/uuiddir"
@@ -326,23 +325,24 @@ func AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string,
 // else an error is reeturned when docDir already exists.
 //
 // In case of an error the already created directories and files will be removed.
-func CopyDocumentFiles(ctx context.Context, conn Conn, docID uu.ID, backupDir fs.File, overwrite bool) (docDir fs.File, err error) {
+func CopyDocumentFiles(ctx context.Context, conn Conn, docID uu.ID, backupDir fs.File, overwrite bool) (destDocDir fs.File, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, backupDir, overwrite)
 
-	docDir = uuiddir.Join(backupDir, docID)
-	if !overwrite && docDir.Exists() {
-		return "", errs.Errorf("document directory for backup already exists: %s", docDir)
+	destDocDir = uuiddir.Join(backupDir, docID)
+	if !overwrite && destDocDir.Exists() {
+		return "", errs.Errorf("document directory for backup already exists: %s", destDocDir)
 	}
-	defer func() {
-		if err != nil {
-			// Remove created files and directories in case of an error
-			err = errors.Join(uuiddir.RemoveDir(backupDir, docDir))
-		}
-	}()
+	// Better not do that because there might be existing files from before that should not get deleted:
+	// defer func() {
+	// 	if err != nil {
+	// 		// Remove created files and directories in case of an error
+	// 		err = errors.Join(err, uuiddir.RemoveDir(backupDir, docDir))
+	// 	}
+	// }()
 
 	log.InfoCtx(ctx, "Backing up document").
 		UUID("docID", docID).
-		Stringer("targetDir", docDir).
+		Stringer("destDocDir", destDocDir).
 		Bool("overwrite", overwrite).
 		Log()
 
@@ -354,9 +354,9 @@ func CopyDocumentFiles(ctx context.Context, conn Conn, docID uu.ID, backupDir fs
 		return "", NewErrDocumentHasNoCommitedVersion(docID)
 	}
 
-	if !docDir.Exists() {
-		log.Debug("Making directory").Stringer("dir", docDir).Log()
-		err = docDir.MakeAllDirs()
+	if !destDocDir.Exists() {
+		log.Debug("Making directory").Stringer("dir", destDocDir).Log()
+		err = destDocDir.MakeAllDirs()
 		if err != nil {
 			return "", err
 		}
@@ -366,7 +366,7 @@ func CopyDocumentFiles(ctx context.Context, conn Conn, docID uu.ID, backupDir fs
 	if err != nil {
 		return "", err
 	}
-	companyIDFile := docDir.Join("company.id")
+	companyIDFile := destDocDir.Join("company.id")
 	log.Debug("Writing file").Stringer("file", companyIDFile).Log()
 	err = companyIDFile.WriteAllString(companyID.String())
 	if err != nil {
@@ -378,7 +378,7 @@ func CopyDocumentFiles(ctx context.Context, conn Conn, docID uu.ID, backupDir fs
 		if err != nil {
 			return "", err
 		}
-		versionInfoFile := docDir.Join(version.String() + ".json")
+		versionInfoFile := destDocDir.Join(version.String() + ".json")
 		log.Debug("Writing file").Stringer("file", versionInfoFile).Log()
 		err = versionInfoFile.WriteJSON(ctx, versionInfo, "  ")
 		if err != nil {
@@ -389,7 +389,7 @@ func CopyDocumentFiles(ctx context.Context, conn Conn, docID uu.ID, backupDir fs
 		if err != nil {
 			return "", err
 		}
-		versionDir := docDir.Join(version.String())
+		versionDir := destDocDir.Join(version.String())
 		log.Debug("Making directory").Stringer("dir", versionDir).Log()
 		err = versionDir.MakeDir()
 		if err != nil {
@@ -413,7 +413,7 @@ func CopyDocumentFiles(ctx context.Context, conn Conn, docID uu.ID, backupDir fs
 		}
 	}
 
-	return docDir, nil
+	return destDocDir, nil
 }
 
 // CopyAllCompanyDocumentFiles copies the files of all versions of
