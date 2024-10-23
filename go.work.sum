@@ -16,6 +16,7 @@ github.com/domonda/go-types v0.0.0-20240207085435-1043bb01b80a/go.mod h1:7UyX7Xq
 github.com/domonda/go-types v0.0.0-20240309180027-0196423b3d5b/go.mod h1:iLpZ3myjpxZgM1Q8Z+Jg8WDCzHjuVj5U3WZyh+2QBac=
 github.com/domonda/go-types v0.0.0-20240822142828-3b45a403e1e2/go.mod h1:Voo8dh8EeexiIXpvvmFM3WPyXtiukUjtwLpgOr9rKNM=
 github.com/domonda/go-types v0.0.0-20240919084910-749fbba77700/go.mod h1:QfZG5NrNWDrwcqOp3ZlNh2XaLjZI1ncNpGPAa9MIUUE=
+github.com/domonda/go-types v0.0.0-20240925100910-0aa0f7734ec7/go.mod h1:QfZG5NrNWDrwcqOp3ZlNh2XaLjZI1ncNpGPAa9MIUUE=
 github.com/fatih/color v1.14.0/go.mod h1:Ywr2WOhTEN4nsWMWU8I8GWIG5z8rhJEa0ukvJDOfSPY=
 github.com/fatih/color v1.14.1 h1:qfhVLaG5s+nCROl1zJsZRxFeYrHLqWroPOQ8BWiNb4w=
 github.com/fatih/color v1.14.1/go.mod h1:2oHN61fhTpgcxD3TSWCgKDiH1+x4OiDVVGH8WlgGZGg=
@@ -142,6 +143,7 @@ golang.org/x/sys v0.13.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
 golang.org/x/sys v0.15.0/go.mod h1:/VUhepiaJMQUp4+oa/7Zr1D23ma6VTLIYjOOTFZPUcA=
 golang.org/x/sys v0.16.0/go.mod h1:/VUhepiaJMQUp4+oa/7Zr1D23ma6VTLIYjOOTFZPUcA=
 golang.org/x/sys v0.22.0/go.mod h1:/VUhepiaJMQUp4+oa/7Zr1D23ma6VTLIYjOOTFZPUcA=
+golang.org/x/sys v0.25.0/go.mod h1:/VUhepiaJMQUp4+oa/7Zr1D23ma6VTLIYjOOTFZPUcA=
 golang.org/x/term v0.0.0-20201126162022-7de9c90e9dd1/go.mod h1:bj7SfCRtBDWHUb9snDiAeCFNEtKQo2Wmx5Cou7ajbmo=
 golang.org/x/term v0.4.0/go.mod h1:9P2UbLfCdcvo3p/nzKvsmas4TnlujnuoV9hGgYzW1lQ=
 golang.org/x/term v0.10.0/go.mod h1:lpqdcUyK/oCiQxvxVrppt5ggO2KCZ5QblwqPnfZ6d5o=
