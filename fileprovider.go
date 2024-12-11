@@ -143,6 +143,28 @@ func (p removeFileProvider) ReadFile(ctx context.Context, filename string) ([]by
 	return p.base.ReadFile(ctx, filename)
 }
 
+///////////////////////////////////////////////////////////////////////////////
+
+type MockFileProvider struct {
+	HasFileMock   func(filename string) (bool, error)
+	ListFilesMock func(ctx context.Context) (filenames []string, err error)
+	ReadFileMock  func(ctx context.Context, filename string) ([]byte, error)
+}
+
+func (fp *MockFileProvider) HasFile(filename string) (bool, error) {
+	return fp.HasFileMock(filename)
+}
+
+func (fp *MockFileProvider) ListFiles(ctx context.Context) (filenames []string, err error) {
+	return fp.ListFilesMock(ctx)
+}
+
+func (fp *MockFileProvider) ReadFile(ctx context.Context, filename string) ([]byte, error) {
+	return fp.ReadFileMock(ctx, filename)
+}
+
+var _ FileProvider = &MockFileProvider{}
+
 // func MemFileProvider(file fs.MemFile) FileProvider {
 // 	return memFileProvider{file}
 // }
