@@ -1145,7 +1145,7 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 
 	// Copy previous version files that are not in writeFiles or deleteFiles
 	for filename := range prevVersionInfo.Files {
-		if fs.FileReaderNameIndex(writeFiles, filename) >= 0 || slices.Contains(deleteFiles, filename) {
+		if fs.NameIndex(writeFiles, filename) >= 0 || slices.Contains(deleteFiles, filename) {
 			continue // Don't copy writeFiles or deleteFiles
 		}
 		err = fs.CopyFile(ctx, prevVersionDir.Join(filename), newVersionDir)
