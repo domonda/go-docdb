@@ -15,6 +15,15 @@ type FileProvider interface {
 	ReadFile(ctx context.Context, filename string) ([]byte, error)
 }
 
+// ReadMemFile reads a file from a FileProvider and returns it as an fs.MemFile.
+func ReadMemFile(ctx context.Context, provider FileProvider, filename string) (fs.MemFile, error) {
+	data, err := provider.ReadFile(ctx, filename)
+	if err != nil {
+		return fs.MemFile{}, err
+	}
+	return fs.NewMemFile(filename, data), nil
+}
+
 // TempFileCopy reads a file from a FileProvider and writes it to a temporary file
 // with a random basename and the same extension as the original filename.
 func TempFileCopy(ctx context.Context, provider FileProvider, filename string) (fs.File, error) {
