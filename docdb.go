@@ -204,12 +204,20 @@ func DocumentFileExists(ctx context.Context, docID uu.ID, filename string) (exis
 func DocumentCheckOutStatus(ctx context.Context, docID uu.ID) (status *CheckOutStatus, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
+	conn, ok := conn.(DeprecatedConn)
+	if !ok {
+		return nil, errs.Errorf("conn does not implement DeprecatedConn")
+	}
 	return conn.DocumentCheckOutStatus(ctx, docID)
 }
 
 // CheckedOutDocumentDir returns a fs.File for the directory
 // where a document would be checked out.
 func CheckedOutDocumentDir(docID uu.ID) fs.File {
+	conn, ok := conn.(DeprecatedConn)
+	if !ok {
+		return ""
+	}
 	return conn.CheckedOutDocumentDir(docID)
 }
 
@@ -218,6 +226,10 @@ func CheckedOutDocumentDir(docID uu.ID) fs.File {
 func CheckedOutDocumentFileProvider(docID uu.ID) (p FileProvider, err error) {
 	defer errs.WrapWithFuncParams(&err, docID)
 
+	conn, ok := conn.(DeprecatedConn)
+	if !ok {
+		return nil, errs.Errorf("conn does not implement DeprecatedConn")
+	}
 	checkOutDir := conn.CheckedOutDocumentDir(docID)
 	if !checkOutDir.Exists() {
 		return nil, NewErrDocumentNotCheckedOut(docID)
@@ -233,6 +245,10 @@ func CheckedOutDocumentFileProvider(docID uu.ID) (p FileProvider, err error) {
 func CancelCheckOutDocument(ctx context.Context, docID uu.ID) (wasCheckedOut bool, lastVersion VersionTime, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
+	conn, ok := conn.(DeprecatedConn)
+	if !ok {
+		return false, VersionTime{}, errs.Errorf("conn does not implement DeprecatedConn")
+	}
 	return conn.CancelCheckOutDocument(ctx, docID)
 }
 
@@ -241,6 +257,10 @@ func CancelCheckOutDocument(ctx context.Context, docID uu.ID) (wasCheckedOut boo
 func CheckInDocument(ctx context.Context, docID uu.ID) (v *VersionInfo, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
+	conn, ok := conn.(DeprecatedConn)
+	if !ok {
+		return nil, errs.Errorf("conn does not implement DeprecatedConn")
+	}
 	return conn.CheckInDocument(ctx, docID)
 }
 
@@ -248,6 +268,10 @@ func CheckInDocument(ctx context.Context, docID uu.ID) (v *VersionInfo, err erro
 func CheckedOutDocuments(ctx context.Context) (stati []*CheckOutStatus, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx)
 
+	conn, ok := conn.(DeprecatedConn)
+	if !ok {
+		return nil, errs.Errorf("conn does not implement DeprecatedConn")
+	}
 	return conn.CheckedOutDocuments(ctx)
 }
 
@@ -255,6 +279,10 @@ func CheckedOutDocuments(ctx context.Context) (stati []*CheckOutStatus, err erro
 func CheckOutNewDocument(ctx context.Context, docID, companyID, userID uu.ID, reason string) (status *CheckOutStatus, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, companyID, userID, reason)
 
+	conn, ok := conn.(DeprecatedConn)
+	if !ok {
+		return nil, errs.Errorf("conn does not implement DeprecatedConn")
+	}
 	return conn.CheckOutNewDocument(ctx, docID, companyID, userID, reason)
 }
 
@@ -263,6 +291,10 @@ func CheckOutNewDocument(ctx context.Context, docID, companyID, userID uu.ID, re
 func CheckOutDocument(ctx context.Context, docID, userID uu.ID, reason string) (status *CheckOutStatus, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, userID, reason)
 
+	conn, ok := conn.(DeprecatedConn)
+	if !ok {
+		return nil, errs.Errorf("conn does not implement DeprecatedConn")
+	}
 	return conn.CheckOutDocument(ctx, docID, userID, reason)
 }
 

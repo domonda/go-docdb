@@ -64,39 +64,6 @@ type Conn interface {
 	// just to clean up mistakes or sync database states.
 	DeleteDocumentVersion(ctx context.Context, docID uu.ID, version VersionTime) (leftVersions []VersionTime, err error)
 
-	// TODO remove checkout methods
-
-	// DocumentCheckOutStatus returns the CheckOutStatus of a document.
-	// If the document is not checked out, then a nil CheckOutStatus will be returned.
-	// The methods Valid() and String() can be called on a nil CheckOutStatus.
-	// ErrDocumentNotFound is returned if the document does not exist.
-	DocumentCheckOutStatus(ctx context.Context, docID uu.ID) (*CheckOutStatus, error)
-
-	// CheckedOutDocuments returns the CheckOutStatus of all checked out documents.
-	CheckedOutDocuments(ctx context.Context) ([]*CheckOutStatus, error)
-
-	// CheckOutNewDocument creates a new document for a company in checked out state.
-	CheckOutNewDocument(ctx context.Context, docID, companyID, userID uu.ID, reason string) (status *CheckOutStatus, err error)
-
-	// CheckOutDocument checks out a document for a user with a stated reason.
-	// Returns ErrDocumentCheckedOut if the document is already checked out.
-	CheckOutDocument(ctx context.Context, docID, userID uu.ID, reason string) (*CheckOutStatus, error)
-
-	// CancelCheckOutDocument cancels a potential checkout.
-	// No error is returned if the document was not checked out.
-	// If the checkout was created by CheckOutNewDocument,
-	// then the new document is deleted without leaving any history
-	// and the returned lastVersion.IsNull() is true.
-	CancelCheckOutDocument(ctx context.Context, docID uu.ID) (wasCheckedOut bool, lastVersion VersionTime, err error)
-
-	// CheckInDocument checks in a checked out document
-	// and returns the VersionInfo for the newly created version.
-	CheckInDocument(ctx context.Context, docID uu.ID) (*VersionInfo, error)
-
-	// CheckedOutDocumentDir returns a fs.File for the directory
-	// where a document would be checked out.
-	CheckedOutDocumentDir(docID uu.ID) fs.File
-
 	CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, files []fs.FileReader) (*VersionInfo, error)
 
 	AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error
@@ -155,6 +122,44 @@ type Conn interface {
 	// so different companies can not have documents with
 	// the same ID.
 	// CreateDocumentVersion(ctx context.Context, companyID, docID, userID uu.ID, reason string, baseVersion VersionTime, fileChanges map[string][]byte, onCreate OnCreateVersionFunc) (*VersionInfo, error)
+}
+
+// DeprecatedConn has check-out, check-in and checkout directory methods.
+// It is deprecated and will be removed in the future.
+// Use the Conn interface instead.
+type DeprecatedConn interface {
+	Conn
+
+	// DocumentCheckOutStatus returns the CheckOutStatus of a document.
+	// If the document is not checked out, then a nil CheckOutStatus will be returned.
+	// The methods Valid() and String() can be called on a nil CheckOutStatus.
+	// ErrDocumentNotFound is returned if the document does not exist.
+	DocumentCheckOutStatus(ctx context.Context, docID uu.ID) (*CheckOutStatus, error)
+
+	// CheckedOutDocuments returns the CheckOutStatus of all checked out documents.
+	CheckedOutDocuments(ctx context.Context) ([]*CheckOutStatus, error)
+
+	// CheckOutNewDocument creates a new document for a company in checked out state.
+	CheckOutNewDocument(ctx context.Context, docID, companyID, userID uu.ID, reason string) (status *CheckOutStatus, err error)
+
+	// CheckOutDocument checks out a document for a user with a stated reason.
+	// Returns ErrDocumentCheckedOut if the document is already checked out.
+	CheckOutDocument(ctx context.Context, docID, userID uu.ID, reason string) (*CheckOutStatus, error)
+
+	// CancelCheckOutDocument cancels a potential checkout.
+	// No error is returned if the document was not checked out.
+	// If the checkout was created by CheckOutNewDocument,
+	// then the new document is deleted without leaving any history
+	// and the returned lastVersion.IsNull() is true.
+	CancelCheckOutDocument(ctx context.Context, docID uu.ID) (wasCheckedOut bool, lastVersion VersionTime, err error)
+
+	// CheckInDocument checks in a checked out document
+	// and returns the VersionInfo for the newly created version.
+	CheckInDocument(ctx context.Context, docID uu.ID) (*VersionInfo, error)
+
+	// CheckedOutDocumentDir returns a fs.File for the directory
+	// where a document would be checked out.
+	CheckedOutDocumentDir(docID uu.ID) fs.File
 }
 
 // type DebugFileAccessConn interface {

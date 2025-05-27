@@ -18,8 +18,8 @@ import (
 	"github.com/domonda/go-types/uu"
 )
 
-// Compiler check if *Conn implements docdb.Conn
-var _ docdb.Conn = (*Conn)(nil)
+// Compiler check if *Conn implements docdb.DeprecatedConn
+var _ docdb.DeprecatedConn = new(Conn)
 
 type Conn struct {
 	documentsDir fs.File
