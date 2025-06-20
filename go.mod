@@ -3,12 +3,12 @@ module github.com/domonda/go-docdb
 go 1.24
 
 require (
-	github.com/domonda/go-errs v0.0.0-20250509130707-0373cd8156d7
-	github.com/domonda/go-pretty v0.0.0-20240110134850-17385799142f
-	github.com/domonda/go-types v0.0.0-20250526125918-165038381c4d
+	github.com/domonda/go-errs v0.0.0-20250603150208-71d6de0c48ea
+	github.com/domonda/go-pretty v0.0.0-20250602142956-1b467adc6387
+	github.com/domonda/go-types v0.0.0-20250610070846-52067ab2d5ab
 	github.com/domonda/golog v0.0.0-20250620142312-a23446a321e4
 	github.com/stretchr/testify v1.10.0
-	github.com/ungerik/go-fs v0.0.0-20250527162931-1691110c1708
+	github.com/ungerik/go-fs v0.0.0-20250610091738-d3e54d2e9850
 )
 
 require (
