@@ -6,9 +6,9 @@ require (
 	github.com/domonda/go-errs v0.0.0-20250509130707-0373cd8156d7
 	github.com/domonda/go-pretty v0.0.0-20240110134850-17385799142f
 	github.com/domonda/go-types v0.0.0-20250526125918-165038381c4d
-	github.com/domonda/golog v0.0.0-20250526122313-57b677bb8c8f
+	github.com/domonda/golog v0.0.0-20250620142312-a23446a321e4
 	github.com/stretchr/testify v1.10.0
-	github.com/ungerik/go-fs v0.0.0-20250410112719-c5187364824d
+	github.com/ungerik/go-fs v0.0.0-20250527162931-1691110c1708
 )
 
 require (

@@ -101,6 +101,7 @@ github.com/ungerik/go-fs v0.0.0-20240702073052-d3679a79ea2e/go.mod h1:+8Ezjyw6fC
 github.com/ungerik/go-fs v0.0.0-20240919065241-437d7c2c9f63/go.mod h1:nMIa35zyLzk4K3tTLL+AAsOZ9Q+0lgX/lxYubEwCZSY=
 github.com/ungerik/go-fs v0.0.0-20241129165044-4140e8cfdab4/go.mod h1:pKXmcBwT1D8y0dEHrOFDYGtYp4NNn1g9nDd/9vLQ6Dg=
 github.com/ungerik/go-fs v0.0.0-20241213130555-c93eabeaac28/go.mod h1:pKXmcBwT1D8y0dEHrOFDYGtYp4NNn1g9nDd/9vLQ6Dg=
+github.com/ungerik/go-fs v0.0.0-20250527162931-1691110c1708 h1:HBOat14ZVyw9RUouz8+ewH938CVp+TrS4LBs+I4mNJ8=
 github.com/ungerik/go-reflection v0.0.0-20230810134712-a63435f6bc7e/go.mod h1:1Q14POg/xa/P6/hWKfnUexqUhW1X6jgw+6gG7lOne1E=
 github.com/yuin/goldmark v1.4.13/go.mod h1:6yULJ656Px+3vBD8DxQVa3kxgyrAnzto9xy5taEt/CY=
 golang.org/x/crypto v0.1.0/go.mod h1:RecgLatLF4+eUMCP1PoPZQb+cVrJcOPbHkTkbkB9sbw=

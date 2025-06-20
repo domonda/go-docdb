@@ -18,6 +18,10 @@ github.com/domonda/go-types v0.0.0-20250526125918-165038381c4d h1:9xJS4+qb4a3ZlD
 github.com/domonda/go-types v0.0.0-20250526125918-165038381c4d/go.mod h1:JUvMIVKkftP8sJ41yWJ6p3ZNSc5nuQxVpWyPEpDML0s=
 github.com/domonda/golog v0.0.0-20250526122313-57b677bb8c8f h1:Y3S+8QXhJYV8c+nmftRnaXtmD0oxpfg+PR4gbBvI5Zo=
 github.com/domonda/golog v0.0.0-20250526122313-57b677bb8c8f/go.mod h1:zcJxFAZmjb/rlAYKpmBdjuQyCqhBVJtfrOSyRhmBia4=
+github.com/domonda/golog v0.0.0-20250620101435-5a802bf73430 h1:IZ+tyvWEjz2WsvU95gzCekJKt0vUrCeEJr5j05UKJ04=
+github.com/domonda/golog v0.0.0-20250620101435-5a802bf73430/go.mod h1:rghqIdQdh8WELJnbZlRabDg/P9ZPyZ10Z59SqmE0kjc=
+github.com/domonda/golog v0.0.0-20250620142312-a23446a321e4 h1:xvEXsSzZC60MnNLv0t/EmekgutORS7qPjOzKtrogGpU=
+github.com/domonda/golog v0.0.0-20250620142312-a23446a321e4/go.mod h1:rghqIdQdh8WELJnbZlRabDg/P9ZPyZ10Z59SqmE0kjc=
 github.com/fsnotify/fsnotify v1.9.0 h1:2Ml+OJNzbYCTzsxtv8vKSFD9PbJjmhYF14k/jKC7S9k=
 github.com/fsnotify/fsnotify v1.9.0/go.mod h1:8jBTzvmWwFyi3Pb8djgCCO5IBqzKJ/Jwo8TRcHyHii0=
 github.com/invopop/jsonschema v0.13.0 h1:KvpoAJWEjR3uD9Kbm2HWJmqsEaHt8lBUpd0qHcIi21E=
@@ -48,6 +52,7 @@ github.com/stretchr/testify v1.10.0 h1:Xv5erBjTwe/5IxqUQTdXv5kgmIvbHo3QQyRwhJsOf
 github.com/stretchr/testify v1.10.0/go.mod h1:r2ic/lqez/lEtzL7wO/rwa5dbSLXVDPFyf8C91i36aY=
 github.com/ungerik/go-fs v0.0.0-20250410112719-c5187364824d h1:BM8RC0XjXgRcCQOx+gVI6gCuBdaiEVoqJMphp2gubtA=
 github.com/ungerik/go-fs v0.0.0-20250410112719-c5187364824d/go.mod h1:l1gaYFOhIK4gUWy7xuaskrq/zP+lK6xGyImqAyt4mSw=
+github.com/ungerik/go-fs v0.0.0-20250527162931-1691110c1708/go.mod h1:4QQilZ+gupNC1QdygHgHM8tKAj6/l1ohr8b1jYiPlaA=
 github.com/ungerik/go-reflection v0.0.0-20240905081803-708928fe0862 h1:rxp/NtuHYkx0HRYL/Y7xh/07ZwI/Pbk3VPkVoq3IUgQ=
 github.com/ungerik/go-reflection v0.0.0-20240905081803-708928fe0862/go.mod h1:Ic/uip1MCECqTPItawo5lRHmyaOT6vCM0UuKrczg6LY=
 github.com/wk8/go-ordered-map/v2 v2.1.8 h1:5h/BUHu93oj4gIdvHHHGsScSTMijfx5PeYkE/fJgbpc=

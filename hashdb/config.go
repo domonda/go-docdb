@@ -5,7 +5,7 @@ import (
 )
 
 var (
-	log = rootlog.NewPackageLogger("hashdb")
+	log = rootlog.NewPackageLogger()
 )
 
 type HashFunc func(data []byte) (hash string)

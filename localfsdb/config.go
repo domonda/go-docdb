@@ -6,7 +6,7 @@ import (
 )
 
 var (
-	log = rootlog.NewPackageLogger("localfsdb")
+	log = rootlog.NewPackageLogger()
 
 	docWriteMtx = uu.NewIDMutex()
 )

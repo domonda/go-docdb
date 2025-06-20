@@ -4,3 +4,5 @@ use (
 	.
 	./hashdb
 )
+
+// replace github.com/domonda/golog => ../golog

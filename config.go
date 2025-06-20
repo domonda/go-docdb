@@ -7,7 +7,7 @@ import (
 )
 
 var (
-	log = rootlog.NewPackageLogger("docdb")
+	log = rootlog.NewPackageLogger()
 
 	conn = NewConnWithError(errors.New("docdb connection not configured"))
 )
