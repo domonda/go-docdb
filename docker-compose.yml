@@ -1,0 +1,8 @@
+services:
+  localstack:
+    image: localstack/localstack:s3-latest
+    ports:
+      - "127.0.0.1:${LOCALSTACK_PORT-4566}:4566"
+    environment:
+      - DEFAULT_REGION=${AWS_DEFAULT_REGION}
+      - DEBUG=1
