@@ -2,6 +2,8 @@ package s3
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -46,8 +48,64 @@ func (c *s3Conn) DocumentExists(ctx context.Context, docID uu.ID) (exists bool, 
 	return false, err
 }
 
-// TODO
-func (c *s3Conn) EnumDocumentIDs(ctx context.Context, callback func(context.Context, uu.ID) error) error {
+func (c *s3Conn) EnumDocumentIDs(ctx context.Context, callback func(context.Context, uu.ID) error) (err error) {
+	var nextContinuationToken *string
+	response := &awss3.ListObjectsV2Output{}
+
+	fetchKeys := func() error {
+		response, err = c.client.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{
+			Bucket:            &c.bucketName,
+			ContinuationToken: nextContinuationToken,
+		})
+
+		if err != nil {
+			return err
+		}
+
+		nextContinuationToken = response.NextContinuationToken
+		return nil
+	}
+
+	runCallbacks := func() error {
+		for _, object := range response.Contents {
+			if object.Key == nil {
+				return errors.New("nil object key")
+			}
+
+			id := uu.IDFrom(*object.Key)
+			if id.IsNil() {
+				return fmt.Errorf("key `%s` is not an ID", *object.Key)
+			}
+
+			if err = callback(ctx, id); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}
+
+	runCycle := func() error {
+		if err = fetchKeys(); err != nil {
+			return err
+		}
+		if err = runCallbacks(); err != nil {
+			return err
+		}
+
+		return nil
+	}
+
+	if err = runCycle(); err != nil {
+		return err
+	}
+
+	for nextContinuationToken != nil {
+		if err = runCycle(); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 

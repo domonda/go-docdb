@@ -3,9 +3,11 @@ package s3
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
@@ -15,7 +17,7 @@ import (
 )
 
 func TestDocumentExists(t *testing.T) {
-	client := s3Client(t)
+	client := s3Client(t.Context(), t)
 	conn, err := NewConn(t.Context(), os.Getenv("BUCKET_NAME"))
 
 	if err != nil {
@@ -44,7 +46,7 @@ func TestDocumentExists(t *testing.T) {
 			compareError:   require.NoError,
 		},
 		{
-			name:           "Returns error if bucket does not exists",
+			name:           "Returns error if bucket does not exist",
 			bucketExists:   false,
 			documentExists: false,
 			compareResult:  require.False,
@@ -83,6 +85,89 @@ func TestDocumentExists(t *testing.T) {
 			scenario.compareResult(t, exists)
 		})
 	}
+}
+
+func TestEnumDocumentIDs(t *testing.T) {
+	client := s3Client(t.Context(), t)
+	conn, err := NewConn(t.Context(), os.Getenv("BUCKET_NAME"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("Iterates over fetched keys", func(t *testing.T) {
+		// given
+		timeout := time.AfterFunc(10*time.Second, func() {
+			panic("TIMEOUT")
+		})
+
+		t.Cleanup(func() { timeout.Stop() })
+
+		_, bucketName := cleanBucket(t, client)
+		// uploader := manager.NewUploader(client)
+
+		// max keys = 1000, this ensures pagination works correctly
+		numDocuments := 1001
+		for range numDocuments {
+			id := uu.IDv4()
+			_, err := client.PutObject(
+				context.Background(),
+				&awss3.PutObjectInput{
+					Bucket: &bucketName,
+					Key:    p(id.String()),
+					Body:   bytes.NewReader([]byte("asd")),
+				},
+			)
+			if err != nil {
+				panic(err)
+			}
+		}
+
+		// when
+		returnedIDs := uu.IDSlice{}
+		err = conn.EnumDocumentIDs(t.Context(), func(ctx context.Context, i uu.ID) error {
+			returnedIDs = append(returnedIDs, i)
+			return nil
+		})
+
+		// then
+		require.NoError(t, err)
+		require.Equal(t, numDocuments, len(returnedIDs))
+	})
+
+	t.Run("Returns error from callback", func(t *testing.T) {
+		// given
+		_, bucketName := cleanBucket(t, client)
+		_, err := client.PutObject(
+			t.Context(),
+			&awss3.PutObjectInput{
+				Bucket: &bucketName,
+				Key:    p(uu.IDFrom("637c3457-f243-4ae6-b3b0-4182654832bc").String()),
+				Body:   bytes.NewReader([]byte("asd")),
+			},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// when
+		expectedErr := errors.New("bug")
+		err = conn.EnumDocumentIDs(t.Context(), func(ctx context.Context, i uu.ID) error {
+			return expectedErr
+		})
+
+		// then
+		require.ErrorIs(t, err, expectedErr)
+	})
+
+	t.Run("Returns error if bucket does not exist", func(t *testing.T) {
+		// when
+		err := conn.EnumDocumentIDs(t.Context(), func(ctx context.Context, i uu.ID) error {
+			return nil
+		})
+
+		// then
+		require.Error(t, err)
+	})
 }
 
 func cleanBucket(t *testing.T, client *awss3.Client) (bucket *awss3.CreateBucketOutput, bucketName string) {
@@ -141,9 +226,9 @@ func cleanBucket(t *testing.T, client *awss3.Client) (bucket *awss3.CreateBucket
 	return bucket, bucketName
 }
 
-func s3Client(t *testing.T) *awss3.Client {
+func s3Client(ctx context.Context, t *testing.T) *awss3.Client {
 	t.Helper()
-	cfg, err := config.LoadDefaultConfig(t.Context())
+	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		t.Fatalf("Unable to load AWS SDK config, %v", err)
 	}
