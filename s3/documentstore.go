@@ -138,13 +138,30 @@ func (store *s3DocStore) CreateDocument(
 	return nil
 }
 
-// TODO
 func (store *s3DocStore) DocumentVersionFileProvider(
 	ctx context.Context,
 	docID uu.ID,
 	version docdb.VersionTime,
 ) (docdb.FileProvider, error) {
-	return nil, nil
+	// assume a version has max 1000 files
+	response, err := store.client.ListObjectsV2(
+		ctx,
+		&awss3.ListObjectsV2Input{
+			Bucket: &store.bucketName,
+			Prefix: p(docID.String() + "/" + version.String() + "/"),
+		},
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	keys := []string{}
+	for _, obj := range response.Contents {
+		keys = append(keys, *obj.Key)
+	}
+
+	return FileProviderFromS3Keys(store.client, store.bucketName, keys), nil
 }
 
 // TODO

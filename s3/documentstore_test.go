@@ -22,13 +22,7 @@ func TestDocumentExists(t *testing.T) {
 	ctx := t.Context()
 	client := s3Client(ctx, t)
 	documentStore, err := NewS3DocumentStore(ctx, os.Getenv("BUCKET_NAME"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	scenarios := []struct {
 		name           string
@@ -80,9 +74,7 @@ func TestDocumentExists(t *testing.T) {
 						Body:   documentData,
 					},
 				)
-				if err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, err)
 			}
 
 			// when
@@ -128,9 +120,7 @@ func TestEnumDocumentIDs(t *testing.T) {
 						Body:   bytes.NewReader([]byte("asd")),
 					},
 				)
-				if err != nil {
-					panic(err)
-				}
+				require.NoError(t, err)
 			}
 
 		}
@@ -162,9 +152,7 @@ func TestEnumDocumentIDs(t *testing.T) {
 				Body:   bytes.NewReader([]byte("asd")),
 			},
 		)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 
 		// when
 		expectedErr := errors.New("bug")
@@ -190,15 +178,12 @@ func TestEnumDocumentIDs(t *testing.T) {
 func TestCreateDocument(t *testing.T) {
 	ctx := t.Context()
 	client := s3Client(ctx, t)
-	bucketName := os.Getenv("BUCKET_NAME")
 	documentStore, err := NewS3DocumentStore(ctx, os.Getenv("BUCKET_NAME"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	t.Run("Saves files", func(t *testing.T) {
 		// given
-		cleanBucket(t, client)
+		_, bucketName := cleanBucket(t, client)
 		version := docdb.NewVersionTime(t.Context())
 		docID := uu.IDFrom("40224cda-26d3-4691-ad4a-97abc65230c1")
 
@@ -229,6 +214,90 @@ func TestCreateDocument(t *testing.T) {
 			_, err = client.GetObject(t.Context(), &awss3.GetObjectInput{Bucket: &bucketName, Key: &key})
 			require.NoError(t, err)
 		}
+	})
+
+	t.Run("Returns error if bucket does not exist", func(t *testing.T) {
+		// when
+		err := documentStore.CreateDocument(
+			t.Context(),
+			uu.IDv4(),
+			docdb.NewVersionTime(t.Context()),
+			[]fs.FileReader{&fs.MemFile{}},
+		)
+
+		// then
+		require.Error(t, err)
+	})
+}
+
+func TestDocumentVersionFileProvider(t *testing.T) {
+	client := s3Client(t.Context(), t)
+	documentStore, err := NewS3DocumentStore(t.Context(), os.Getenv("BUCKET_NAME"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("Returns proper versions", func(t *testing.T) {
+		// given
+		_, bucketName := cleanBucket(t, client)
+		docID1 := uu.IDFrom("531a747b-a814-47a9-90cb-0d59ce52df7e")
+		docID2 := uu.IDFrom("14f8f36c-8778-4567-9c8d-b1b998cb525a")
+		filename1 := "doc1.pdf"
+		filename2 := "doc2.pdf"
+		filename3 := "doc3.pdf"
+		filename4 := "doc4.pdf"
+		filename5 := "doc4.pdf"
+		version1 := docdb.NewVersionTime(t.Context())
+		version2 := docdb.NewVersionTime(t.Context())
+		version2.Time = time.Now().Add(1 * time.Second)
+		content1 := []byte("asd")
+		content2 := []byte("asdasd")
+
+		require.NotEqual(t, version1, version2)
+
+		createDoc := func(docID uu.ID, version docdb.VersionTime, filename string, content []byte) {
+			_, err := client.PutObject(
+				t.Context(),
+				&awss3.PutObjectInput{
+					Bucket: &bucketName,
+					Key:    p(getKey(docID, version, filename)),
+					Body:   bytes.NewReader(content),
+				},
+			)
+			require.NoError(t, err)
+		}
+
+		createDoc(docID1, version1, filename1, content1) // expected
+		createDoc(docID1, version1, filename2, content2) // expected
+		createDoc(docID1, version2, filename3, content1)
+		createDoc(docID1, version2, filename4, content1)
+		createDoc(docID2, version1, filename5, content1)
+
+		// when
+		fileProvider, err := documentStore.DocumentVersionFileProvider(t.Context(), docID1, version1)
+
+		// then
+		require.NoError(t, err)
+
+		file1Exists, err := fileProvider.HasFile(filename1)
+		require.NoError(t, err)
+		require.True(t, true, file1Exists)
+
+		file2Exists, err := fileProvider.HasFile(filename2)
+		require.NoError(t, err)
+		require.True(t, true, file2Exists)
+
+		filenames, err := fileProvider.ListFiles(t.Context())
+		require.NoError(t, err)
+		require.Equal(t, []string{filename1, filename2}, filenames)
+
+		savedContent1, err := fileProvider.ReadFile(t.Context(), filename1)
+		require.NoError(t, err)
+		require.Equal(t, content1, savedContent1)
+
+		savedContent2, err := fileProvider.ReadFile(t.Context(), filename2)
+		require.NoError(t, err)
+		require.Equal(t, content2, savedContent2)
 	})
 }
 
