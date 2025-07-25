@@ -8,6 +8,16 @@ import (
 	"github.com/domonda/go-types/uu"
 )
 
+func NewConn(
+	documentStore DocumentStore,
+	metadataStore MetadataStore,
+) Conn {
+	return &connStruct{
+		documentStore: documentStore,
+		metadataStore: metadataStore,
+	}
+}
+
 type CreateVersionFunc func(ctx context.Context, prevVersion VersionTime, prevFiles FileProvider) (writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error)
 
 type OnNewVersionFunc func(ctx context.Context, versionInfo *VersionInfo) error
@@ -168,3 +178,86 @@ type DeprecatedConn interface {
 // 	DebugGetDocumentDir(docID uu.ID) fs.File
 // 	DebugGetDocumentVersionFile(docID uu.ID, version VersionTime, filename string) (fs.File, error)
 // }
+
+type connStruct struct {
+	documentStore DocumentStore
+	metadataStore MetadataStore
+}
+
+func (c *connStruct) DocumentExists(ctx context.Context, docID uu.ID) (exists bool, err error) {
+	return c.documentStore.DocumentExists(ctx, docID)
+}
+
+func (c *connStruct) EnumDocumentIDs(ctx context.Context, callback func(context.Context, uu.ID) error) error {
+	return c.documentStore.EnumDocumentIDs(ctx, callback)
+}
+
+func (c *connStruct) DocumentVersionFileProvider(ctx context.Context, docID uu.ID, version VersionTime) (FileProvider, error) {
+	return c.documentStore.DocumentVersionFileProvider(ctx, docID, version)
+}
+
+func (c *connStruct) ReadDocumentVersionFile(ctx context.Context, docID uu.ID, version VersionTime, filename string) (data []byte, err error) {
+	return c.documentStore.ReadDocumentVersionFile(ctx, docID, version, filename)
+}
+
+func (c *connStruct) DocumentCompanyID(ctx context.Context, docID uu.ID) (companyID uu.ID, err error) {
+	return c.metadataStore.DocumentCompanyID(ctx, docID)
+}
+
+func (c *connStruct) SetDocumentCompanyID(ctx context.Context, docID, companyID uu.ID) error {
+	return c.metadataStore.SetDocumentCompanyID(ctx, docID, companyID)
+}
+
+func (c *connStruct) DocumentVersions(ctx context.Context, docID uu.ID) ([]VersionTime, error) {
+	return c.metadataStore.DocumentVersions(ctx, docID)
+}
+
+func (c *connStruct) LatestDocumentVersion(ctx context.Context, docID uu.ID) (VersionTime, error) {
+	return c.metadataStore.LatestDocumentVersion(ctx, docID)
+}
+
+// TODO
+func (c *connStruct) EnumCompanyDocumentIDs(ctx context.Context, companyID uu.ID, callback func(context.Context, uu.ID) error) error {
+	return nil
+}
+
+// TODO
+func (c *connStruct) DocumentVersionInfo(ctx context.Context, docID uu.ID, version VersionTime) (*VersionInfo, error) {
+	return nil, nil
+}
+
+// TODO
+func (c *connStruct) LatestDocumentVersionInfo(ctx context.Context, docID uu.ID) (*VersionInfo, error) {
+	return nil, nil
+}
+
+// TODO
+func (c *connStruct) DeleteDocument(ctx context.Context, docID uu.ID) error {
+	return nil
+}
+
+// TODO
+func (c *connStruct) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version VersionTime) (leftVersions []VersionTime, err error) {
+	return nil, nil
+}
+
+// TODO
+func (c *connStruct) CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, files []fs.FileReader) (*VersionInfo, error) {
+	return nil, nil
+}
+
+// TODO
+func (c *connStruct) AddDocumentVersion(
+	ctx context.Context,
+	docID,
+	userID uu.ID,
+	reason string,
+	createVersion CreateVersionFunc,
+	onNewVersion OnNewVersionFunc,
+) error {
+	return nil
+}
+
+func (c *connStruct) RestoreDocument(ctx context.Context, doc *HashedDocument, merge bool) error {
+	return ErrNotImplemented
+}

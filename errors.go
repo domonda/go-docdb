@@ -10,9 +10,12 @@ import (
 	"github.com/domonda/go-types/uu"
 )
 
-// ErrNoChanges is returned when a new document
-// version has no changes compared to the previous version.
-const ErrNoChanges errs.Sentinel = "no changes"
+const (
+	// ErrNoChanges is returned when a new document
+	// version has no changes compared to the previous version.
+	ErrNoChanges      errs.Sentinel = "no changes"
+	ErrNotImplemented errs.Sentinel = "not implemented"
+)
 
 ///////////////////////////////////////////////////////////////////////////////
 // ErrDocumentNotFound

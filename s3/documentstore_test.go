@@ -12,13 +12,19 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/domonda/go-docdb"
 	"github.com/domonda/go-types/uu"
 	"github.com/stretchr/testify/require"
+	"github.com/ungerik/go-fs"
 )
 
 func TestDocumentExists(t *testing.T) {
-	client := s3Client(t.Context(), t)
-	conn, err := NewConn(t.Context(), os.Getenv("BUCKET_NAME"))
+	ctx := t.Context()
+	client := s3Client(ctx, t)
+	documentStore, err := NewS3DocumentStore(ctx, os.Getenv("BUCKET_NAME"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if err != nil {
 		t.Fatal(err)
@@ -62,13 +68,15 @@ func TestDocumentExists(t *testing.T) {
 			}
 			documentID := uu.IDFrom("25a3eabf-6676-4c44-ae8a-a8007d0f6f1a")
 			documentData := bytes.NewReader([]byte("data"))
+			version := docdb.NewVersionTime(t.Context())
+			filename := "doc.pdf"
 
 			if scenario.bucketExists && scenario.documentExists {
 				_, err := client.PutObject(
 					t.Context(),
 					&awss3.PutObjectInput{
 						Bucket: &bucketName,
-						Key:    p(documentID.String()),
+						Key:    p(getKey(documentID, version, filename)),
 						Body:   documentData,
 					},
 				)
@@ -78,7 +86,7 @@ func TestDocumentExists(t *testing.T) {
 			}
 
 			// when
-			exists, err := conn.DocumentExists(t.Context(), documentID)
+			exists, err := documentStore.DocumentExists(t.Context(), documentID)
 
 			// then
 			scenario.compareError(t, err)
@@ -88,8 +96,9 @@ func TestDocumentExists(t *testing.T) {
 }
 
 func TestEnumDocumentIDs(t *testing.T) {
-	client := s3Client(t.Context(), t)
-	conn, err := NewConn(t.Context(), os.Getenv("BUCKET_NAME"))
+	ctx := t.Context()
+	client := s3Client(ctx, t)
+	documentStore, err := NewS3DocumentStore(ctx, os.Getenv("BUCKET_NAME"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,28 +112,32 @@ func TestEnumDocumentIDs(t *testing.T) {
 		t.Cleanup(func() { timeout.Stop() })
 
 		_, bucketName := cleanBucket(t, client)
-		// uploader := manager.NewUploader(client)
 
-		// max keys = 1000, this ensures pagination works correctly
-		numDocuments := 1001
+		// max keys = 1000, this ensures pagination works correctly, because 501 * 2 = 1002
+		numDocuments := 501
 		for range numDocuments {
+			version := docdb.NewVersionTime(t.Context())
 			id := uu.IDv4()
-			_, err := client.PutObject(
-				context.Background(),
-				&awss3.PutObjectInput{
-					Bucket: &bucketName,
-					Key:    p(id.String()),
-					Body:   bytes.NewReader([]byte("asd")),
-				},
-			)
-			if err != nil {
-				panic(err)
+
+			for _, filename := range []string{"doc.pdf", "doc1.pdf"} {
+				_, err := client.PutObject(
+					context.Background(),
+					&awss3.PutObjectInput{
+						Bucket: &bucketName,
+						Key:    p(getKey(id, version, filename)),
+						Body:   bytes.NewReader([]byte("asd")),
+					},
+				)
+				if err != nil {
+					panic(err)
+				}
 			}
+
 		}
 
 		// when
 		returnedIDs := uu.IDSlice{}
-		err = conn.EnumDocumentIDs(t.Context(), func(ctx context.Context, i uu.ID) error {
+		err = documentStore.EnumDocumentIDs(t.Context(), func(ctx context.Context, i uu.ID) error {
 			returnedIDs = append(returnedIDs, i)
 			return nil
 		})
@@ -137,11 +150,15 @@ func TestEnumDocumentIDs(t *testing.T) {
 	t.Run("Returns error from callback", func(t *testing.T) {
 		// given
 		_, bucketName := cleanBucket(t, client)
+		version := docdb.NewVersionTime(t.Context())
+		filename := "doc.pdf"
+		docID := uu.IDFrom("637c3457-f243-4ae6-b3b0-4182654832bc")
+
 		_, err := client.PutObject(
 			t.Context(),
 			&awss3.PutObjectInput{
 				Bucket: &bucketName,
-				Key:    p(uu.IDFrom("637c3457-f243-4ae6-b3b0-4182654832bc").String()),
+				Key:    p(getKey(docID, version, filename)),
 				Body:   bytes.NewReader([]byte("asd")),
 			},
 		)
@@ -151,7 +168,7 @@ func TestEnumDocumentIDs(t *testing.T) {
 
 		// when
 		expectedErr := errors.New("bug")
-		err = conn.EnumDocumentIDs(t.Context(), func(ctx context.Context, i uu.ID) error {
+		err = documentStore.EnumDocumentIDs(t.Context(), func(ctx context.Context, i uu.ID) error {
 			return expectedErr
 		})
 
@@ -161,12 +178,57 @@ func TestEnumDocumentIDs(t *testing.T) {
 
 	t.Run("Returns error if bucket does not exist", func(t *testing.T) {
 		// when
-		err := conn.EnumDocumentIDs(t.Context(), func(ctx context.Context, i uu.ID) error {
+		err := documentStore.EnumDocumentIDs(t.Context(), func(ctx context.Context, i uu.ID) error {
 			return nil
 		})
 
 		// then
 		require.Error(t, err)
+	})
+}
+
+func TestCreateDocument(t *testing.T) {
+	ctx := t.Context()
+	client := s3Client(ctx, t)
+	bucketName := os.Getenv("BUCKET_NAME")
+	documentStore, err := NewS3DocumentStore(ctx, os.Getenv("BUCKET_NAME"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("Saves files", func(t *testing.T) {
+		// given
+		cleanBucket(t, client)
+		version := docdb.NewVersionTime(t.Context())
+		docID := uu.IDFrom("40224cda-26d3-4691-ad4a-97abc65230c1")
+
+		files := []*fs.MemFile{
+			{
+				FileName: "a.pdf",
+				FileData: []byte("a"),
+			},
+			{
+				FileName: "b.json",
+				FileData: []byte("b"),
+			},
+		}
+
+		// when
+		err := documentStore.CreateDocument(
+			t.Context(),
+			docID,
+			version,
+			[]fs.FileReader{files[0], files[1]},
+		)
+
+		// then
+		require.NoError(t, err)
+
+		for _, file := range files {
+			key := getKey(docID, version, file.FileName)
+			_, err = client.GetObject(t.Context(), &awss3.GetObjectInput{Bucket: &bucketName, Key: &key})
+			require.NoError(t, err)
+		}
 	})
 }
 
