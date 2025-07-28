@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -164,14 +165,25 @@ func (store *s3DocStore) DocumentVersionFileProvider(
 	return FileProviderFromS3Keys(store.client, store.bucketName, keys), nil
 }
 
-// TODO
 func (store *s3DocStore) ReadDocumentVersionFile(
 	ctx context.Context,
 	docID uu.ID,
 	version docdb.VersionTime,
 	filename string,
 ) (data []byte, err error) {
-	return nil, nil
+	res, err := store.client.GetObject(
+		ctx,
+		&awss3.GetObjectInput{
+			Bucket: p(store.bucketName),
+			Key:    p(getKey(docID, version, filename)),
+		},
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return io.ReadAll(res.Body)
 }
 
 func getKey(docID uu.ID, version docdb.VersionTime, filename string) string {

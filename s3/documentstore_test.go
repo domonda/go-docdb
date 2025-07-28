@@ -19,10 +19,8 @@ import (
 )
 
 func TestDocumentExists(t *testing.T) {
-	ctx := t.Context()
-	client := s3Client(ctx, t)
-	documentStore, err := NewS3DocumentStore(ctx, os.Getenv("BUCKET_NAME"))
-	require.NoError(t, err)
+	client := fixtureS3Client(t)
+	documentStore := fixtureDocumentStore(t)
 
 	scenarios := []struct {
 		name           string
@@ -58,7 +56,7 @@ func TestDocumentExists(t *testing.T) {
 			// given
 			bucketName := ""
 			if scenario.bucketExists {
-				_, bucketName = cleanBucket(t, client)
+				_, bucketName = fixtureCleanBucket(t, client)
 			}
 			documentID := uu.IDFrom("25a3eabf-6676-4c44-ae8a-a8007d0f6f1a")
 			documentData := bytes.NewReader([]byte("data"))
@@ -88,12 +86,8 @@ func TestDocumentExists(t *testing.T) {
 }
 
 func TestEnumDocumentIDs(t *testing.T) {
-	ctx := t.Context()
-	client := s3Client(ctx, t)
-	documentStore, err := NewS3DocumentStore(ctx, os.Getenv("BUCKET_NAME"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	client := fixtureS3Client(t)
+	documentStore := fixtureDocumentStore(t)
 
 	t.Run("Iterates over fetched keys", func(t *testing.T) {
 		// given
@@ -103,7 +97,7 @@ func TestEnumDocumentIDs(t *testing.T) {
 
 		t.Cleanup(func() { timeout.Stop() })
 
-		_, bucketName := cleanBucket(t, client)
+		_, bucketName := fixtureCleanBucket(t, client)
 
 		// max keys = 1000, this ensures pagination works correctly, because 501 * 2 = 1002
 		numDocuments := 501
@@ -127,7 +121,7 @@ func TestEnumDocumentIDs(t *testing.T) {
 
 		// when
 		returnedIDs := uu.IDSlice{}
-		err = documentStore.EnumDocumentIDs(t.Context(), func(ctx context.Context, i uu.ID) error {
+		err := documentStore.EnumDocumentIDs(t.Context(), func(ctx context.Context, i uu.ID) error {
 			returnedIDs = append(returnedIDs, i)
 			return nil
 		})
@@ -139,7 +133,7 @@ func TestEnumDocumentIDs(t *testing.T) {
 
 	t.Run("Returns error from callback", func(t *testing.T) {
 		// given
-		_, bucketName := cleanBucket(t, client)
+		_, bucketName := fixtureCleanBucket(t, client)
 		version := docdb.NewVersionTime(t.Context())
 		filename := "doc.pdf"
 		docID := uu.IDFrom("637c3457-f243-4ae6-b3b0-4182654832bc")
@@ -176,14 +170,12 @@ func TestEnumDocumentIDs(t *testing.T) {
 }
 
 func TestCreateDocument(t *testing.T) {
-	ctx := t.Context()
-	client := s3Client(ctx, t)
-	documentStore, err := NewS3DocumentStore(ctx, os.Getenv("BUCKET_NAME"))
-	require.NoError(t, err)
+	client := fixtureS3Client(t)
+	documentStore := fixtureDocumentStore(t)
 
 	t.Run("Saves files", func(t *testing.T) {
 		// given
-		_, bucketName := cleanBucket(t, client)
+		_, bucketName := fixtureCleanBucket(t, client)
 		version := docdb.NewVersionTime(t.Context())
 		docID := uu.IDFrom("40224cda-26d3-4691-ad4a-97abc65230c1")
 
@@ -231,15 +223,12 @@ func TestCreateDocument(t *testing.T) {
 }
 
 func TestDocumentVersionFileProvider(t *testing.T) {
-	client := s3Client(t.Context(), t)
-	documentStore, err := NewS3DocumentStore(t.Context(), os.Getenv("BUCKET_NAME"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	client := fixtureS3Client(t)
+	documentStore := fixtureDocumentStore(t)
 
 	t.Run("Returns proper versions", func(t *testing.T) {
 		// given
-		_, bucketName := cleanBucket(t, client)
+		_, bucketName := fixtureCleanBucket(t, client)
 		docID1 := uu.IDFrom("531a747b-a814-47a9-90cb-0d59ce52df7e")
 		docID2 := uu.IDFrom("14f8f36c-8778-4567-9c8d-b1b998cb525a")
 		filename1 := "doc1.pdf"
@@ -301,7 +290,52 @@ func TestDocumentVersionFileProvider(t *testing.T) {
 	})
 }
 
-func cleanBucket(t *testing.T, client *awss3.Client) (bucket *awss3.CreateBucketOutput, bucketName string) {
+func TestReadDocumentVersionFile(t *testing.T) {
+	client := fixtureS3Client(t)
+	documentStore := fixtureDocumentStore(t)
+
+	t.Run("Returns file contents", func(t *testing.T) {
+		// given
+		_, bucketName := fixtureCleanBucket(t, client)
+		docID := uu.IDFrom("45afa44f-3b8a-4b54-99dd-28ca92bb17cd")
+		filename := "doc1.pdf"
+		version := docdb.NewVersionTime(t.Context())
+		contents := []byte("asdasd")
+
+		_, err := client.PutObject(
+			t.Context(),
+			&awss3.PutObjectInput{
+				Bucket: p(bucketName),
+				Key:    p(getKey(docID, version, filename)),
+				Body:   bytes.NewReader(contents),
+			},
+		)
+		require.NoError(t, err)
+
+		// when
+		result, err := documentStore.ReadDocumentVersionFile(t.Context(), docID, version, filename)
+
+		// then
+		require.NoError(t, err)
+		require.Equal(t, contents, result)
+	})
+
+	t.Run("Returns error if file does not exists", func(t *testing.T) {
+		// given
+		fixtureCleanBucket(t, client)
+		docID := uu.IDFrom("24e4397c-c3bf-4e55-b993-ebef77107f17")
+		filename := "doc1.pdf"
+		version := docdb.NewVersionTime(t.Context())
+
+		// when
+		_, err := documentStore.ReadDocumentVersionFile(t.Context(), docID, version, filename)
+
+		// then
+		require.Error(t, err)
+	})
+}
+
+func fixtureCleanBucket(t *testing.T, client *awss3.Client) (bucket *awss3.CreateBucketOutput, bucketName string) {
 	t.Helper()
 	bucketName = os.Getenv("BUCKET_NAME")
 
@@ -357,9 +391,18 @@ func cleanBucket(t *testing.T, client *awss3.Client) (bucket *awss3.CreateBucket
 	return bucket, bucketName
 }
 
-func s3Client(ctx context.Context, t *testing.T) *awss3.Client {
+func fixtureDocumentStore(t *testing.T) docdb.DocumentStore {
 	t.Helper()
-	cfg, err := config.LoadDefaultConfig(ctx)
+	documentStore, err := NewS3DocumentStore(t.Context(), os.Getenv("BUCKET_NAME"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return documentStore
+}
+
+func fixtureS3Client(t *testing.T) *awss3.Client {
+	t.Helper()
+	cfg, err := config.LoadDefaultConfig(t.Context())
 	if err != nil {
 		t.Fatalf("Unable to load AWS SDK config, %v", err)
 	}
