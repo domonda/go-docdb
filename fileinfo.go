@@ -4,9 +4,10 @@ import (
 	"bytes"
 	"context"
 
-	"github.com/domonda/go-errs"
 	"github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/fsimpl"
+
+	"github.com/domonda/go-errs"
 )
 
 type FileInfo struct {
@@ -15,8 +16,9 @@ type FileInfo struct {
 	Hash string
 }
 
-// ContentHash returns a Dropbox compatible 64 hex character content hash
-// by reading from an io.Reader until io.EOF.
+// ContentHash returns a Dropbox compatible 64 hex character
+// content hash for the passed data.
+//
 // See https://www.dropbox.com/developers/reference/content-hash
 func ContentHash(data []byte) string {
 	hash, err := fsimpl.DropboxContentHash(context.Background(), bytes.NewReader(data))
