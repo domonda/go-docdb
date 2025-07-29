@@ -23,4 +23,6 @@ type DocumentStore interface {
 	// Wrapped ErrDocumentNotFound, ErrDocumentVersionNotFound, ErrDocumentFileNotFound
 	// will be returned in case of such error conditions.
 	ReadDocumentVersionFile(ctx context.Context, docID uu.ID, version VersionTime, filename string) (data []byte, err error)
+
+	DeleteDocument(ctx context.Context, docID uu.ID) error
 }

@@ -216,23 +216,27 @@ func (c *connStruct) LatestDocumentVersion(ctx context.Context, docID uu.ID) (Ve
 	return c.metadataStore.LatestDocumentVersion(ctx, docID)
 }
 
-// TODO
 func (c *connStruct) EnumCompanyDocumentIDs(ctx context.Context, companyID uu.ID, callback func(context.Context, uu.ID) error) error {
-	return nil
+	return c.metadataStore.EnumCompanyDocumentIDs(ctx, companyID, callback)
 }
 
-// TODO
 func (c *connStruct) DocumentVersionInfo(ctx context.Context, docID uu.ID, version VersionTime) (*VersionInfo, error) {
-	return nil, nil
+	return c.metadataStore.DocumentVersionInfo(ctx, docID, version)
 }
 
-// TODO
 func (c *connStruct) LatestDocumentVersionInfo(ctx context.Context, docID uu.ID) (*VersionInfo, error) {
-	return nil, nil
+	return c.metadataStore.LatestDocumentVersionInfo(ctx, docID)
 }
 
-// TODO
 func (c *connStruct) DeleteDocument(ctx context.Context, docID uu.ID) error {
+	if err := c.metadataStore.DeleteDocument(ctx, docID); err != nil {
+		return err
+	}
+
+	if err := c.documentStore.DeleteDocument(ctx, docID); err != nil {
+		return err
+	}
+
 	return nil
 }
 

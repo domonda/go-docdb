@@ -9,6 +9,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/domonda/go-docdb"
 	"github.com/domonda/go-types/uu"
 	"github.com/ungerik/go-fs"
@@ -184,6 +185,35 @@ func (store *s3DocStore) ReadDocumentVersionFile(
 	}
 
 	return io.ReadAll(res.Body)
+}
+
+func (store *s3DocStore) DeleteDocument(ctx context.Context, docID uu.ID) error {
+	// assuming there are max 1000 objects
+	response, err := store.client.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{
+		Bucket: &store.bucketName,
+		Prefix: p(docID.String() + "/"),
+	})
+
+	if err != nil {
+		return err
+	}
+
+	objectsToDelete := []types.ObjectIdentifier{}
+	for _, obj := range response.Contents {
+		objectsToDelete = append(objectsToDelete, types.ObjectIdentifier{Key: obj.Key})
+	}
+
+	_, err = store.client.DeleteObjects(
+		ctx,
+		&awss3.DeleteObjectsInput{
+			Bucket: p(store.bucketName),
+			Delete: &types.Delete{
+				Objects: objectsToDelete,
+			},
+		},
+	)
+
+	return err
 }
 
 func getKey(docID uu.ID, version docdb.VersionTime, filename string) string {

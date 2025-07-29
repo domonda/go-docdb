@@ -17,6 +17,14 @@ type MetadataStore interface {
 	// Returns nil and no error if the document does not exist or has no versions.
 	DocumentVersions(ctx context.Context, docID uu.ID) ([]VersionTime, error)
 
-	// LatestDocumentVersion returns the lates VersionTime of a document
 	LatestDocumentVersion(ctx context.Context, docID uu.ID) (VersionTime, error)
+
+	// EnumCompanyDocumentIDs calls the passed callback with the ID of every document of a company in the database
+	EnumCompanyDocumentIDs(ctx context.Context, companyID uu.ID, callback func(context.Context, uu.ID) error) error
+
+	DocumentVersionInfo(ctx context.Context, docID uu.ID, version VersionTime) (*VersionInfo, error)
+
+	LatestDocumentVersionInfo(ctx context.Context, docID uu.ID) (*VersionInfo, error)
+
+	DeleteDocument(ctx context.Context, docID uu.ID) error
 }
