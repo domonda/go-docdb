@@ -216,6 +216,37 @@ func (store *s3DocStore) DeleteDocument(ctx context.Context, docID uu.ID) error 
 	return err
 }
 
+func (store *s3DocStore) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version docdb.VersionTime) error {
+	// assuming there are max 1000 objects
+	response, err := store.client.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{
+		Bucket: &store.bucketName,
+		Prefix: p(docID.String() + "/"),
+	})
+
+	if err != nil {
+		return err
+	}
+
+	objectsToDelete := []types.ObjectIdentifier{}
+	for _, obj := range response.Contents {
+		if strings.Contains(*obj.Key, version.String()) {
+			objectsToDelete = append(objectsToDelete, types.ObjectIdentifier{Key: obj.Key})
+		}
+	}
+
+	_, err = store.client.DeleteObjects(
+		ctx,
+		&awss3.DeleteObjectsInput{
+			Bucket: p(store.bucketName),
+			Delete: &types.Delete{
+				Objects: objectsToDelete,
+			},
+		},
+	)
+
+	return err
+}
+
 func getKey(docID uu.ID, version docdb.VersionTime, filename string) string {
 	return strings.Join([]string{docID.String(), version.String(), filename}, "/")
 }

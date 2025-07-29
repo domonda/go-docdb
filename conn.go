@@ -240,9 +240,18 @@ func (c *connStruct) DeleteDocument(ctx context.Context, docID uu.ID) error {
 	return nil
 }
 
-// TODO
 func (c *connStruct) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version VersionTime) (leftVersions []VersionTime, err error) {
-	return nil, nil
+	leftVersions, err = c.metadataStore.DeleteDocumentVersion(ctx, docID, version)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if err = c.documentStore.DeleteDocumentVersion(ctx, docID, version); err != nil {
+		return nil, err
+	}
+
+	return leftVersions, err
 }
 
 // TODO

@@ -25,4 +25,6 @@ type DocumentStore interface {
 	ReadDocumentVersionFile(ctx context.Context, docID uu.ID, version VersionTime, filename string) (data []byte, err error)
 
 	DeleteDocument(ctx context.Context, docID uu.ID) error
+
+	DeleteDocumentVersion(ctx context.Context, docID uu.ID, version VersionTime) error
 }

@@ -27,4 +27,6 @@ type MetadataStore interface {
 	LatestDocumentVersionInfo(ctx context.Context, docID uu.ID) (*VersionInfo, error)
 
 	DeleteDocument(ctx context.Context, docID uu.ID) error
+
+	DeleteDocumentVersion(ctx context.Context, docID uu.ID, version VersionTime) (leftVersions []VersionTime, err error)
 }

@@ -309,18 +309,7 @@ func TestDeleteDocument(t *testing.T) {
 		createDocument(docID1, version1, filename2, []byte("asd"))
 		createDocument(docID1, version2, filename1, []byte("asd"))
 		createDocument(docID2, version1, filename1, []byte("asd")) // shouldn't be deleted
-
-		exists := func(docID uu.ID, version docdb.VersionTime, filename string) bool {
-			_, err := client.GetObject(
-				t.Context(),
-				&awss3.GetObjectInput{
-					Bucket: &bucketName,
-					Key:    p(getKey(docID, version, filename)),
-				},
-			)
-
-			return err == nil
-		}
+		exists := fixtureObjectExists(t, client, bucketName)
 
 		// when
 		err := documentStore.DeleteDocument(t.Context(), docID1)
@@ -333,13 +322,72 @@ func TestDeleteDocument(t *testing.T) {
 		require.True(t, exists(docID2, version1, filename1))
 	})
 
-	t.Run("Return error if bucket does not exist", func(t *testing.T) {
+	t.Run("Returns error if bucket does not exist", func(t *testing.T) {
 		// when
 		err := documentStore.DeleteDocument(t.Context(), uu.IDFrom("f8075810-a28a-47da-be72-05f0023b3112"))
 
 		// then
 		require.Error(t, err)
 	})
+}
+
+func TestDeleteDocumentVersion(t *testing.T) {
+	client := fixtureS3Client(t)
+	documentStore := fixtureDocumentStore(t)
+
+	t.Run("Deletes all objects belonging to a document version", func(t *testing.T) {
+		// given
+		_, bucketName := fixtureCleanBucket(t, client)
+		createDocument := fixtureCreateDocument(t, client, bucketName)
+		docID1 := uu.IDFrom("10a93961-cf1a-4352-bca2-49c8d46dbdd1")
+		docID2 := uu.IDFrom("cd1d5e85-08fa-4408-9a2f-a4c6013a7dad")
+		version1 := docdb.NewVersionTime(t.Context())
+		version2 := docdb.NewVersionTime(t.Context())
+		version2.Time = time.Now().Add(1 * time.Second)
+		filename1 := "doc1.pdf"
+		filename2 := "doc2.pdf"
+		createDocument(docID1, version1, filename1, []byte("asd"))
+		createDocument(docID1, version1, filename2, []byte("asd"))
+		createDocument(docID1, version2, filename1, []byte("asd")) // shouldn't be deleted
+		createDocument(docID2, version1, filename1, []byte("asd")) // shouldn't be deleted
+		exists := fixtureObjectExists(t, client, bucketName)
+
+		// when
+		err := documentStore.DeleteDocumentVersion(t.Context(), docID1, version1)
+
+		// then
+		require.NoError(t, err)
+		require.False(t, exists(docID1, version1, filename1))
+		require.False(t, exists(docID1, version1, filename2))
+		require.True(t, exists(docID1, version2, filename1))
+		require.True(t, exists(docID2, version1, filename1))
+	})
+
+	t.Run("Returns error if bucket does not exist", func(t *testing.T) {
+		// when
+		err := documentStore.DeleteDocumentVersion(
+			t.Context(),
+			uu.IDFrom("6920916f-8684-4d7e-9114-7b7409b2d279"),
+			docdb.NewVersionTime(t.Context()),
+		)
+
+		// then
+		require.Error(t, err)
+	})
+}
+
+func fixtureObjectExists(t *testing.T, client *awss3.Client, bucketName string) func(docID uu.ID, version docdb.VersionTime, filename string) bool {
+	return func(docID uu.ID, version docdb.VersionTime, filename string) bool {
+		_, err := client.GetObject(
+			t.Context(),
+			&awss3.GetObjectInput{
+				Bucket: &bucketName,
+				Key:    p(getKey(docID, version, filename)),
+			},
+		)
+
+		return err == nil
+	}
 }
 
 func fixtureCleanBucket(t *testing.T, client *awss3.Client) (bucket *awss3.CreateBucketOutput, bucketName string) {
