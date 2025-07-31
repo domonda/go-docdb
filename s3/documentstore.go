@@ -1,6 +1,7 @@
 package s3
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -122,15 +123,20 @@ func (store *s3DocStore) EnumDocumentIDs(ctx context.Context, callback func(cont
 func (store *s3DocStore) CreateDocument(
 	ctx context.Context,
 	docID uu.ID,
-	version docdb.VersionTime,
 	files []fs.FileReader,
 ) error {
 	for _, file := range files {
+		data, err := file.ReadAll()
+		if err != nil {
+			return err
+		}
+		hash := docdb.ContentHash(data)
 		if _, err := store.client.PutObject(
 			ctx,
 			&awss3.PutObjectInput{
 				Bucket: &store.bucketName,
-				Key:    p(getKey(docID, version, file.Name())),
+				Key:    p(getKey(docID, file.Name(), hash)),
+				Body:   bytes.NewReader(data),
 			},
 		); err != nil {
 			return err
@@ -140,17 +146,17 @@ func (store *s3DocStore) CreateDocument(
 	return nil
 }
 
-func (store *s3DocStore) DocumentVersionFileProvider(
+func (store *s3DocStore) DocumentHashFileProvider(
 	ctx context.Context,
 	docID uu.ID,
-	version docdb.VersionTime,
+	hashes []string,
 ) (docdb.FileProvider, error) {
 	// assume a version has max 1000 files
 	response, err := store.client.ListObjectsV2(
 		ctx,
 		&awss3.ListObjectsV2Input{
 			Bucket: &store.bucketName,
-			Prefix: p(docID.String() + "/" + version.String() + "/"),
+			Prefix: p(docID.String()),
 		},
 	)
 
@@ -160,23 +166,27 @@ func (store *s3DocStore) DocumentVersionFileProvider(
 
 	keys := []string{}
 	for _, obj := range response.Contents {
-		keys = append(keys, *obj.Key)
+		for _, hash := range hashes {
+			if strings.Contains(*obj.Key, hash) {
+				keys = append(keys, *obj.Key)
+			}
+		}
 	}
 
 	return FileProviderFromS3Keys(store.client, store.bucketName, keys), nil
 }
 
-func (store *s3DocStore) ReadDocumentVersionFile(
+func (store *s3DocStore) ReadDocumentHashFile(
 	ctx context.Context,
 	docID uu.ID,
-	version docdb.VersionTime,
-	filename string,
+	filename,
+	hash string,
 ) (data []byte, err error) {
 	res, err := store.client.GetObject(
 		ctx,
 		&awss3.GetObjectInput{
 			Bucket: p(store.bucketName),
-			Key:    p(getKey(docID, version, filename)),
+			Key:    p(getKey(docID, filename, hash)),
 		},
 	)
 
@@ -216,7 +226,7 @@ func (store *s3DocStore) DeleteDocument(ctx context.Context, docID uu.ID) error 
 	return err
 }
 
-func (store *s3DocStore) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version docdb.VersionTime) error {
+func (store *s3DocStore) DeleteDocumentHashes(ctx context.Context, docID uu.ID, hashes []string) error {
 	// assuming there are max 1000 objects
 	response, err := store.client.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{
 		Bucket: &store.bucketName,
@@ -229,8 +239,10 @@ func (store *s3DocStore) DeleteDocumentVersion(ctx context.Context, docID uu.ID,
 
 	objectsToDelete := []types.ObjectIdentifier{}
 	for _, obj := range response.Contents {
-		if strings.Contains(*obj.Key, version.String()) {
-			objectsToDelete = append(objectsToDelete, types.ObjectIdentifier{Key: obj.Key})
+		for _, hash := range hashes {
+			if strings.Contains(*obj.Key, hash) {
+				objectsToDelete = append(objectsToDelete, types.ObjectIdentifier{Key: obj.Key})
+			}
 		}
 	}
 
@@ -247,8 +259,8 @@ func (store *s3DocStore) DeleteDocumentVersion(ctx context.Context, docID uu.ID,
 	return err
 }
 
-func getKey(docID uu.ID, version docdb.VersionTime, filename string) string {
-	return strings.Join([]string{docID.String(), version.String(), filename}, "/")
+func getKey(docID uu.ID, filename string, hash string) string {
+	return strings.Join([]string{docID.String(), filename, hash}, "/")
 }
 
 func idFromKey(key string) uu.ID {

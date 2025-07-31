@@ -5,6 +5,7 @@ import (
 
 	fs "github.com/ungerik/go-fs"
 
+	"github.com/domonda/go-errs"
 	"github.com/domonda/go-types/uu"
 )
 
@@ -12,7 +13,7 @@ func NewConn(
 	documentStore DocumentStore,
 	metadataStore MetadataStore,
 ) Conn {
-	return &connStruct{
+	return &conn{
 		documentStore: documentStore,
 		metadataStore: metadataStore,
 	}
@@ -179,56 +180,80 @@ type DeprecatedConn interface {
 // 	DebugGetDocumentVersionFile(docID uu.ID, version VersionTime, filename string) (fs.File, error)
 // }
 
-type connStruct struct {
+type conn struct {
 	documentStore DocumentStore
 	metadataStore MetadataStore
 }
 
-func (c *connStruct) DocumentExists(ctx context.Context, docID uu.ID) (exists bool, err error) {
+func (c *conn) DocumentExists(ctx context.Context, docID uu.ID) (exists bool, err error) {
 	return c.documentStore.DocumentExists(ctx, docID)
 }
 
-func (c *connStruct) EnumDocumentIDs(ctx context.Context, callback func(context.Context, uu.ID) error) error {
+func (c *conn) EnumDocumentIDs(ctx context.Context, callback func(context.Context, uu.ID) error) error {
 	return c.documentStore.EnumDocumentIDs(ctx, callback)
 }
 
-func (c *connStruct) DocumentVersionFileProvider(ctx context.Context, docID uu.ID, version VersionTime) (FileProvider, error) {
-	return c.documentStore.DocumentVersionFileProvider(ctx, docID, version)
+func (c *conn) DocumentVersionFileProvider(ctx context.Context, docID uu.ID, version VersionTime) (FileProvider, error) {
+	versionInfo, err := c.metadataStore.DocumentVersionInfo(ctx, docID, version)
+	if err != nil {
+		return nil, err
+	}
+
+	hashes := []string{}
+	for _, item := range versionInfo.Files {
+		hashes = append(hashes, item.Hash)
+	}
+
+	return c.documentStore.DocumentHashFileProvider(ctx, docID, hashes)
 }
 
-func (c *connStruct) ReadDocumentVersionFile(ctx context.Context, docID uu.ID, version VersionTime, filename string) (data []byte, err error) {
-	return c.documentStore.ReadDocumentVersionFile(ctx, docID, version, filename)
+func (c *conn) ReadDocumentVersionFile(ctx context.Context, docID uu.ID, version VersionTime, filename string) (data []byte, err error) {
+	versionInfo, err := c.metadataStore.DocumentVersionInfo(ctx, docID, version)
+	if err != nil {
+		return nil, err
+	}
+
+	hash := ""
+	for _, item := range versionInfo.Files {
+		if item.Name == filename {
+			hash = item.Hash
+			filename = item.Name
+			break
+		}
+	}
+
+	return c.documentStore.ReadDocumentHashFile(ctx, docID, filename, hash)
 }
 
-func (c *connStruct) DocumentCompanyID(ctx context.Context, docID uu.ID) (companyID uu.ID, err error) {
+func (c *conn) DocumentCompanyID(ctx context.Context, docID uu.ID) (companyID uu.ID, err error) {
 	return c.metadataStore.DocumentCompanyID(ctx, docID)
 }
 
-func (c *connStruct) SetDocumentCompanyID(ctx context.Context, docID, companyID uu.ID) error {
+func (c *conn) SetDocumentCompanyID(ctx context.Context, docID, companyID uu.ID) error {
 	return c.metadataStore.SetDocumentCompanyID(ctx, docID, companyID)
 }
 
-func (c *connStruct) DocumentVersions(ctx context.Context, docID uu.ID) ([]VersionTime, error) {
+func (c *conn) DocumentVersions(ctx context.Context, docID uu.ID) ([]VersionTime, error) {
 	return c.metadataStore.DocumentVersions(ctx, docID)
 }
 
-func (c *connStruct) LatestDocumentVersion(ctx context.Context, docID uu.ID) (VersionTime, error) {
+func (c *conn) LatestDocumentVersion(ctx context.Context, docID uu.ID) (VersionTime, error) {
 	return c.metadataStore.LatestDocumentVersion(ctx, docID)
 }
 
-func (c *connStruct) EnumCompanyDocumentIDs(ctx context.Context, companyID uu.ID, callback func(context.Context, uu.ID) error) error {
+func (c *conn) EnumCompanyDocumentIDs(ctx context.Context, companyID uu.ID, callback func(context.Context, uu.ID) error) error {
 	return c.metadataStore.EnumCompanyDocumentIDs(ctx, companyID, callback)
 }
 
-func (c *connStruct) DocumentVersionInfo(ctx context.Context, docID uu.ID, version VersionTime) (*VersionInfo, error) {
+func (c *conn) DocumentVersionInfo(ctx context.Context, docID uu.ID, version VersionTime) (*VersionInfo, error) {
 	return c.metadataStore.DocumentVersionInfo(ctx, docID, version)
 }
 
-func (c *connStruct) LatestDocumentVersionInfo(ctx context.Context, docID uu.ID) (*VersionInfo, error) {
+func (c *conn) LatestDocumentVersionInfo(ctx context.Context, docID uu.ID) (*VersionInfo, error) {
 	return c.metadataStore.LatestDocumentVersionInfo(ctx, docID)
 }
 
-func (c *connStruct) DeleteDocument(ctx context.Context, docID uu.ID) error {
+func (c *conn) DeleteDocument(ctx context.Context, docID uu.ID) error {
 	if err := c.metadataStore.DeleteDocument(ctx, docID); err != nil {
 		return err
 	}
@@ -240,37 +265,114 @@ func (c *connStruct) DeleteDocument(ctx context.Context, docID uu.ID) error {
 	return nil
 }
 
-func (c *connStruct) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version VersionTime) (leftVersions []VersionTime, err error) {
-	leftVersions, err = c.metadataStore.DeleteDocumentVersion(ctx, docID, version)
+func (c *conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version VersionTime) (leftVersions []VersionTime, err error) {
+	leftVersions, hashesToDelete, err := c.metadataStore.DeleteDocumentVersion(ctx, docID, version)
 
 	if err != nil {
 		return nil, err
 	}
 
-	if err = c.documentStore.DeleteDocumentVersion(ctx, docID, version); err != nil {
+	if err = c.documentStore.DeleteDocumentHashes(ctx, docID, hashesToDelete); err != nil {
 		return nil, err
 	}
 
 	return leftVersions, err
 }
 
-// TODO
-func (c *connStruct) CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, files []fs.FileReader) (*VersionInfo, error) {
-	return nil, nil
+func (c *conn) CreateDocument(
+	ctx context.Context,
+	companyID,
+	docID,
+	userID uu.ID,
+	reason string,
+	files []fs.FileReader,
+) (*VersionInfo, error) {
+	return c.createDocumentVersion(ctx, companyID, docID, userID, reason, files)
+}
+
+func (c *conn) createDocumentVersion(
+	ctx context.Context,
+	companyID,
+	docID,
+	userID uu.ID,
+	reason string,
+	files []fs.FileReader,
+) (*VersionInfo, error) {
+	if err := c.documentStore.CreateDocument(ctx, docID, files); err != nil {
+		return nil, err
+	}
+
+	versionInfo, err := c.metadataStore.CreateDocument(ctx, companyID, docID, userID, reason, files)
+
+	if err != nil {
+		hashes := []string{}
+		for _, item := range versionInfo.Files {
+			hashes = append(hashes, item.Hash)
+		}
+		c.documentStore.DeleteDocumentHashes(ctx, docID, hashes)
+	}
+
+	return versionInfo, err
 }
 
 // TODO
-func (c *connStruct) AddDocumentVersion(
+func (c *conn) AddDocumentVersion(
 	ctx context.Context,
 	docID,
 	userID uu.ID,
 	reason string,
 	createVersion CreateVersionFunc,
 	onNewVersion OnNewVersionFunc,
-) error {
-	return nil
+) (err error) {
+	// defer errs.WrapWithFuncParams(&err, ctx, docID, userID, reason, createVersion, onNewVersion)
+
+	// if err = ctx.Err(); err != nil {
+	// 	return err
+	// }
+	// if err = docID.Validate(); err != nil {
+	// 	return err
+	// }
+	// if err = userID.Validate(); err != nil {
+	// 	return err
+	// }
+	// if createVersion == nil {
+	// 	return errs.New("nil createVersion func passed to AddDocumentVersion")
+	// }
+
+	// latestVersionInfo, err := c.metadataStore.LatestDocumentVersionInfo(ctx, docID)
+	// if err != nil {
+	// 	return err
+	// }
+
+	// fileProvider, err := c.documentStore.DocumentVersionFileProvider(ctx, docID, latestVersionInfo.Version)
+	// if err != nil {
+	// 	return err
+	// }
+
+	// writeFiles, deleteFiles, newCompanyID, err := safelyCallCreateVersionFunc(
+	// 	ctx,
+	// 	latestVersionInfo.Version,
+	// 	fileProvider,
+	// 	createVersion,
+	// )
+	// if err != nil {
+	// 	return err
+	// }
+
+	return err
 }
 
-func (c *connStruct) RestoreDocument(ctx context.Context, doc *HashedDocument, merge bool) error {
+func (c *conn) RestoreDocument(ctx context.Context, doc *HashedDocument, merge bool) error {
 	return ErrNotImplemented
+}
+
+func safelyCallCreateVersionFunc(
+	ctx context.Context,
+	prevVersion VersionTime,
+	prevFiles FileProvider,
+	createVersion CreateVersionFunc,
+) (writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error) {
+	defer errs.RecoverPanicAsError(&err)
+
+	return createVersion(ctx, prevVersion, prevFiles)
 }

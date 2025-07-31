@@ -4,9 +4,12 @@ import (
 	"context"
 
 	"github.com/domonda/go-types/uu"
+	"github.com/ungerik/go-fs"
 )
 
 type MetadataStore interface {
+	CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, files []fs.FileReader) (*VersionInfo, error)
+
 	// DocumentCompanyID returns the companyID for a docID
 	DocumentCompanyID(ctx context.Context, docID uu.ID) (companyID uu.ID, err error)
 
@@ -28,5 +31,5 @@ type MetadataStore interface {
 
 	DeleteDocument(ctx context.Context, docID uu.ID) error
 
-	DeleteDocumentVersion(ctx context.Context, docID uu.ID, version VersionTime) (leftVersions []VersionTime, err error)
+	DeleteDocumentVersion(ctx context.Context, docID uu.ID, version VersionTime) (leftVersions []VersionTime, hashesToDelete []string, err error)
 }

@@ -35,3 +35,7 @@ but I think it's cleaner to have a separate table in the docdb schema, that was 
 methods like DocumentVersions and DocumentVersionInfo can be implemented by reading meta data json files, the info is cached in Postgres by domonda-service anyways. those methods should only be necessary for discovery of data that hasn't been restored to Postgres yet, or one time reads for larger operations that take more time anyways
 
 so I would implement the S3Conn as simply as possible, using the same metadata files as the localfsdb and worry about caching, performance etc. when we see if it's needed (edited) 
+
+<hr>
+
+we might also need something like a ProxyConn that routes method calls depending on the companyID to two different implementations if we want to gradually transition from the old localfs implementation to the new one ompany by company

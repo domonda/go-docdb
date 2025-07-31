@@ -72,5 +72,5 @@ func filenameFromKey(key string) string {
 		return ""
 	}
 
-	return parts[2]
+	return parts[1]
 }

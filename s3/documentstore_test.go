@@ -59,12 +59,12 @@ func TestDocumentExists(t *testing.T) {
 				_, bucketName = fixtureCleanBucket(t, client)
 			}
 			documentID := uu.IDFrom("25a3eabf-6676-4c44-ae8a-a8007d0f6f1a")
-			version := docdb.NewVersionTime(t.Context())
 			filename := "doc.pdf"
 			createDocument := fixtureCreateDocument(t, client, bucketName)
+			data := []byte("data")
 
 			if scenario.bucketExists && scenario.documentExists {
-				createDocument(documentID, version, filename, []byte("data"))
+				createDocument(documentID, filename, data)
 			}
 
 			// when
@@ -95,11 +95,10 @@ func TestEnumDocumentIDs(t *testing.T) {
 		// max keys = 1000, this ensures pagination works correctly, because 501 * 2 = 1002
 		numDocuments := 501
 		for range numDocuments {
-			version := docdb.NewVersionTime(t.Context())
 			id := uu.IDv4()
 
 			for _, filename := range []string{"doc.pdf", "doc1.pdf"} {
-				createDocument(id, version, filename, []byte("asd"))
+				createDocument(id, filename, []byte("asd"))
 			}
 		}
 
@@ -118,11 +117,10 @@ func TestEnumDocumentIDs(t *testing.T) {
 	t.Run("Returns error from callback", func(t *testing.T) {
 		// given
 		_, bucketName := fixtureCleanBucket(t, client)
-		version := docdb.NewVersionTime(t.Context())
 		filename := "doc.pdf"
 		docID := uu.IDFrom("637c3457-f243-4ae6-b3b0-4182654832bc")
 		createDocument := fixtureCreateDocument(t, client, bucketName)
-		createDocument(docID, version, filename, []byte("asd"))
+		createDocument(docID, filename, []byte("asd"))
 
 		// when
 		expectedErr := errors.New("bug")
@@ -152,7 +150,6 @@ func TestCreateDocument(t *testing.T) {
 	t.Run("Saves files", func(t *testing.T) {
 		// given
 		_, bucketName := fixtureCleanBucket(t, client)
-		version := docdb.NewVersionTime(t.Context())
 		docID := uu.IDFrom("40224cda-26d3-4691-ad4a-97abc65230c1")
 
 		files := []*fs.MemFile{
@@ -170,7 +167,6 @@ func TestCreateDocument(t *testing.T) {
 		err := documentStore.CreateDocument(
 			t.Context(),
 			docID,
-			version,
 			[]fs.FileReader{files[0], files[1]},
 		)
 
@@ -178,7 +174,7 @@ func TestCreateDocument(t *testing.T) {
 		require.NoError(t, err)
 
 		for _, file := range files {
-			key := getKey(docID, version, file.FileName)
+			key := getKey(docID, file.Name(), docdb.ContentHash(file.FileData))
 			_, err = client.GetObject(t.Context(), &awss3.GetObjectInput{Bucket: &bucketName, Key: &key})
 			require.NoError(t, err)
 		}
@@ -189,7 +185,6 @@ func TestCreateDocument(t *testing.T) {
 		err := documentStore.CreateDocument(
 			t.Context(),
 			uu.IDv4(),
-			docdb.NewVersionTime(t.Context()),
 			[]fs.FileReader{&fs.MemFile{}},
 		)
 
@@ -198,7 +193,7 @@ func TestCreateDocument(t *testing.T) {
 	})
 }
 
-func TestDocumentVersionFileProvider(t *testing.T) {
+func TestDocumentHashFileProvider(t *testing.T) {
 	client := fixtureS3Client(t)
 	documentStore := fixtureDocumentStore(t)
 
@@ -209,24 +204,19 @@ func TestDocumentVersionFileProvider(t *testing.T) {
 		docID2 := uu.IDFrom("14f8f36c-8778-4567-9c8d-b1b998cb525a")
 		filename1 := "doc1.pdf"
 		filename2 := "doc2.pdf"
-		filename3 := "doc3.pdf"
-		filename4 := "doc4.pdf"
-		filename5 := "doc4.pdf"
-		version1 := docdb.NewVersionTime(t.Context())
-		version2 := docdb.NewVersionTime(t.Context())
-		version2.Time = time.Now().Add(1 * time.Second)
 		content1 := []byte("asd")
 		content2 := []byte("asdasd")
-		require.NotEqual(t, version1, version2)
 		createDoc := fixtureCreateDocument(t, client, bucketName)
-		createDoc(docID1, version1, filename1, content1) // expected
-		createDoc(docID1, version1, filename2, content2) // expected
-		createDoc(docID1, version2, filename3, content1)
-		createDoc(docID1, version2, filename4, content1)
-		createDoc(docID2, version1, filename5, content1)
+		createDoc(docID1, filename1, content1) // expected
+		createDoc(docID1, filename2, content2) // expected
+		createDoc(docID2, filename1, content1)
+		hashes := []string{
+			docdb.ContentHash(content1),
+			docdb.ContentHash(content2),
+		}
 
 		// when
-		fileProvider, err := documentStore.DocumentVersionFileProvider(t.Context(), docID1, version1)
+		fileProvider, err := documentStore.DocumentHashFileProvider(t.Context(), docID1, hashes)
 
 		// then
 		require.NoError(t, err)
@@ -253,7 +243,7 @@ func TestDocumentVersionFileProvider(t *testing.T) {
 	})
 }
 
-func TestReadDocumentVersionFile(t *testing.T) {
+func TestReadDocumentHashFile(t *testing.T) {
 	client := fixtureS3Client(t)
 	documentStore := fixtureDocumentStore(t)
 
@@ -262,17 +252,17 @@ func TestReadDocumentVersionFile(t *testing.T) {
 		_, bucketName := fixtureCleanBucket(t, client)
 		docID := uu.IDFrom("45afa44f-3b8a-4b54-99dd-28ca92bb17cd")
 		filename := "doc1.pdf"
-		version := docdb.NewVersionTime(t.Context())
-		contents := []byte("asdasd")
+		content := []byte("asdasd")
 		createDocument := fixtureCreateDocument(t, client, bucketName)
-		createDocument(docID, version, filename, contents)
+		createDocument(docID, filename, content)
+		hash := docdb.ContentHash(content)
 
 		// when
-		result, err := documentStore.ReadDocumentVersionFile(t.Context(), docID, version, filename)
+		result, err := documentStore.ReadDocumentHashFile(t.Context(), docID, filename, hash)
 
 		// then
 		require.NoError(t, err)
-		require.Equal(t, contents, result)
+		require.Equal(t, content, result)
 	})
 
 	t.Run("Returns error if file does not exists", func(t *testing.T) {
@@ -280,10 +270,9 @@ func TestReadDocumentVersionFile(t *testing.T) {
 		fixtureCleanBucket(t, client)
 		docID := uu.IDFrom("24e4397c-c3bf-4e55-b993-ebef77107f17")
 		filename := "doc1.pdf"
-		version := docdb.NewVersionTime(t.Context())
 
 		// when
-		_, err := documentStore.ReadDocumentVersionFile(t.Context(), docID, version, filename)
+		_, err := documentStore.ReadDocumentHashFile(t.Context(), docID, filename, "hash")
 
 		// then
 		require.Error(t, err)
@@ -300,15 +289,13 @@ func TestDeleteDocument(t *testing.T) {
 		createDocument := fixtureCreateDocument(t, client, bucketName)
 		docID1 := uu.IDFrom("c44677a0-d835-4ca5-9e27-4356296f94b2")
 		docID2 := uu.IDFrom("b1c3b01f-7c5b-45e4-b5c4-b5c10e38c43a")
-		version1 := docdb.NewVersionTime(t.Context())
-		version2 := docdb.NewVersionTime(t.Context())
-		version2.Time = time.Now().Add(1 * time.Second)
 		filename1 := "doc1.pdf"
 		filename2 := "doc2.pdf"
-		createDocument(docID1, version1, filename1, []byte("asd"))
-		createDocument(docID1, version1, filename2, []byte("asd"))
-		createDocument(docID1, version2, filename1, []byte("asd"))
-		createDocument(docID2, version1, filename1, []byte("asd")) // shouldn't be deleted
+		content := []byte("asd")
+		hash := docdb.ContentHash(content)
+		createDocument(docID1, filename1, []byte("asd"))
+		createDocument(docID1, filename2, []byte("asd"))
+		createDocument(docID2, filename1, []byte("asd")) // shouldn't be deleted
 		exists := fixtureObjectExists(t, client, bucketName)
 
 		// when
@@ -316,10 +303,9 @@ func TestDeleteDocument(t *testing.T) {
 
 		// then
 		require.NoError(t, err)
-		require.False(t, exists(docID1, version1, filename1))
-		require.False(t, exists(docID1, version1, filename2))
-		require.False(t, exists(docID1, version2, filename1))
-		require.True(t, exists(docID2, version1, filename1))
+		require.False(t, exists(docID1, filename1, hash))
+		require.False(t, exists(docID1, filename2, hash))
+		require.True(t, exists(docID2, filename1, hash))
 	})
 
 	t.Run("Returns error if bucket does not exist", func(t *testing.T) {
@@ -341,34 +327,39 @@ func TestDeleteDocumentVersion(t *testing.T) {
 		createDocument := fixtureCreateDocument(t, client, bucketName)
 		docID1 := uu.IDFrom("10a93961-cf1a-4352-bca2-49c8d46dbdd1")
 		docID2 := uu.IDFrom("cd1d5e85-08fa-4408-9a2f-a4c6013a7dad")
-		version1 := docdb.NewVersionTime(t.Context())
-		version2 := docdb.NewVersionTime(t.Context())
-		version2.Time = time.Now().Add(1 * time.Second)
 		filename1 := "doc1.pdf"
 		filename2 := "doc2.pdf"
-		createDocument(docID1, version1, filename1, []byte("asd"))
-		createDocument(docID1, version1, filename2, []byte("asd"))
-		createDocument(docID1, version2, filename1, []byte("asd")) // shouldn't be deleted
-		createDocument(docID2, version1, filename1, []byte("asd")) // shouldn't be deleted
+		content1 := []byte("asd1")
+		content2 := []byte("asd2")
+		content3 := []byte("asd3")
+		content4 := []byte("asd4")
+		hash1 := docdb.ContentHash(content1)
+		hash2 := docdb.ContentHash(content2)
+		hash3 := docdb.ContentHash(content3)
+		hash4 := docdb.ContentHash(content4)
+		createDocument(docID1, filename1, content1)
+		createDocument(docID1, filename2, content2)
+		createDocument(docID1, filename2, content3) // shouldn't be deleted
+		createDocument(docID2, filename1, content4) // shouldn't be deleted
 		exists := fixtureObjectExists(t, client, bucketName)
 
 		// when
-		err := documentStore.DeleteDocumentVersion(t.Context(), docID1, version1)
+		err := documentStore.DeleteDocumentHashes(t.Context(), docID1, []string{hash1, hash2})
 
 		// then
 		require.NoError(t, err)
-		require.False(t, exists(docID1, version1, filename1))
-		require.False(t, exists(docID1, version1, filename2))
-		require.True(t, exists(docID1, version2, filename1))
-		require.True(t, exists(docID2, version1, filename1))
+		require.False(t, exists(docID1, filename1, hash1))
+		require.False(t, exists(docID1, filename2, hash2))
+		require.True(t, exists(docID1, filename2, hash3))
+		require.True(t, exists(docID2, filename1, hash4))
 	})
 
 	t.Run("Returns error if bucket does not exist", func(t *testing.T) {
 		// when
-		err := documentStore.DeleteDocumentVersion(
+		err := documentStore.DeleteDocumentHashes(
 			t.Context(),
 			uu.IDFrom("6920916f-8684-4d7e-9114-7b7409b2d279"),
-			docdb.NewVersionTime(t.Context()),
+			[]string{"asd"},
 		)
 
 		// then
@@ -376,13 +367,13 @@ func TestDeleteDocumentVersion(t *testing.T) {
 	})
 }
 
-func fixtureObjectExists(t *testing.T, client *awss3.Client, bucketName string) func(docID uu.ID, version docdb.VersionTime, filename string) bool {
-	return func(docID uu.ID, version docdb.VersionTime, filename string) bool {
+func fixtureObjectExists(t *testing.T, client *awss3.Client, bucketName string) func(docID uu.ID, filename, hash string) bool {
+	return func(docID uu.ID, filename, hash string) bool {
 		_, err := client.GetObject(
 			t.Context(),
 			&awss3.GetObjectInput{
 				Bucket: &bucketName,
-				Key:    p(getKey(docID, version, filename)),
+				Key:    p(getKey(docID, filename, hash)),
 			},
 		)
 
@@ -480,18 +471,18 @@ func fixtureCreateDocument(
 	bucketName string,
 ) func(
 	docID uu.ID,
-	version docdb.VersionTime,
 	filename string,
 	content []byte,
 ) {
 
-	return func(docID uu.ID, version docdb.VersionTime, filename string, content []byte) {
+	return func(docID uu.ID, filename string, content []byte) {
 		t.Helper()
+		hash := docdb.ContentHash(content)
 		_, err := client.PutObject(
 			t.Context(),
 			&awss3.PutObjectInput{
 				Bucket: p(bucketName),
-				Key:    p(getKey(docID, version, filename)),
+				Key:    p(getKey(docID, filename, hash)),
 				Body:   bytes.NewReader(content),
 			},
 		)

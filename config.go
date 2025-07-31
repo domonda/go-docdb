@@ -9,16 +9,16 @@ import (
 var (
 	log = rootlog.NewPackageLogger()
 
-	conn = NewConnWithError(errors.New("docdb connection not configured"))
+	globalConn = NewConnWithError(errors.New("docdb connection not configured"))
 )
 
 // Configure the database connection
 func Configure(db Conn) {
-	conn = db
+	globalConn = db
 }
 
 // GetConn returns the configured database connection
-func GetConn() Conn { return conn }
+func GetConn() Conn { return globalConn }
 
 // func GetDebugFileAccessConnOrNil() DebugFileAccessConn {
 // 	d, _ := conn.(DebugFileAccessConn)
