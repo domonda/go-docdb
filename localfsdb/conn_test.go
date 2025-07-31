@@ -1,4 +1,4 @@
-package docdb_test
+package localfsdb_test
 
 import (
 	"context"

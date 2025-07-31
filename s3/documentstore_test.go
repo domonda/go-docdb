@@ -20,7 +20,7 @@ import (
 
 func TestDocumentExists(t *testing.T) {
 	client := fixtureS3Client(t)
-	documentStore := fixtureDocumentStore(t)
+	documentStore := FixtureDocumentStore(t)
 
 	scenarios := []struct {
 		name           string
@@ -56,11 +56,11 @@ func TestDocumentExists(t *testing.T) {
 			// given
 			bucketName := ""
 			if scenario.bucketExists {
-				_, bucketName = fixtureCleanBucket(t, client)
+				_, bucketName = FixtureCleanBucket(t, client)
 			}
 			documentID := uu.IDFrom("25a3eabf-6676-4c44-ae8a-a8007d0f6f1a")
 			filename := "doc.pdf"
-			createDocument := fixtureCreateDocument(t, client, bucketName)
+			createDocument := FixtureCreateDocument(t, client, bucketName)
 			data := []byte("data")
 
 			if scenario.bucketExists && scenario.documentExists {
@@ -79,7 +79,7 @@ func TestDocumentExists(t *testing.T) {
 
 func TestEnumDocumentIDs(t *testing.T) {
 	client := fixtureS3Client(t)
-	documentStore := fixtureDocumentStore(t)
+	documentStore := FixtureDocumentStore(t)
 
 	t.Run("Iterates over fetched keys", func(t *testing.T) {
 		// given
@@ -89,8 +89,8 @@ func TestEnumDocumentIDs(t *testing.T) {
 
 		t.Cleanup(func() { timeout.Stop() })
 
-		_, bucketName := fixtureCleanBucket(t, client)
-		createDocument := fixtureCreateDocument(t, client, bucketName)
+		_, bucketName := FixtureCleanBucket(t, client)
+		createDocument := FixtureCreateDocument(t, client, bucketName)
 
 		// max keys = 1000, this ensures pagination works correctly, because 501 * 2 = 1002
 		numDocuments := 501
@@ -116,10 +116,10 @@ func TestEnumDocumentIDs(t *testing.T) {
 
 	t.Run("Returns error from callback", func(t *testing.T) {
 		// given
-		_, bucketName := fixtureCleanBucket(t, client)
+		_, bucketName := FixtureCleanBucket(t, client)
 		filename := "doc.pdf"
 		docID := uu.IDFrom("637c3457-f243-4ae6-b3b0-4182654832bc")
-		createDocument := fixtureCreateDocument(t, client, bucketName)
+		createDocument := FixtureCreateDocument(t, client, bucketName)
 		createDocument(docID, filename, []byte("asd"))
 
 		// when
@@ -145,11 +145,11 @@ func TestEnumDocumentIDs(t *testing.T) {
 
 func TestCreateDocument(t *testing.T) {
 	client := fixtureS3Client(t)
-	documentStore := fixtureDocumentStore(t)
+	documentStore := FixtureDocumentStore(t)
 
 	t.Run("Saves files", func(t *testing.T) {
 		// given
-		_, bucketName := fixtureCleanBucket(t, client)
+		_, bucketName := FixtureCleanBucket(t, client)
 		docID := uu.IDFrom("40224cda-26d3-4691-ad4a-97abc65230c1")
 
 		files := []*fs.MemFile{
@@ -195,18 +195,18 @@ func TestCreateDocument(t *testing.T) {
 
 func TestDocumentHashFileProvider(t *testing.T) {
 	client := fixtureS3Client(t)
-	documentStore := fixtureDocumentStore(t)
+	documentStore := FixtureDocumentStore(t)
 
 	t.Run("Returns proper versions", func(t *testing.T) {
 		// given
-		_, bucketName := fixtureCleanBucket(t, client)
+		_, bucketName := FixtureCleanBucket(t, client)
 		docID1 := uu.IDFrom("531a747b-a814-47a9-90cb-0d59ce52df7e")
 		docID2 := uu.IDFrom("14f8f36c-8778-4567-9c8d-b1b998cb525a")
 		filename1 := "doc1.pdf"
 		filename2 := "doc2.pdf"
 		content1 := []byte("asd")
 		content2 := []byte("asdasd")
-		createDoc := fixtureCreateDocument(t, client, bucketName)
+		createDoc := FixtureCreateDocument(t, client, bucketName)
 		createDoc(docID1, filename1, content1) // expected
 		createDoc(docID1, filename2, content2) // expected
 		createDoc(docID2, filename1, content1)
@@ -245,15 +245,15 @@ func TestDocumentHashFileProvider(t *testing.T) {
 
 func TestReadDocumentHashFile(t *testing.T) {
 	client := fixtureS3Client(t)
-	documentStore := fixtureDocumentStore(t)
+	documentStore := FixtureDocumentStore(t)
 
 	t.Run("Returns file contents", func(t *testing.T) {
 		// given
-		_, bucketName := fixtureCleanBucket(t, client)
+		_, bucketName := FixtureCleanBucket(t, client)
 		docID := uu.IDFrom("45afa44f-3b8a-4b54-99dd-28ca92bb17cd")
 		filename := "doc1.pdf"
 		content := []byte("asdasd")
-		createDocument := fixtureCreateDocument(t, client, bucketName)
+		createDocument := FixtureCreateDocument(t, client, bucketName)
 		createDocument(docID, filename, content)
 		hash := docdb.ContentHash(content)
 
@@ -267,7 +267,7 @@ func TestReadDocumentHashFile(t *testing.T) {
 
 	t.Run("Returns error if file does not exists", func(t *testing.T) {
 		// given
-		fixtureCleanBucket(t, client)
+		FixtureCleanBucket(t, client)
 		docID := uu.IDFrom("24e4397c-c3bf-4e55-b993-ebef77107f17")
 		filename := "doc1.pdf"
 
@@ -281,12 +281,12 @@ func TestReadDocumentHashFile(t *testing.T) {
 
 func TestDeleteDocument(t *testing.T) {
 	client := fixtureS3Client(t)
-	documentStore := fixtureDocumentStore(t)
+	documentStore := FixtureDocumentStore(t)
 
 	t.Run("Deletes all objects belonging to a document", func(t *testing.T) {
 		// given
-		_, bucketName := fixtureCleanBucket(t, client)
-		createDocument := fixtureCreateDocument(t, client, bucketName)
+		_, bucketName := FixtureCleanBucket(t, client)
+		createDocument := FixtureCreateDocument(t, client, bucketName)
 		docID1 := uu.IDFrom("c44677a0-d835-4ca5-9e27-4356296f94b2")
 		docID2 := uu.IDFrom("b1c3b01f-7c5b-45e4-b5c4-b5c10e38c43a")
 		filename1 := "doc1.pdf"
@@ -296,7 +296,7 @@ func TestDeleteDocument(t *testing.T) {
 		createDocument(docID1, filename1, []byte("asd"))
 		createDocument(docID1, filename2, []byte("asd"))
 		createDocument(docID2, filename1, []byte("asd")) // shouldn't be deleted
-		exists := fixtureObjectExists(t, client, bucketName)
+		exists := FixtureObjectExists(t, client, bucketName)
 
 		// when
 		err := documentStore.DeleteDocument(t.Context(), docID1)
@@ -319,12 +319,12 @@ func TestDeleteDocument(t *testing.T) {
 
 func TestDeleteDocumentVersion(t *testing.T) {
 	client := fixtureS3Client(t)
-	documentStore := fixtureDocumentStore(t)
+	documentStore := FixtureDocumentStore(t)
 
 	t.Run("Deletes all objects belonging to a document version", func(t *testing.T) {
 		// given
-		_, bucketName := fixtureCleanBucket(t, client)
-		createDocument := fixtureCreateDocument(t, client, bucketName)
+		_, bucketName := FixtureCleanBucket(t, client)
+		createDocument := FixtureCreateDocument(t, client, bucketName)
 		docID1 := uu.IDFrom("10a93961-cf1a-4352-bca2-49c8d46dbdd1")
 		docID2 := uu.IDFrom("cd1d5e85-08fa-4408-9a2f-a4c6013a7dad")
 		filename1 := "doc1.pdf"
@@ -341,7 +341,7 @@ func TestDeleteDocumentVersion(t *testing.T) {
 		createDocument(docID1, filename2, content2)
 		createDocument(docID1, filename2, content3) // shouldn't be deleted
 		createDocument(docID2, filename1, content4) // shouldn't be deleted
-		exists := fixtureObjectExists(t, client, bucketName)
+		exists := FixtureObjectExists(t, client, bucketName)
 
 		// when
 		err := documentStore.DeleteDocumentHashes(t.Context(), docID1, []string{hash1, hash2})
@@ -367,7 +367,7 @@ func TestDeleteDocumentVersion(t *testing.T) {
 	})
 }
 
-func fixtureObjectExists(t *testing.T, client *awss3.Client, bucketName string) func(docID uu.ID, filename, hash string) bool {
+func FixtureObjectExists(t *testing.T, client *awss3.Client, bucketName string) func(docID uu.ID, filename, hash string) bool {
 	return func(docID uu.ID, filename, hash string) bool {
 		_, err := client.GetObject(
 			t.Context(),
@@ -381,7 +381,7 @@ func fixtureObjectExists(t *testing.T, client *awss3.Client, bucketName string) 
 	}
 }
 
-func fixtureCleanBucket(t *testing.T, client *awss3.Client) (bucket *awss3.CreateBucketOutput, bucketName string) {
+func FixtureCleanBucket(t *testing.T, client *awss3.Client) (bucket *awss3.CreateBucketOutput, bucketName string) {
 	t.Helper()
 	bucketName = os.Getenv("BUCKET_NAME")
 
@@ -445,7 +445,7 @@ func fixtureCleanBucket(t *testing.T, client *awss3.Client) (bucket *awss3.Creat
 	return bucket, bucketName
 }
 
-func fixtureDocumentStore(t *testing.T) docdb.DocumentStore {
+func FixtureDocumentStore(t *testing.T) docdb.DocumentStore {
 	t.Helper()
 	documentStore, err := NewS3DocumentStore(t.Context(), os.Getenv("BUCKET_NAME"))
 	if err != nil {
@@ -465,7 +465,7 @@ func fixtureS3Client(t *testing.T) *awss3.Client {
 	return client
 }
 
-func fixtureCreateDocument(
+func FixtureCreateDocument(
 	t *testing.T,
 	client *awss3.Client,
 	bucketName string,

@@ -217,7 +217,6 @@ func (c *conn) ReadDocumentVersionFile(ctx context.Context, docID uu.ID, version
 	for _, item := range versionInfo.Files {
 		if item.Name == filename {
 			hash = item.Hash
-			filename = item.Name
 			break
 		}
 	}
@@ -324,42 +323,105 @@ func (c *conn) AddDocumentVersion(
 	createVersion CreateVersionFunc,
 	onNewVersion OnNewVersionFunc,
 ) (err error) {
-	// defer errs.WrapWithFuncParams(&err, ctx, docID, userID, reason, createVersion, onNewVersion)
+	defer errs.WrapWithFuncParams(&err, ctx, docID, userID, reason, createVersion, onNewVersion)
 
-	// if err = ctx.Err(); err != nil {
-	// 	return err
-	// }
-	// if err = docID.Validate(); err != nil {
-	// 	return err
-	// }
-	// if err = userID.Validate(); err != nil {
-	// 	return err
-	// }
-	// if createVersion == nil {
-	// 	return errs.New("nil createVersion func passed to AddDocumentVersion")
-	// }
+	if err = ctx.Err(); err != nil {
+		return err
+	}
+	if err = docID.Validate(); err != nil {
+		return err
+	}
+	if err = userID.Validate(); err != nil {
+		return err
+	}
+	if createVersion == nil {
+		return errs.New("nil createVersion func passed to AddDocumentVersion")
+	}
 
-	// latestVersionInfo, err := c.metadataStore.LatestDocumentVersionInfo(ctx, docID)
-	// if err != nil {
-	// 	return err
-	// }
+	latestVersionInfo, err := c.metadataStore.LatestDocumentVersionInfo(ctx, docID)
+	if err != nil {
+		return err
+	}
 
-	// fileProvider, err := c.documentStore.DocumentVersionFileProvider(ctx, docID, latestVersionInfo.Version)
-	// if err != nil {
-	// 	return err
-	// }
+	hashes := []string{}
+	for _, file := range latestVersionInfo.Files {
+		hashes = append(hashes, file.Hash)
+	}
 
-	// writeFiles, deleteFiles, newCompanyID, err := safelyCallCreateVersionFunc(
-	// 	ctx,
+	fileProvider, err := c.documentStore.DocumentHashFileProvider(ctx, docID, hashes)
+	if err != nil {
+		return err
+	}
+
+	writeFiles, _, _, err := safelyCallCreateVersionFunc(
+		ctx,
+		latestVersionInfo.Version,
+		fileProvider,
+		createVersion,
+	)
+	if err != nil {
+		return err
+	}
+
+	for _, f := range writeFiles {
+		if !f.Exists() {
+			return errs.Errorf("file returned for new version of document %s does not exist: %#v", docID, f)
+		}
+	}
+
+	newVersion := NewVersionTime(ctx)
+	if !newVersion.After(latestVersionInfo.Version) {
+		return errs.Errorf("new version %s not after previous version %s", newVersion, latestVersionInfo.Version)
+	}
+
+	if err = c.documentStore.CreateDocument(ctx, docID, writeFiles); err != nil {
+		return err
+	}
+
+	// // NewVersionInfo reads newVersionDir and prevVersionDir, this could be optimized
+	// // by copying and content hashing the files in one loop
+	// versionInfo, err := NewVersionInfo(
+	// 	companyID,
+	// 	docID,
+	// 	newVersion,
 	// 	latestVersionInfo.Version,
-	// 	fileProvider,
-	// 	createVersion,
+	// 	userID,
+	// 	reason,
 	// )
 	// if err != nil {
 	// 	return err
 	// }
 
-	return err
+	// if versionInfo.EqualFiles(prevVersionInfo) {
+	// 	return docdb.ErrNoChanges
+	// }
+
+	// err = versionInfo.WriteJSON(newVersionInfoFile)
+	// if err != nil {
+	// 	return err
+	// }
+
+	// // Change company as last step after everything else succeeded
+	// if companyID != prevVersionInfo.CompanyID {
+	// 	err = c.setDocumentCompanyID(ctx, docID, companyID)
+	// 	if err != nil {
+	// 		return err
+	// 	}
+	// }
+
+	// if onNewVersion != nil {
+	// 	err = safelyCallOnNewVersionFunc(ctx, versionInfo, onNewVersion)
+	// 	if err != nil {
+	// 		// Undo company change
+	// 		if companyID != prevVersionInfo.CompanyID {
+	// 			err = errors.Join(err, c.setDocumentCompanyID(ctx, docID, prevVersionInfo.CompanyID))
+	// 		}
+	// 		return err
+	// 	}
+	// }
+
+	return nil
+
 }
 
 func (c *conn) RestoreDocument(ctx context.Context, doc *HashedDocument, merge bool) error {
