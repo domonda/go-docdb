@@ -35,7 +35,8 @@ github.com/domonda/go-errs v0.0.0-20250603150208-71d6de0c48ea h1:jJkN+JvDKnzxM0y
 github.com/domonda/go-pretty v0.0.0-20250602142956-1b467adc6387 h1:ZSMYEHfFwpMlVJ+yzPXOSOfikWBNdzcnC0YxxNQxkDk=
 github.com/domonda/go-sqldb v0.0.0-20250526131900-d60a57e937c5 h1:pxhKcmFF1wh8nV8/HJt8w8vlhoDFjUkZgezfXfi8mIE=
 github.com/domonda/go-sqldb v0.0.0-20250526131900-d60a57e937c5/go.mod h1:oGbMc3BcP6RIod0AJ8VKJEHJUzEEe9OQEcc9vhW9GOw=
-github.com/domonda/go-types v0.0.0-20250610070846-52067ab2d5ab h1:/DDOyvD99NKY3ohrihzr0n1Z7NkL0tdb2Q2yZ/yDEAU=
+github.com/domonda/go-sqldb/pqconn v0.0.0-20250723122821-e867f71cc84c h1:+OdzLWjnBv2FlB7+26cKqm9mr1AOmwaF+iHQuHCPEHE=
+github.com/domonda/go-types v0.0.0-20250711130302-a138ad20cd49 h1:726lTBHv/+EGQ4CYeQPlSTgSBdzqMRbdcg4wUoUBv7c=
 github.com/domonda/golog v0.0.0-20250620142312-a23446a321e4 h1:xvEXsSzZC60MnNLv0t/EmekgutORS7qPjOzKtrogGpU=
 github.com/fsnotify/fsnotify v1.9.0 h1:2Ml+OJNzbYCTzsxtv8vKSFD9PbJjmhYF14k/jKC7S9k=
 github.com/fsnotify/fsnotify v1.9.0/go.mod h1:8jBTzvmWwFyi3Pb8djgCCO5IBqzKJ/Jwo8TRcHyHii0=

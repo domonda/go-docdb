@@ -1,0 +1,55 @@
+\echo
+\echo '=== schema/api.sql ==='
+\echo
+
+\ir api/auth.sql
+\ir api/company.sql
+\ir api/company_mutations.sql
+\ir api/user.sql
+\ir api/client_company_tag.sql
+\ir api/client_company_tag_mutations.sql
+\ir api/general_ledger_account.sql
+\ir api/accounting_instruction.sql
+\ir api/partner_account.sql
+\ir api/bank_account.sql
+\ir api/bank_transaction.sql
+\ir api/credit_card_account.sql
+\ir api/credit_card_transaction.sql
+\ir api/document_workflow.sql
+\ir api/document_workflow_step.sql
+\ir api/document_category.sql
+\ir api/document.sql
+\ir api/document_mutations.sql
+\ir api/filter_documents.sql
+\ir api/document_comment.sql
+\ir api/invoice.sql
+\ir api/invoice_item.sql
+\ir api/invoice_item_mutations.sql
+\ir api/invoice_accounting_item.sql
+\ir api/client_company_cost_center.sql
+\ir api/client_company_cost_unit.sql
+\ir api/invoice_accounting_item_cost_center.sql
+\ir api/invoice_accounting_item_cost_unit.sql
+\ir api/delivery_note.sql
+\ir api/delivery_note_mutations.sql
+\ir api/delivery_note_item.sql
+\ir api/invoice_delivery_note.sql
+\ir api/document_tag.sql
+\ir api/document_tag_mutations.sql
+\ir api/invoice_cost_center.sql
+\ir api/invoice_cost_unit.sql
+\ir api/currency_rate.sql
+\ir api/document_version.sql
+\ir api/document_version_file.sql
+\ir api/op_health_check.sql
+\ir api/money_account.sql
+\ir api/money_transaction.sql
+\ir api/document_money_transaction.sql
+\ir api/filter_money_transactions.sql
+\ir api/company_location.sql
+\ir api/real_estate_object.sql
+\ir api/object_class.sql
+\ir api/object_instance.sql
+\ir api/document_category_object_instance.sql
+\ir api/export.sql
+\ir api/document_workflow_state.sql

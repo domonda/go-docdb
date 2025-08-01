@@ -11,7 +11,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.84.1
 	github.com/domonda/go-errs v0.0.0-20250603150208-71d6de0c48ea
 	github.com/domonda/go-sqldb v0.0.0-20250526131900-d60a57e937c5
-	github.com/domonda/go-types v0.0.0-20250610070846-52067ab2d5ab
+	github.com/domonda/go-types v0.0.0-20250711130302-a138ad20cd49
 	github.com/domonda/golog v0.0.0-20250620142312-a23446a321e4
 	github.com/ungerik/go-fs v0.0.0-20250610091738-d3e54d2e9850
 )

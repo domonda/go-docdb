@@ -135,7 +135,7 @@ func (store *s3DocStore) CreateDocument(
 			ctx,
 			&awss3.PutObjectInput{
 				Bucket: &store.bucketName,
-				Key:    p(getKey(docID, file.Name(), hash)),
+				Key:    p(Key(docID, file.Name(), hash)),
 				Body:   bytes.NewReader(data),
 			},
 		); err != nil {
@@ -186,7 +186,7 @@ func (store *s3DocStore) ReadDocumentHashFile(
 		ctx,
 		&awss3.GetObjectInput{
 			Bucket: p(store.bucketName),
-			Key:    p(getKey(docID, filename, hash)),
+			Key:    p(Key(docID, filename, hash)),
 		},
 	)
 
@@ -259,7 +259,7 @@ func (store *s3DocStore) DeleteDocumentHashes(ctx context.Context, docID uu.ID, 
 	return err
 }
 
-func getKey(docID uu.ID, filename string, hash string) string {
+func Key(docID uu.ID, filename string, hash string) string {
 	return strings.Join([]string{docID.String(), filename, hash}, "/")
 }
 
