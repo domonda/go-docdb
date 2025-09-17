@@ -145,9 +145,9 @@ func TestS3WithPostgres(t *testing.T) {
 		t.Run("Saves files and metadata", func(t *testing.T) {
 			// given
 			_, bucketName := s3.FixtureCleanBucket(t, s3Client)
-			companyID := uu.IDFrom("6c19674a-05c6-439e-965f-a9f43f1ecf3c")
+			companyID := uu.IDFrom("7acda277-f07c-4975-bd12-d23deace6a9a") // domonda
 			docID := uu.IDFrom("40224cda-26d3-4691-ad4a-97abc65230c1")
-			userID := uu.IDFrom("6effbcb9-8e6f-4381-afac-90a62c54363f")
+			userID := uu.IDFrom("f7afb279-d9ea-46d5-a09a-7d3c067fc91a") // test
 			reason := "whatever"
 
 			files := []*fs.MemFile{
