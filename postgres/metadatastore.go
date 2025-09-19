@@ -2,23 +2,21 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/domonda/go-docdb"
-	"github.com/domonda/go-sqldb"
+	"github.com/domonda/go-sqldb/db"
 	"github.com/domonda/go-types/uu"
 	"github.com/ungerik/go-fs"
 )
 
-func NewMetadataStore(conn sqldb.Connection) docdb.MetadataStore {
-	return &postgresMetadataStore{
-		conn: conn,
-	}
+func NewMetadataStore() docdb.MetadataStore {
+	return &postgresMetadataStore{}
 }
 
-type postgresMetadataStore struct {
-	conn sqldb.Connection
-}
+type postgresMetadataStore struct{}
 
+// TODO
 func (store *postgresMetadataStore) CreateDocument(
 	ctx context.Context,
 	companyID,
@@ -30,13 +28,39 @@ func (store *postgresMetadataStore) CreateDocument(
 	return nil, nil
 }
 
-// TODO
 func (store *postgresMetadataStore) DocumentCompanyID(ctx context.Context, docID uu.ID) (companyID uu.ID, err error) {
-	return uu.ID{}, nil
+	return db.QueryValue[uu.ID](
+		ctx,
+		/* sql */ `
+		select client_company_id from docdb.document_version
+		where document_id = $1
+		order by version desc
+		limit 1
+		`,
+		docID,
+	)
 }
 
-// TODO
 func (store *postgresMetadataStore) SetDocumentCompanyID(ctx context.Context, docID, companyID uu.ID) error {
+	ids := []uu.ID{}
+	err := db.QueryRows(
+		ctx,
+		/* sql */ `update docdb.document_version
+		set client_company_id = $1
+		where document_id = $2
+		returning docdb.document_version.id`,
+		companyID,
+		docID,
+	).ScanSlice(&ids)
+
+	if err != nil {
+		return err
+	}
+
+	if len(ids) == 0 {
+		return sql.ErrNoRows
+	}
+
 	return nil
 }
 
