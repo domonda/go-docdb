@@ -1,6 +1,7 @@
 package postgres_test
 
 import (
+	"context"
 	"database/sql"
 	"os"
 	"reflect"
@@ -29,10 +30,11 @@ func TestDocumentCompanyID(t *testing.T) {
 			"DocumentID": docVersion1.DocumentID,
 			"Version":    time.Now().Add(time.Second),
 		})
+		ctx := fixtureCtxWithTestTx.Value(t)
 
 		// when
 		clientCompanyId, err := store.DocumentCompanyID(
-			t.Context(),
+			ctx,
 			docVersion1.DocumentID,
 		)
 
@@ -44,10 +46,11 @@ func TestDocumentCompanyID(t *testing.T) {
 	t.Run("Returns error if document not found", func(t *testing.T) {
 		// given
 		store := fixtureStore.Value(t)
+		ctx := fixtureCtxWithTestTx.Value(t)
 
 		// when
 		_, err := store.DocumentCompanyID(
-			t.Context(),
+			ctx,
 			uu.IDv7(),
 		)
 
@@ -63,16 +66,16 @@ func TestSetDocumentCompanyID(t *testing.T) {
 		populator := fixturePopulator.Value(t)
 		docVersion1 := populator.DocumentVersion()
 		populator.DocumentVersion(map[string]any{"DocumentID": docVersion1.DocumentID})
-
+		ctx := fixtureCtxWithTestTx.Value(t)
 		// when
 		newCompanyID := uu.IDv7()
-		err := store.SetDocumentCompanyID(t.Context(), docVersion1.DocumentID, newCompanyID)
+		err := store.SetDocumentCompanyID(ctx, docVersion1.DocumentID, newCompanyID)
 
 		// then
 		require.NoError(t, err)
 
 		savedDocumentVersions, err := db.QueryStructSlice[postgres.DocumentVersion](
-			t.Context(),
+			ctx,
 			/* sql */ `select * from docdb.document_version where document_id = $1`,
 			docVersion1.DocumentID,
 		)
@@ -86,9 +89,10 @@ func TestSetDocumentCompanyID(t *testing.T) {
 	t.Run("Returns error if document version does not exist", func(t *testing.T) {
 		// given
 		store := fixtureStore.Value(t)
+		ctx := fixtureCtxWithTestTx.Value(t)
 
 		// when
-		err := store.SetDocumentCompanyID(t.Context(), uu.IDv7(), uu.IDv7())
+		err := store.SetDocumentCompanyID(ctx, uu.IDv7(), uu.IDv7())
 
 		// then
 		require.ErrorIs(t, err, sql.ErrNoRows)
@@ -96,11 +100,10 @@ func TestSetDocumentCompanyID(t *testing.T) {
 }
 
 var fixtureStore = fix.New(func(t *testing.T) docdb.MetadataStore {
-	fixtureTestTx.Value(t)
 	return postgres.NewMetadataStore()
 })
 
-var fixtureTestTx = fix.New(func(t *testing.T) any {
+var fixtureCtxWithTestTx = fix.New(func(t *testing.T) context.Context {
 	config := &sqldb.Config{
 		Driver:   "postgres",
 		Host:     "localhost",
@@ -122,18 +125,22 @@ var fixtureTestTx = fix.New(func(t *testing.T) any {
 		return nil
 	}
 
-	db.SetConn(conn)
+	ctx := db.ContextWithConn(t.Context(), conn)
+
 	t.Cleanup(func() { conn.Rollback() })
-	return nil
+	return ctx
 })
 
 var fixturePopulator = fix.New(func(t *testing.T) Populator {
-	fixtureTestTx.Value(t)
-	return Populator{t}
+	return Populator{
+		t:   t,
+		ctx: fixtureCtxWithTestTx.Value(t),
+	}
 })
 
 type Populator struct {
-	t *testing.T
+	t   *testing.T
+	ctx context.Context
 }
 
 func (p *Populator) DocumentVersion(data ...map[string]any) *postgres.DocumentVersion {
@@ -161,7 +168,7 @@ func insertRecordWithExtraData[T any](
 	)
 
 	err := db.InsertStruct(
-		p.t.Context(),
+		p.ctx,
 		table,
 		baseRecord,
 	)
