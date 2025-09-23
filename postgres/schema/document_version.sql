@@ -7,7 +7,7 @@ create table docdb.document_version (
     id uuid primary key,
 
     document_id uuid not null, -- references public.document(id) on delete cascade (only in prod, here the public schema is out of scope)
-    client_company_id uuid not null, -- references public.dcument(client_company_id) on delete cascade (only in prod, here the public schema is out of scope)
+    company_id uuid not null, -- references public.dcument(company_id) on delete cascade (only in prod, here the public schema is out of scope)
     version     docdb.version_time not null,
     unique(document_id, version),
 

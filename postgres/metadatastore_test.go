@@ -19,6 +19,7 @@ import (
 	"github.com/domonda/go-sqldb/pqconn"
 	"github.com/domonda/go-types/uu"
 	"github.com/stretchr/testify/require"
+	"github.com/ungerik/go-fs"
 )
 
 var (
@@ -33,6 +34,74 @@ func TestMain(m *testing.M) {
 	m.Run()
 
 	conn.Close()
+}
+
+func TestCreateDocument(t *testing.T) {
+	t.Run("Creates document version with proper file metadata", func(t *testing.T) {
+		// given
+		ctx := fixtureCtxWithTestTx.Value(t)
+
+		memFiles := []*fs.MemFile{
+			{
+				FileName: "doc1.pdf",
+				FileData: []byte("a"),
+			},
+			{
+				FileName: "doc2.pdf",
+				FileData: []byte("b"),
+			},
+		}
+
+		// when
+		versionInfo, err := store.CreateDocument(
+			ctx,
+			uu.IDv7(),
+			uu.IDv7(),
+			uu.IDv7(),
+			"reason",
+			[]fs.FileReader{memFiles[0], memFiles[1]},
+		)
+
+		// then
+		require.NoError(t, err)
+		require.Equal(t, []string{memFiles[0].FileName, memFiles[1].FileName}, versionInfo.AddedFiles)
+		require.Nil(t, versionInfo.ModifiedFiles)
+		require.Nil(t, versionInfo.RemovedFiles)
+		require.Equal(t, docdb.VersionTime{}, versionInfo.PrevVersion)
+
+		savedFiles, err := db.QueryStructSlice[postgres.DocumentVersionFile](
+			ctx,
+			/* sql */ `
+			select dvf.* from docdb.document_version_file dvf
+			join docdb.document_version dv
+				on dv.document_id = $1
+				and dv.company_id = $2
+				and dv.version = $3
+				and dvf.document_version_id = dv.id
+			order by dvf.name
+			`,
+			versionInfo.DocID,
+			versionInfo.CompanyID,
+			versionInfo.Version,
+		)
+
+		require.NoError(t, err)
+		require.Equal(t, 2, len(savedFiles))
+
+		require.Equal(t, memFiles[0].FileName, savedFiles[0].Name)
+		require.Equal(
+			t,
+			docdb.ContentHash(memFiles[0].FileData),
+			savedFiles[0].Hash,
+		)
+
+		require.Equal(t, memFiles[1].FileName, savedFiles[1].Name)
+		require.Equal(
+			t,
+			docdb.ContentHash(memFiles[1].FileData),
+			savedFiles[1].Hash,
+		)
+	})
 }
 
 func TestDocumentCompanyID(t *testing.T) {
@@ -56,7 +125,7 @@ func TestDocumentCompanyID(t *testing.T) {
 
 		// then
 		require.NoError(t, err)
-		require.Equal(t, docVersion2.ClientCompanyID, clientCompanyId)
+		require.Equal(t, docVersion2.CompanyID, clientCompanyId)
 	})
 
 	t.Run("Returns error if document not found", func(t *testing.T) {
@@ -100,7 +169,7 @@ func TestSetDocumentCompanyID(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 2, len(savedDocumentVersions))
 		for i := range 2 {
-			require.Equal(t, newCompanyID, savedDocumentVersions[i].ClientCompanyID)
+			require.Equal(t, newCompanyID, savedDocumentVersions[i].CompanyID)
 		}
 	})
 
@@ -159,13 +228,13 @@ func TestEnumCompanyDocumentIDs(t *testing.T) {
 		ctx := fixtureCtxWithTestTx.Value(t)
 		doc1Version1 := populator.DocumentVersion(map[string]any{"DocumentID": uu.IDFrom("a3c60853-022c-403d-85cc-6ea146ec6a4a")})
 		populator.DocumentVersion(map[string]any{
-			"DocumentID":      doc1Version1.DocumentID,
-			"ClientCompanyID": doc1Version1.ClientCompanyID,
-			"Version":         docdb.VersionTimeFrom(time.Now().Add(time.Second)),
+			"DocumentID": doc1Version1.DocumentID,
+			"CompanyID":  doc1Version1.CompanyID,
+			"Version":    docdb.VersionTimeFrom(time.Now().Add(time.Second)),
 		})
 		doc2Version1 := populator.DocumentVersion(map[string]any{
-			"DocumentID":      uu.IDFrom("c7e67e60-9548-43c6-83be-55cb736a5761"),
-			"ClientCompanyID": doc1Version1.ClientCompanyID,
+			"DocumentID": uu.IDFrom("c7e67e60-9548-43c6-83be-55cb736a5761"),
+			"CompanyID":  doc1Version1.CompanyID,
 		})
 
 		// not wanted
@@ -175,7 +244,7 @@ func TestEnumCompanyDocumentIDs(t *testing.T) {
 		processedDocumentIDs := []uu.ID{}
 		store.EnumCompanyDocumentIDs(
 			ctx,
-			doc1Version1.ClientCompanyID,
+			doc1Version1.CompanyID,
 			func(ctx context.Context, i uu.ID) error {
 				processedDocumentIDs = append(processedDocumentIDs, i)
 				return nil
@@ -213,7 +282,7 @@ func TestEnumCompanyDocumentIDs(t *testing.T) {
 		expectedErr := errors.New("bug")
 		err := store.EnumCompanyDocumentIDs(
 			ctx,
-			docVersion.ClientCompanyID,
+			docVersion.CompanyID,
 			func(ctx context.Context, i uu.ID) error {
 				return expectedErr
 			},
@@ -282,7 +351,7 @@ func TestDocumentVersionInfo(t *testing.T) {
 		// then
 		require.NoError(t, err)
 		require.Equal(t, docVersionFile1.DocumentVersion.DocumentID, versionInfo.DocID)
-		require.Equal(t, docVersionFile1.DocumentVersion.ClientCompanyID, versionInfo.CompanyID)
+		require.Equal(t, docVersionFile1.DocumentVersion.CompanyID, versionInfo.CompanyID)
 		require.Equal(t, docVersionFile1.DocumentVersion.Version, versionInfo.Version)
 		require.Equal(t, *docVersionFile1.DocumentVersion.PrevVersion, versionInfo.PrevVersion)
 		require.Equal(t, docVersionFile1.DocumentVersion.AddedFiles, versionInfo.AddedFiles)
@@ -347,7 +416,7 @@ func TestLatestDocumentVersionInfo(t *testing.T) {
 		// then
 		require.NoError(t, err)
 		require.Equal(t, docVersion2.DocumentID, versionInfo.DocID)
-		require.Equal(t, docVersion2.ClientCompanyID, versionInfo.CompanyID)
+		require.Equal(t, docVersion2.CompanyID, versionInfo.CompanyID)
 		require.Equal(t, docVersion2.Version, versionInfo.Version)
 		require.Equal(t, *docVersion2.PrevVersion, versionInfo.PrevVersion)
 		require.Equal(t, docVersion2.AddedFiles, versionInfo.AddedFiles)
@@ -512,16 +581,16 @@ type Populator struct {
 func (populator *Populator) DocumentVersion(data ...map[string]any) *postgres.DocumentVersion {
 	return insertRecordWithExtraData(
 		postgres.DocumentVersion{
-			ID:              uu.IDv7(),
-			DocumentID:      uu.IDv7(),
-			ClientCompanyID: uu.IDv7(),
-			Version:         docdb.VersionTimeFrom(time.Now()),
-			PrevVersion:     p(docdb.VersionTimeFrom(time.Now().Add(-time.Second))),
-			CommitUserID:    uu.IDv7(),
-			CommitReason:    "test",
-			AddedFiles:      []string{randomDocName(), randomDocName()},
-			ModifiedFiles:   []string{randomDocName(), randomDocName()},
-			RemovedFiles:    []string{randomDocName(), randomDocName()},
+			ID:            uu.IDv7(),
+			DocumentID:    uu.IDv7(),
+			CompanyID:     uu.IDv7(),
+			Version:       docdb.VersionTimeFrom(time.Now()),
+			PrevVersion:   p(docdb.VersionTimeFrom(time.Now().Add(-time.Second))),
+			CommitUserID:  uu.IDv7(),
+			CommitReason:  "test",
+			AddedFiles:    []string{randomDocName(), randomDocName()},
+			ModifiedFiles: []string{randomDocName(), randomDocName()},
+			RemovedFiles:  []string{randomDocName(), randomDocName()},
 		}, populator, "docdb.document_version", data...)
 }
 

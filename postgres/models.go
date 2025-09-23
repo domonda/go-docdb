@@ -24,14 +24,14 @@ type DocumentVersionFile struct {
 }
 
 type DocumentVersion struct {
-	ID              uu.ID              `db:"id"`
-	DocumentID      uu.ID              `db:"document_id"`
-	ClientCompanyID uu.ID              `db:"client_company_id"`
-	Version         docdb.VersionTime  `db:"version"`
-	PrevVersion     *docdb.VersionTime `db:"prev_version"`
-	CommitUserID    uu.ID              `db:"commit_user_id"`
-	CommitReason    string             `db:"commit_reason"`
-	AddedFiles      []string           `db:"added_files"`
-	RemovedFiles    []string           `db:"removed_files"`
-	ModifiedFiles   []string           `db:"modified_files"`
+	ID            uu.ID              `db:"id"`
+	DocumentID    uu.ID              `db:"document_id"`
+	CompanyID     uu.ID              `db:"company_id"`
+	Version       docdb.VersionTime  `db:"version"`
+	PrevVersion   *docdb.VersionTime `db:"prev_version"`
+	CommitUserID  uu.ID              `db:"commit_user_id"`
+	CommitReason  string             `db:"commit_reason"`
+	AddedFiles    []string           `db:"added_files"`
+	RemovedFiles  []string           `db:"removed_files"`
+	ModifiedFiles []string           `db:"modified_files"`
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/domonda/go-docdb"
 	"github.com/domonda/go-sqldb/db"
@@ -18,7 +19,6 @@ func NewMetadataStore() docdb.MetadataStore {
 
 type postgresMetadataStore struct{}
 
-// TODO
 func (store *postgresMetadataStore) CreateDocument(
 	ctx context.Context,
 	companyID,
@@ -27,14 +27,60 @@ func (store *postgresMetadataStore) CreateDocument(
 	reason string,
 	files []fs.FileReader,
 ) (*docdb.VersionInfo, error) {
-	return nil, nil
+	versionInfo := &docdb.VersionInfo{
+		Version:   docdb.VersionTimeFrom(time.Now()),
+		DocID:     docID,
+		CompanyID: companyID,
+	}
+
+	docVersion := DocumentVersion{
+		ID:         uu.IDv7(),
+		DocumentID: docID,
+		CompanyID:  companyID,
+		Version:    versionInfo.Version,
+	}
+
+	if err := db.InsertStruct(
+		ctx,
+		"docdb.document_version",
+		docVersion,
+	); err != nil {
+		return nil, err
+	}
+
+	versionFiles := []DocumentVersionFile{}
+
+	for _, file := range files {
+		versionInfo.AddedFiles = append(versionInfo.AddedFiles, file.Name())
+		data, err := file.ReadAll()
+		if err != nil {
+			return nil, err
+		}
+
+		versionFiles = append(versionFiles, DocumentVersionFile{
+			DocumentVersionID: docVersion.ID,
+			Name:              file.Name(),
+			Size:              file.Size(),
+			Hash:              docdb.ContentHash(data),
+		})
+	}
+
+	if err := db.InsertStructs(
+		ctx,
+		"docdb.document_version_file",
+		versionFiles,
+	); err != nil {
+		return nil, err
+	}
+
+	return versionInfo, nil
 }
 
 func (store *postgresMetadataStore) DocumentCompanyID(ctx context.Context, docID uu.ID) (companyID uu.ID, err error) {
 	return db.QueryValue[uu.ID](
 		ctx,
 		/* sql */ `
-		select client_company_id from docdb.document_version
+		select company_id from docdb.document_version
 		where document_id = $1
 		order by version desc
 		limit 1
@@ -48,7 +94,7 @@ func (store *postgresMetadataStore) SetDocumentCompanyID(ctx context.Context, do
 	err := db.QueryRows(
 		ctx,
 		/* sql */ `update docdb.document_version
-		set client_company_id = $1
+		set company_id = $1
 		where document_id = $2
 		returning docdb.document_version.id`,
 		companyID,
@@ -113,7 +159,7 @@ func (store *postgresMetadataStore) EnumCompanyDocumentIDs(ctx context.Context, 
 		/* sql */ `
 		select distinct document_id
 		from docdb.document_version
-		where client_company_id = $1
+		where company_id = $1
 		`,
 		companyID,
 	).ScanSlice(&ids)
@@ -166,7 +212,7 @@ func (store *postgresMetadataStore) DocumentVersionInfo(ctx context.Context, doc
 
 	firstRec := records[0]
 	result := &docdb.VersionInfo{
-		CompanyID:     firstRec.ClientCompanyID,
+		CompanyID:     firstRec.CompanyID,
 		DocID:         firstRec.DocumentID,
 		Version:       firstRec.Version,
 		PrevVersion:   *firstRec.PrevVersion,
@@ -217,7 +263,7 @@ func (store *postgresMetadataStore) LatestDocumentVersionInfo(ctx context.Contex
 
 	firstRec := records[0]
 	result := &docdb.VersionInfo{
-		CompanyID:     firstRec.ClientCompanyID,
+		CompanyID:     firstRec.CompanyID,
 		DocID:         firstRec.DocumentID,
 		Version:       firstRec.Version,
 		PrevVersion:   *firstRec.PrevVersion,
