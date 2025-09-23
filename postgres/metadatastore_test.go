@@ -21,14 +21,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var (
+	store docdb.MetadataStore
+	conn  sqldb.Connection
+)
+
+func TestMain(m *testing.M) {
+	conn = newConnFromEnv()
+	store = postgres.NewMetadataStore()
+
+	m.Run()
+
+	conn.Close()
+}
+
 func TestDocumentCompanyID(t *testing.T) {
 
 	// In theory all versions should have the same company_id, but if not, return the company_id from the most recent version
 	t.Run("Returns company ID from the latest version", func(t *testing.T) {
 		// given
-		store := fixtureStore.Value(t)
 		populator := fixturePopulator.Value(t)
-		docVersion1 := populator.DocumentVersion(map[string]any{"Version": docdb.VersionTimeFrom(time.Now())})
+		docVersion1 := populator.DocumentVersion()
 		docVersion2 := populator.DocumentVersion(map[string]any{
 			"DocumentID": docVersion1.DocumentID,
 			"Version":    docdb.VersionTimeFrom(time.Now().Add(time.Second)),
@@ -48,7 +61,6 @@ func TestDocumentCompanyID(t *testing.T) {
 
 	t.Run("Returns error if document not found", func(t *testing.T) {
 		// given
-		store := fixtureStore.Value(t)
 		ctx := fixtureCtxWithTestTx.Value(t)
 
 		// when
@@ -65,7 +77,6 @@ func TestDocumentCompanyID(t *testing.T) {
 func TestSetDocumentCompanyID(t *testing.T) {
 	t.Run("Sets the company ID for all versions", func(t *testing.T) {
 		// given
-		store := fixtureStore.Value(t)
 		populator := fixturePopulator.Value(t)
 		docVersion1 := populator.DocumentVersion()
 		populator.DocumentVersion(map[string]any{
@@ -95,7 +106,6 @@ func TestSetDocumentCompanyID(t *testing.T) {
 
 	t.Run("Returns error if document version does not exist", func(t *testing.T) {
 		// given
-		store := fixtureStore.Value(t)
 		ctx := fixtureCtxWithTestTx.Value(t)
 
 		// when
@@ -109,7 +119,6 @@ func TestSetDocumentCompanyID(t *testing.T) {
 func TestDocumentVersions(t *testing.T) {
 	t.Run("Returns all versions belonging to a document", func(t *testing.T) {
 		// given
-		store := fixtureStore.Value(t)
 		populator := fixturePopulator.Value(t)
 		ctx := fixtureCtxWithTestTx.Value(t)
 
@@ -133,7 +142,6 @@ func TestDocumentVersions(t *testing.T) {
 
 	t.Run("Returns error if no versions", func(t *testing.T) {
 		// given
-		store := fixtureStore.Value(t)
 		ctx := fixtureCtxWithTestTx.Value(t)
 
 		// when
@@ -147,7 +155,6 @@ func TestDocumentVersions(t *testing.T) {
 func TestEnumCompanyDocumentIDs(t *testing.T) {
 	t.Run("Iterates over all company related documents", func(t *testing.T) {
 		// given
-		store := fixtureStore.Value(t)
 		populator := fixturePopulator.Value(t)
 		ctx := fixtureCtxWithTestTx.Value(t)
 		doc1Version1 := populator.DocumentVersion(map[string]any{"DocumentID": uu.IDFrom("a3c60853-022c-403d-85cc-6ea146ec6a4a")})
@@ -183,7 +190,6 @@ func TestEnumCompanyDocumentIDs(t *testing.T) {
 
 	t.Run("Returns error if no versions", func(t *testing.T) {
 		// given
-		store := fixtureStore.Value(t)
 		ctx := fixtureCtxWithTestTx.Value(t)
 
 		// when
@@ -199,7 +205,6 @@ func TestEnumCompanyDocumentIDs(t *testing.T) {
 
 	t.Run("Returns error from callback", func(t *testing.T) {
 		// given
-		store := fixtureStore.Value(t)
 		populator := fixturePopulator.Value(t)
 		ctx := fixtureCtxWithTestTx.Value(t)
 		docVersion := populator.DocumentVersion()
@@ -222,7 +227,6 @@ func TestEnumCompanyDocumentIDs(t *testing.T) {
 func TestLatestDocumentVersion(t *testing.T) {
 	t.Run("Returns latest docuemnt version", func(t *testing.T) {
 		// given
-		store := fixtureStore.Value(t)
 		populator := fixturePopulator.Value(t)
 		ctx := fixtureCtxWithTestTx.Value(t)
 
@@ -244,7 +248,6 @@ func TestLatestDocumentVersion(t *testing.T) {
 
 	t.Run("Returns error if no version found", func(t *testing.T) {
 		// given
-		store := fixtureStore.Value(t)
 		ctx := fixtureCtxWithTestTx.Value(t)
 
 		// when
@@ -258,7 +261,6 @@ func TestLatestDocumentVersion(t *testing.T) {
 func TestDocumentVersionInfo(t *testing.T) {
 	t.Run("Returns document version info", func(t *testing.T) {
 		// given
-		store := fixtureStore.Value(t)
 		ctx := fixtureCtxWithTestTx.Value(t)
 		populator := fixturePopulator.Value(t)
 		docVersionFile1 := populator.DocumentVersionFile()
@@ -302,7 +304,6 @@ func TestDocumentVersionInfo(t *testing.T) {
 
 	t.Run("Returns error if no version info found", func(t *testing.T) {
 		// given
-		store := fixtureStore.Value(t)
 		ctx := fixtureCtxWithTestTx.Value(t)
 
 		// when
@@ -316,7 +317,6 @@ func TestDocumentVersionInfo(t *testing.T) {
 func TestLatestDocumentVersionInfo(t *testing.T) {
 	t.Run("Returns latest document version info", func(t *testing.T) {
 		// given
-		store := fixtureStore.Value(t)
 		ctx := fixtureCtxWithTestTx.Value(t)
 		populator := fixturePopulator.Value(t)
 		// older, not wanted
@@ -369,7 +369,6 @@ func TestLatestDocumentVersionInfo(t *testing.T) {
 
 	t.Run("Returns error if no version info found", func(t *testing.T) {
 		// given
-		store := fixtureStore.Value(t)
 		ctx := fixtureCtxWithTestTx.Value(t)
 
 		// when
@@ -380,35 +379,17 @@ func TestLatestDocumentVersionInfo(t *testing.T) {
 	})
 }
 
-var fixtureStore = fix.New(func(t *testing.T) docdb.MetadataStore {
-	return postgres.NewMetadataStore()
-})
-
 var fixtureCtxWithTestTx = fix.New(func(t *testing.T) context.Context {
-	config := &sqldb.Config{
-		Driver:   "postgres",
-		Host:     "localhost",
-		User:     os.Getenv("POSTGRES_USER"),
-		Database: os.Getenv("POSTGRES_DB"),
-		Password: os.Getenv("POSTGRES_PASSWORD"),
-		Extra:    map[string]string{"sslmode": "disable"},
-	}
+	t.Parallel()
 
-	conn, err := pqconn.New(t.Context(), config)
-	if err != nil {
-		t.Fatalf("Failed to connect to postgres, %v", err)
-		return nil
-	}
-
-	conn, err = conn.Begin(nil, 0)
+	tx, err := conn.Begin(nil, 0)
 	if err != nil {
 		t.Fatalf("Failed to begin the transaction, %v", err)
 		return nil
 	}
 
-	ctx := db.ContextWithConn(t.Context(), conn)
-
-	t.Cleanup(func() { conn.Rollback() })
+	t.Cleanup(func() { tx.Rollback() })
+	ctx := db.ContextWithConn(t.Context(), tx)
 	return ctx
 })
 
@@ -425,35 +406,32 @@ type Populator struct {
 }
 
 func (populator *Populator) DocumentVersion(data ...map[string]any) *postgres.DocumentVersion {
-	baseRecord := &postgres.DocumentVersion{
-		ID:              uu.IDv7(),
-		DocumentID:      uu.IDv7(),
-		ClientCompanyID: uu.IDv7(),
-		Version:         docdb.VersionTimeFrom(time.Now()),
-		PrevVersion:     p(docdb.VersionTimeFrom(time.Now().Add(-time.Second))),
-		CommitUserID:    uu.IDv7(),
-		CommitReason:    "test",
-		AddedFiles:      []string{randomDocName(), randomDocName()},
-		ModifiedFiles:   []string{randomDocName(), randomDocName()},
-		RemovedFiles:    []string{randomDocName(), randomDocName()},
-	}
-
-	insertRecordWithExtraData(populator, "docdb.document_version", baseRecord, data...)
-	return baseRecord
+	return insertRecordWithExtraData(
+		postgres.DocumentVersion{
+			ID:              uu.IDv7(),
+			DocumentID:      uu.IDv7(),
+			ClientCompanyID: uu.IDv7(),
+			Version:         docdb.VersionTimeFrom(time.Now()),
+			PrevVersion:     p(docdb.VersionTimeFrom(time.Now().Add(-time.Second))),
+			CommitUserID:    uu.IDv7(),
+			CommitReason:    "test",
+			AddedFiles:      []string{randomDocName(), randomDocName()},
+			ModifiedFiles:   []string{randomDocName(), randomDocName()},
+			RemovedFiles:    []string{randomDocName(), randomDocName()},
+		}, populator, "docdb.document_version", data...)
 }
 
 func (populator *Populator) DocumentVersionFile(data ...map[string]any) *postgres.DocumentVersionFile {
 	docVersion := createRecordIfNeeded("DocumentVersion", populator.DocumentVersion, data...)
-	baseRecord := &postgres.DocumentVersionFile{
-		DocumentVersionID: docVersion.ID,
-		Name:              randomDocName(),
-		Size:              rand.Int63n(10000),
-		Hash:              docdb.ContentHash(uu.IDv7().Bytes()),
-		DocumentVersion:   docVersion,
-	}
 
-	insertRecordWithExtraData(populator, "docdb.document_version_file", baseRecord, data...)
-	return baseRecord
+	return insertRecordWithExtraData(
+		postgres.DocumentVersionFile{
+			DocumentVersionID: docVersion.ID,
+			Name:              randomDocName(),
+			Size:              rand.Int63n(10000),
+			Hash:              docdb.ContentHash(uu.IDv7().Bytes()),
+			DocumentVersion:   docVersion,
+		}, populator, "docdb.document_version_file", data...)
 }
 
 func createRecordIfNeeded[T any](
@@ -474,42 +452,42 @@ func createRecordIfNeeded[T any](
 }
 
 func insertRecordWithExtraData[T any](
-	p *Populator,
+	baseRecord T,
+	populator *Populator,
 	table string,
-	baseRecord *T,
 	data ...map[string]any,
-) {
-	fillDataIntoStruct(
-		baseRecord,
-		data...,
-	)
+) *T {
+	record := fillDataIntoStruct(baseRecord, data...)
 
 	err := db.InsertStruct(
-		p.ctx,
+		populator.ctx,
 		table,
-		baseRecord,
+		record,
 	)
 
 	if err != nil {
-		p.t.Fatalf("Failed to insert into table '%s', %v", table, err)
+		populator.t.Fatalf("Failed to insert into table '%s', %v", table, err)
 	}
+
+	return record
 }
 
-func fillDataIntoStruct[T any](base *T, data ...map[string]any) {
+func fillDataIntoStruct[T any](obj T, data ...map[string]any) *T {
 	d := map[string]any{}
 	if len(data) > 0 {
 		d = data[0]
 	}
 
-	obj := reflect.ValueOf(base).Elem()
+	ref := reflect.ValueOf(&obj).Elem()
 	for key, value := range d {
-		field := obj.FieldByName(key)
+		field := ref.FieldByName(key)
 		if !field.IsValid() {
 			continue
 		}
 		newVal := reflect.ValueOf(value)
 		field.Set(newVal)
 	}
+	return &obj
 }
 
 func randomDocName() string {
@@ -517,3 +495,21 @@ func randomDocName() string {
 }
 
 func p[T any](v T) *T { return &v }
+
+func newConnFromEnv() sqldb.Connection {
+	config := &sqldb.Config{
+		Driver:   "postgres",
+		Host:     "localhost",
+		User:     os.Getenv("POSTGRES_USER"),
+		Database: os.Getenv("POSTGRES_DB"),
+		Password: os.Getenv("POSTGRES_PASSWORD"),
+		Extra:    map[string]string{"sslmode": "disable"},
+	}
+
+	conn, err := pqconn.New(context.Background(), config)
+	if err != nil {
+		panic(err)
+	}
+
+	return conn
+}
