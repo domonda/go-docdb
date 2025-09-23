@@ -379,6 +379,110 @@ func TestLatestDocumentVersionInfo(t *testing.T) {
 	})
 }
 
+func TestDeleteDocument(t *testing.T) {
+	t.Run("Deletes document versions", func(t *testing.T) {
+		// given
+		ctx := fixtureCtxWithTestTx.Value(t)
+		populator := fixturePopulator.Value(t)
+		doc1Version1 := populator.DocumentVersion()
+		populator.DocumentVersion(map[string]any{
+			"DocumentID": doc1Version1.DocumentID,
+			"Version":    docdb.VersionTimeFrom(time.Now().Add(time.Second)),
+		})
+
+		doc2Version := populator.DocumentVersion()
+
+		// when
+		err := store.DeleteDocument(ctx, doc1Version1.DocumentID)
+
+		// then
+		require.NoError(t, err)
+		count, err := db.QueryValue[int](
+			ctx,
+			/* sql */ `select count(*) from docdb.document_version where document_id = $1`,
+			doc1Version1.DocumentID,
+		)
+		require.NoError(t, err)
+		require.Equal(t, 0, count)
+
+		count, err = db.QueryValue[int](
+			ctx,
+			/* sql */ `select count(*) from docdb.document_version where document_id = $1`,
+			doc2Version.DocumentID,
+		)
+		require.NoError(t, err)
+		require.Equal(t, 1, count)
+	})
+
+	t.Run("Returns error if nothing to delete", func(t *testing.T) {
+		// given
+		ctx := fixtureCtxWithTestTx.Value(t)
+
+		// when
+		err := store.DeleteDocument(ctx, uu.IDv7())
+
+		// then
+		require.ErrorIs(t, err, sql.ErrNoRows)
+	})
+}
+
+func TestDeleteDocumentVersion(t *testing.T) {
+	t.Run("Deletes document version", func(t *testing.T) {
+		// given
+		ctx := fixtureCtxWithTestTx.Value(t)
+		populator := fixturePopulator.Value(t)
+		versionFile1 := populator.DocumentVersionFile(map[string]any{
+			"Hash": docdb.ContentHash([]byte("b")),
+		})
+		versionFile2 := populator.DocumentVersionFile(map[string]any{
+			"DocumentVersion": versionFile1.DocumentVersion,
+			"Hash":            docdb.ContentHash([]byte("a")),
+		})
+
+		docVersion2 := populator.DocumentVersion(map[string]any{
+			"DocumentID": versionFile1.DocumentVersion.DocumentID,
+			"Version":    docdb.VersionTimeFrom(time.Now().Add(time.Second)),
+		})
+		versionFile3 := populator.DocumentVersionFile(map[string]any{
+			"DocumentVersion": docVersion2,
+		})
+
+		// when
+		leftVersions, hashesToDelete, err := store.DeleteDocumentVersion(
+			ctx,
+			versionFile1.DocumentVersion.DocumentID,
+			versionFile1.DocumentVersion.Version,
+		)
+
+		// then
+		require.NoError(t, err)
+
+		require.Equal(
+			t,
+			[]string{versionFile1.Hash, versionFile2.Hash},
+			hashesToDelete,
+		)
+		fmt.Printf("docVersion2.Version: %v\n", docVersion2.Version)
+		fmt.Printf("versionFile1.DocumentVersion.Version: %v\n", versionFile1.DocumentVersion.Version)
+		require.Equal(
+			t,
+			[]docdb.VersionTime{versionFile3.DocumentVersion.Version},
+			leftVersions,
+		)
+	})
+
+	t.Run("Returns error if nothing to delete", func(t *testing.T) {
+		// given
+		ctx := fixtureCtxWithTestTx.Value(t)
+
+		// when
+		_, _, err := store.DeleteDocumentVersion(ctx, uu.IDv7(), docdb.VersionTimeFrom(time.Now()))
+
+		// then
+		require.ErrorIs(t, err, sql.ErrNoRows)
+	})
+}
+
 var fixtureCtxWithTestTx = fix.New(func(t *testing.T) context.Context {
 	t.Parallel()
 

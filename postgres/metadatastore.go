@@ -3,6 +3,8 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"strings"
 
 	"github.com/domonda/go-docdb"
 	"github.com/domonda/go-sqldb/db"
@@ -230,21 +232,108 @@ func (store *postgresMetadataStore) LatestDocumentVersionInfo(ctx context.Contex
 	return result, nil
 }
 
-// TODO
+type docVersionQueryResult struct {
+	DocumentVersion
+	DocumentVersionFile
+}
+
 func (store *postgresMetadataStore) DeleteDocument(ctx context.Context, docID uu.ID) error {
+	deletedIDs := []uu.ID{}
+	err := db.QueryRows(
+		ctx,
+		/* sql */ `
+		delete from docdb.document_version
+		where document_id = $1
+		returning id
+		`,
+		docID,
+	).ScanSlice(&deletedIDs)
+
+	if err != nil {
+		return err
+	}
+
+	if len(deletedIDs) == 0 {
+		return sql.ErrNoRows
+	}
+
 	return nil
 }
 
-// TODO
 func (store *postgresMetadataStore) DeleteDocumentVersion(
 	ctx context.Context,
 	docID uu.ID,
 	version docdb.VersionTime,
-) (leftVersions []docdb.VersionTime, hashesToDelete []string, err error) {
-	return nil, nil, nil
-}
+) (
+	leftVersions []docdb.VersionTime,
+	hashesToDelete []string,
+	err error,
+) {
 
-type docVersionQueryResult struct {
-	DocumentVersion
-	DocumentVersionFile
+	res, err := db.QueryRowStruct[struct {
+		DeletedIDs     int      `db:"deleted_ids"`
+		LeftVersions   []string `db:"left_versions"`
+		HashesToDelete []string `db:"hashes_to_delete"`
+	}](
+		ctx,
+		/* sql */ `
+		with
+		left_versions as (
+			select version from docdb.document_version
+			where document_id = $1 and version != $2
+			order by version
+		),
+		hashes_to_delete as (
+			select hash from docdb.document_version_file dvf
+			join docdb.document_version dv
+				on dvf.document_version_id = dv.id
+				and dv.document_id = $1
+				and dv.version = $2
+			order by hash
+		),
+		deleted_ids as (
+			delete from docdb.document_version
+				where document_id = $1
+				and version = $2
+			returning id
+		)
+		select
+			array_agg(distinct left_versions) as left_versions,
+			array_agg(distinct hashes_to_delete) as hashes_to_delete,
+			count(deleted_ids) as deleted_ids
+		from
+			left_versions,
+			hashes_to_delete,
+			deleted_ids
+		`,
+		docID,
+		version,
+	)
+
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if res.DeletedIDs == 0 {
+		return nil, nil, sql.ErrNoRows
+	}
+
+	fmt.Printf("res.LeftVersions: %v\n", res.LeftVersions)
+	// array_agg unfortunately appends some characters to the records
+	for _, versionStr := range res.LeftVersions {
+		versionStr = strings.Trim(versionStr, "\"()")
+		version, err := docdb.VersionTimeFromString(versionStr)
+		if err != nil {
+			return nil, nil, err
+		}
+		leftVersions = append(leftVersions, version)
+	}
+
+	// array_agg unfortunately appends some characters to the records
+	for _, hash := range res.HashesToDelete {
+		hash = strings.Trim(hash, "\"()")
+		hashesToDelete = append(hashesToDelete, hash)
+	}
+
+	return leftVersions, hashesToDelete, nil
 }
