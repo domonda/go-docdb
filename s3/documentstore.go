@@ -53,71 +53,13 @@ func (store *s3DocStore) DocumentExists(ctx context.Context, docID uu.ID) (exist
 }
 
 func (store *s3DocStore) EnumDocumentIDs(ctx context.Context, callback func(context.Context, uu.ID) error) (err error) {
-	var nextContinuationToken *string
-	response := &awss3.ListObjectsV2Output{}
+	enumerator := newDocumentEnumerator(
+		store.client,
+		callback,
+		store.bucketName,
+	)
 
-	fetchKeys := func() error {
-		response, err = store.client.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{
-			Bucket:            &store.bucketName,
-			ContinuationToken: nextContinuationToken,
-		})
-
-		if err != nil {
-			return err
-		}
-
-		nextContinuationToken = response.NextContinuationToken
-		return nil
-	}
-
-	processedIDs := map[uu.ID]struct{}{}
-	runCallbacks := func() error {
-		for _, object := range response.Contents {
-			if object.Key == nil {
-				return errors.New("nil object key")
-			}
-
-			id := idFromKey(*object.Key)
-			if id.IsNil() {
-				return fmt.Errorf("can't parse ID from `%s`", *object.Key)
-			}
-
-			if _, ok := processedIDs[id]; ok {
-				continue
-			}
-
-			processedIDs[id] = struct{}{}
-
-			if err = callback(ctx, id); err != nil {
-				return err
-			}
-		}
-
-		return nil
-	}
-
-	runCycle := func() error {
-		if err = fetchKeys(); err != nil {
-			return err
-		}
-		if err = runCallbacks(); err != nil {
-			return err
-		}
-
-		return nil
-	}
-
-	if err = runCycle(); err != nil {
-		return err
-	}
-
-	for nextContinuationToken != nil {
-		if err = runCycle(); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return enumerator.Run(ctx)
 }
 
 func (store *s3DocStore) CreateDocument(
@@ -261,6 +203,89 @@ func (store *s3DocStore) DeleteDocumentHashes(ctx context.Context, docID uu.ID, 
 
 func Key(docID uu.ID, filename string, hash string) string {
 	return strings.Join([]string{docID.String(), filename, hash}, "/")
+}
+
+type documentEnumerator struct {
+	client                *awss3.Client
+	nextContinuationToken *string
+	bucketName            string
+	processedIDs          map[uu.ID]struct{}
+	callback              func(context.Context, uu.ID) error
+}
+
+func newDocumentEnumerator(
+	client *awss3.Client,
+	callback func(context.Context, uu.ID) error,
+	bucketName string,
+) *documentEnumerator {
+	return &documentEnumerator{
+		client:       client,
+		bucketName:   bucketName,
+		processedIDs: map[uu.ID]struct{}{},
+		callback:     callback,
+	}
+}
+
+func (enumerator *documentEnumerator) Run(ctx context.Context) error {
+	if err := enumerator.runCycle(ctx); err != nil {
+		return err
+	}
+
+	for enumerator.nextContinuationToken != nil {
+		if err := enumerator.runCycle(ctx); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (enumerator *documentEnumerator) runCycle(ctx context.Context) error {
+	resp, err := enumerator.getResponse(ctx)
+	if err != nil {
+		return err
+	}
+
+	return enumerator.runCallbacks(ctx, resp)
+}
+
+func (enumerator *documentEnumerator) getResponse(ctx context.Context) (*awss3.ListObjectsV2Output, error) {
+	response, err := enumerator.client.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{
+		Bucket:            &enumerator.bucketName,
+		ContinuationToken: enumerator.nextContinuationToken,
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	enumerator.nextContinuationToken = response.NextContinuationToken
+	return response, nil
+}
+
+func (enumerator *documentEnumerator) runCallbacks(ctx context.Context, response *awss3.ListObjectsV2Output) error {
+	for _, object := range response.Contents {
+		if object.Key == nil {
+			return errors.New("nil object key")
+		}
+
+		id := idFromKey(*object.Key)
+		if id.IsNil() {
+			return fmt.Errorf("can't parse ID from `%s`", *object.Key)
+		}
+
+		if _, ok := enumerator.processedIDs[id]; ok {
+			continue
+		}
+
+		enumerator.processedIDs[id] = struct{}{}
+
+		if err := enumerator.callback(ctx, id); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func idFromKey(key string) uu.ID {
