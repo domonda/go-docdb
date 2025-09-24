@@ -5,41 +5,24 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"math/rand"
-	"os"
-	"reflect"
 	"testing"
 	"time"
 
-	"github.com/datek/fix"
 	"github.com/domonda/go-docdb"
 	"github.com/domonda/go-docdb/postgres"
-	"github.com/domonda/go-sqldb"
+	"github.com/domonda/go-docdb/postgres/pgfixtures"
 	"github.com/domonda/go-sqldb/db"
-	"github.com/domonda/go-sqldb/pqconn"
 	"github.com/domonda/go-types/uu"
 	"github.com/stretchr/testify/require"
 	"github.com/ungerik/go-fs"
 )
 
-var (
-	store docdb.MetadataStore
-	conn  sqldb.Connection
-)
-
-func TestMain(m *testing.M) {
-	conn = newConnFromEnv()
-	store = postgres.NewMetadataStore()
-
-	m.Run()
-
-	conn.Close()
-}
+var store = postgres.NewMetadataStore()
 
 func TestCreateDocument(t *testing.T) {
 	t.Run("Creates document version with proper file metadata", func(t *testing.T) {
 		// given
-		ctx := fixtureCtxWithTestTx.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
 
 		memFiles := []*fs.MemFile{
 			{
@@ -109,13 +92,13 @@ func TestDocumentCompanyID(t *testing.T) {
 	// In theory all versions should have the same company_id, but if not, return the company_id from the most recent version
 	t.Run("Returns company ID from the latest version", func(t *testing.T) {
 		// given
-		populator := fixturePopulator.Value(t)
+		populator := pgfixtures.FixturePopulator.Value(t)
 		docVersion1 := populator.DocumentVersion()
 		docVersion2 := populator.DocumentVersion(map[string]any{
 			"DocumentID": docVersion1.DocumentID,
 			"Version":    docdb.VersionTimeFrom(time.Now().Add(time.Second)),
 		})
-		ctx := fixtureCtxWithTestTx.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
 
 		// when
 		clientCompanyId, err := store.DocumentCompanyID(
@@ -130,7 +113,7 @@ func TestDocumentCompanyID(t *testing.T) {
 
 	t.Run("Returns error if document not found", func(t *testing.T) {
 		// given
-		ctx := fixtureCtxWithTestTx.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
 
 		// when
 		_, err := store.DocumentCompanyID(
@@ -146,13 +129,13 @@ func TestDocumentCompanyID(t *testing.T) {
 func TestSetDocumentCompanyID(t *testing.T) {
 	t.Run("Sets the company ID for all versions", func(t *testing.T) {
 		// given
-		populator := fixturePopulator.Value(t)
+		populator := pgfixtures.FixturePopulator.Value(t)
 		docVersion1 := populator.DocumentVersion()
 		populator.DocumentVersion(map[string]any{
 			"DocumentID": docVersion1.DocumentID,
 			"Version":    docdb.VersionTimeFrom(time.Now().Add(time.Second)),
 		})
-		ctx := fixtureCtxWithTestTx.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
 
 		// when
 		newCompanyID := uu.IDv7()
@@ -175,7 +158,7 @@ func TestSetDocumentCompanyID(t *testing.T) {
 
 	t.Run("Returns error if document version does not exist", func(t *testing.T) {
 		// given
-		ctx := fixtureCtxWithTestTx.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
 
 		// when
 		err := store.SetDocumentCompanyID(ctx, uu.IDv7(), uu.IDv7())
@@ -188,8 +171,8 @@ func TestSetDocumentCompanyID(t *testing.T) {
 func TestDocumentVersions(t *testing.T) {
 	t.Run("Returns all versions belonging to a document", func(t *testing.T) {
 		// given
-		populator := fixturePopulator.Value(t)
-		ctx := fixtureCtxWithTestTx.Value(t)
+		populator := pgfixtures.FixturePopulator.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
 
 		docVersion1 := populator.DocumentVersion()
 		docVersion2 := populator.DocumentVersion(map[string]any{
@@ -211,7 +194,7 @@ func TestDocumentVersions(t *testing.T) {
 
 	t.Run("Returns error if no versions", func(t *testing.T) {
 		// given
-		ctx := fixtureCtxWithTestTx.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
 
 		// when
 		_, err := store.DocumentVersions(ctx, uu.IDv7())
@@ -224,8 +207,8 @@ func TestDocumentVersions(t *testing.T) {
 func TestEnumCompanyDocumentIDs(t *testing.T) {
 	t.Run("Iterates over all company related documents", func(t *testing.T) {
 		// given
-		populator := fixturePopulator.Value(t)
-		ctx := fixtureCtxWithTestTx.Value(t)
+		populator := pgfixtures.FixturePopulator.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
 		doc1Version1 := populator.DocumentVersion(map[string]any{"DocumentID": uu.IDFrom("a3c60853-022c-403d-85cc-6ea146ec6a4a")})
 		populator.DocumentVersion(map[string]any{
 			"DocumentID": doc1Version1.DocumentID,
@@ -259,7 +242,7 @@ func TestEnumCompanyDocumentIDs(t *testing.T) {
 
 	t.Run("Returns error if no versions", func(t *testing.T) {
 		// given
-		ctx := fixtureCtxWithTestTx.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
 
 		// when
 		err := store.EnumCompanyDocumentIDs(
@@ -274,8 +257,8 @@ func TestEnumCompanyDocumentIDs(t *testing.T) {
 
 	t.Run("Returns error from callback", func(t *testing.T) {
 		// given
-		populator := fixturePopulator.Value(t)
-		ctx := fixtureCtxWithTestTx.Value(t)
+		populator := pgfixtures.FixturePopulator.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
 		docVersion := populator.DocumentVersion()
 
 		// when
@@ -296,8 +279,8 @@ func TestEnumCompanyDocumentIDs(t *testing.T) {
 func TestLatestDocumentVersion(t *testing.T) {
 	t.Run("Returns latest docuemnt version", func(t *testing.T) {
 		// given
-		populator := fixturePopulator.Value(t)
-		ctx := fixtureCtxWithTestTx.Value(t)
+		populator := pgfixtures.FixturePopulator.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
 
 		docVersion1 := populator.DocumentVersion()
 		docVersion2 := populator.DocumentVersion(map[string]any{
@@ -317,7 +300,7 @@ func TestLatestDocumentVersion(t *testing.T) {
 
 	t.Run("Returns error if no version found", func(t *testing.T) {
 		// given
-		ctx := fixtureCtxWithTestTx.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
 
 		// when
 		_, err := store.LatestDocumentVersion(ctx, uu.IDv7())
@@ -330,8 +313,8 @@ func TestLatestDocumentVersion(t *testing.T) {
 func TestDocumentVersionInfo(t *testing.T) {
 	t.Run("Returns document version info", func(t *testing.T) {
 		// given
-		ctx := fixtureCtxWithTestTx.Value(t)
-		populator := fixturePopulator.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
+		populator := pgfixtures.FixturePopulator.Value(t)
 		docVersionFile1 := populator.DocumentVersionFile()
 
 		docVersionFile2 := populator.DocumentVersionFile(map[string]any{
@@ -373,7 +356,7 @@ func TestDocumentVersionInfo(t *testing.T) {
 
 	t.Run("Returns error if no version info found", func(t *testing.T) {
 		// given
-		ctx := fixtureCtxWithTestTx.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
 
 		// when
 		_, err := store.DocumentVersionInfo(ctx, uu.IDv7(), docdb.VersionTimeFrom(time.Now()))
@@ -386,8 +369,8 @@ func TestDocumentVersionInfo(t *testing.T) {
 func TestLatestDocumentVersionInfo(t *testing.T) {
 	t.Run("Returns latest document version info", func(t *testing.T) {
 		// given
-		ctx := fixtureCtxWithTestTx.Value(t)
-		populator := fixturePopulator.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
+		populator := pgfixtures.FixturePopulator.Value(t)
 		// older, not wanted
 		docVersion1File := populator.DocumentVersionFile()
 
@@ -438,7 +421,7 @@ func TestLatestDocumentVersionInfo(t *testing.T) {
 
 	t.Run("Returns error if no version info found", func(t *testing.T) {
 		// given
-		ctx := fixtureCtxWithTestTx.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
 
 		// when
 		_, err := store.LatestDocumentVersion(ctx, uu.IDv7())
@@ -451,8 +434,8 @@ func TestLatestDocumentVersionInfo(t *testing.T) {
 func TestDeleteDocument(t *testing.T) {
 	t.Run("Deletes document versions", func(t *testing.T) {
 		// given
-		ctx := fixtureCtxWithTestTx.Value(t)
-		populator := fixturePopulator.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
+		populator := pgfixtures.FixturePopulator.Value(t)
 		doc1Version1 := populator.DocumentVersion()
 		populator.DocumentVersion(map[string]any{
 			"DocumentID": doc1Version1.DocumentID,
@@ -485,7 +468,7 @@ func TestDeleteDocument(t *testing.T) {
 
 	t.Run("Returns error if nothing to delete", func(t *testing.T) {
 		// given
-		ctx := fixtureCtxWithTestTx.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
 
 		// when
 		err := store.DeleteDocument(ctx, uu.IDv7())
@@ -498,8 +481,8 @@ func TestDeleteDocument(t *testing.T) {
 func TestDeleteDocumentVersion(t *testing.T) {
 	t.Run("Deletes document version", func(t *testing.T) {
 		// given
-		ctx := fixtureCtxWithTestTx.Value(t)
-		populator := fixturePopulator.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
+		populator := pgfixtures.FixturePopulator.Value(t)
 		versionFile1 := populator.DocumentVersionFile(map[string]any{
 			"Hash": docdb.ContentHash([]byte("b")),
 		})
@@ -542,7 +525,7 @@ func TestDeleteDocumentVersion(t *testing.T) {
 
 	t.Run("Returns error if nothing to delete", func(t *testing.T) {
 		// given
-		ctx := fixtureCtxWithTestTx.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
 
 		// when
 		_, _, err := store.DeleteDocumentVersion(ctx, uu.IDv7(), docdb.VersionTimeFrom(time.Now()))
@@ -550,139 +533,4 @@ func TestDeleteDocumentVersion(t *testing.T) {
 		// then
 		require.ErrorIs(t, err, sql.ErrNoRows)
 	})
-}
-
-var fixtureCtxWithTestTx = fix.New(func(t *testing.T) context.Context {
-	t.Parallel()
-
-	tx, err := conn.Begin(nil, 0)
-	if err != nil {
-		t.Fatalf("Failed to begin the transaction, %v", err)
-		return nil
-	}
-
-	t.Cleanup(func() { tx.Rollback() })
-	ctx := db.ContextWithConn(t.Context(), tx)
-	return ctx
-})
-
-var fixturePopulator = fix.New(func(t *testing.T) Populator {
-	return Populator{
-		t:   t,
-		ctx: fixtureCtxWithTestTx.Value(t),
-	}
-})
-
-type Populator struct {
-	t   *testing.T
-	ctx context.Context
-}
-
-func (populator *Populator) DocumentVersion(data ...map[string]any) *postgres.DocumentVersion {
-	return insertRecordWithExtraData(
-		postgres.DocumentVersion{
-			ID:            uu.IDv7(),
-			DocumentID:    uu.IDv7(),
-			CompanyID:     uu.IDv7(),
-			Version:       docdb.VersionTimeFrom(time.Now()),
-			PrevVersion:   p(docdb.VersionTimeFrom(time.Now().Add(-time.Second))),
-			CommitUserID:  uu.IDv7(),
-			CommitReason:  "test",
-			AddedFiles:    []string{randomDocName(), randomDocName()},
-			ModifiedFiles: []string{randomDocName(), randomDocName()},
-			RemovedFiles:  []string{randomDocName(), randomDocName()},
-		}, populator, "docdb.document_version", data...)
-}
-
-func (populator *Populator) DocumentVersionFile(data ...map[string]any) *postgres.DocumentVersionFile {
-	docVersion := createRecordIfNeeded("DocumentVersion", populator.DocumentVersion, data...)
-
-	return insertRecordWithExtraData(
-		postgres.DocumentVersionFile{
-			DocumentVersionID: docVersion.ID,
-			Name:              randomDocName(),
-			Size:              rand.Int63n(10000),
-			Hash:              docdb.ContentHash(uu.IDv7().Bytes()),
-			DocumentVersion:   docVersion,
-		}, populator, "docdb.document_version_file", data...)
-}
-
-func createRecordIfNeeded[T any](
-	key string,
-	createRecord func(data ...map[string]any) *T,
-	data ...map[string]any,
-) *T {
-	d := map[string]any{}
-	if len(data) > 0 {
-		d = data[0]
-	}
-
-	if res, ok := d[key]; ok {
-		return res.(*T)
-	}
-
-	return createRecord(data...)
-}
-
-func insertRecordWithExtraData[T any](
-	baseRecord T,
-	populator *Populator,
-	table string,
-	data ...map[string]any,
-) *T {
-	record := fillDataIntoStruct(baseRecord, data...)
-
-	err := db.InsertStruct(
-		populator.ctx,
-		table,
-		record,
-	)
-
-	if err != nil {
-		populator.t.Fatalf("Failed to insert into table '%s', %v", table, err)
-	}
-
-	return record
-}
-
-func fillDataIntoStruct[T any](obj T, data ...map[string]any) *T {
-	d := map[string]any{}
-	if len(data) > 0 {
-		d = data[0]
-	}
-
-	ref := reflect.ValueOf(&obj).Elem()
-	for key, value := range d {
-		field := ref.FieldByName(key)
-		if !field.IsValid() {
-			continue
-		}
-		newVal := reflect.ValueOf(value)
-		field.Set(newVal)
-	}
-	return &obj
-}
-
-func randomDocName() string {
-	return fmt.Sprintf("doc%d.pdf", rand.Int31n(10000))
-}
-
-func p[T any](v T) *T { return &v }
-
-func newConnFromEnv() sqldb.Connection {
-	config := &sqldb.Config{
-		Driver:   "postgres",
-		Host:     "localhost",
-		User:     os.Getenv("POSTGRES_USER"),
-		Database: os.Getenv("POSTGRES_DB"),
-		Password: os.Getenv("POSTGRES_PASSWORD"),
-		Extra:    map[string]string{"sslmode": "disable"},
-	}
-
-	conn, err := pqconn.New(context.Background(), config)
-	if err != nil {
-		panic(err)
-	}
-
-	return conn
 }
