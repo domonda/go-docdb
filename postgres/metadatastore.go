@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"strings"
 	"time"
 
@@ -364,7 +363,6 @@ func (store *postgresMetadataStore) DeleteDocumentVersion(
 		return nil, nil, sql.ErrNoRows
 	}
 
-	fmt.Printf("res.LeftVersions: %v\n", res.LeftVersions)
 	// array_agg unfortunately appends some characters to the records
 	for _, versionStr := range res.LeftVersions {
 		versionStr = strings.Trim(versionStr, "\"()")
