@@ -16,8 +16,8 @@ import (
 	"github.com/ungerik/go-fs"
 )
 
-func NewS3DocumentStore(ctx context.Context, bucketName string) (docdb.DocumentStore, error) {
-	cfg, err := config.LoadDefaultConfig(ctx)
+func NewS3DocumentStore(bucketName string) (docdb.DocumentStore, error) {
+	cfg, err := config.LoadDefaultConfig(context.Background())
 	if err != nil {
 		return nil, err
 	}
