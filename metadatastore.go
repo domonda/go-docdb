@@ -10,6 +10,19 @@ import (
 type MetadataStore interface {
 	CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, files []fs.FileReader) (*VersionInfo, error)
 
+	AddDocumentVersion(
+		ctx context.Context,
+		newVersion VersionTime,
+		previousVersion VersionTime,
+		docID,
+		companyID,
+		userID uu.ID,
+		reason string,
+		addedFiles []*FileInfo,
+		modifiedFiles []*FileInfo,
+		removedFiles []string,
+	) (*VersionInfo, error)
+
 	// DocumentCompanyID returns the companyID for a docID
 	DocumentCompanyID(ctx context.Context, docID uu.ID) (companyID uu.ID, err error)
 

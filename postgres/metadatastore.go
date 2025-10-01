@@ -18,6 +18,87 @@ func NewMetadataStore() docdb.MetadataStore {
 
 type postgresMetadataStore struct{}
 
+// it's being tested via the conn
+func (store *postgresMetadataStore) AddDocumentVersion(
+	ctx context.Context,
+	newVersion docdb.VersionTime,
+	previousVersion docdb.VersionTime,
+	docID,
+	companyID,
+	userID uu.ID,
+	reason string,
+	addedFiles []*docdb.FileInfo,
+	modifiedFiles []*docdb.FileInfo,
+	removedFiles []string,
+) (*docdb.VersionInfo, error) {
+	id := uu.IDv7()
+	addedFilenames := namesFromFileInfos(addedFiles)
+	modifiedFilenames := namesFromFileInfos(modifiedFiles)
+
+	err := db.Exec(
+		ctx,
+		/* sql */ `
+		insert into docdb.document_version (
+			id,
+			document_id,
+			company_id,
+			version,
+			prev_version,
+			commit_user_id,
+			commit_reason,
+			added_files,
+			removed_files,
+			modified_files
+		) values (
+			$1,
+			$2,
+			$3,
+			$4,
+			$5,
+			$6,
+			$7,
+			$8,
+			$9,
+			$10
+		)`,
+		id,
+		docID,
+		companyID,
+		newVersion,
+		previousVersion,
+		userID,
+		reason,
+		addedFilenames,
+		removedFiles,
+		modifiedFilenames,
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	versionFiles := fileInfosIntoDocumentVersionFiles(id, addedFiles, modifiedFiles)
+	if err := db.InsertStructs(
+		ctx,
+		"docdb.document_version_file",
+		versionFiles,
+	); err != nil {
+		return nil, err
+	}
+
+	return &docdb.VersionInfo{
+		DocID:         docID,
+		CompanyID:     companyID,
+		Version:       newVersion,
+		CommitUserID:  userID,
+		CommitReason:  reason,
+		AddedFiles:    addedFilenames,
+		RemovedFiles:  removedFiles,
+		ModifiedFiles: modifiedFilenames,
+	}, nil
+
+}
+
 func (store *postgresMetadataStore) CreateDocument(
 	ctx context.Context,
 	companyID,
@@ -380,4 +461,29 @@ func (store *postgresMetadataStore) DeleteDocumentVersion(
 	}
 
 	return leftVersions, hashesToDelete, nil
+}
+
+func namesFromFileInfos(files []*docdb.FileInfo) (names []string) {
+	for _, item := range files {
+		names = append(names, item.Name)
+	}
+	return names
+}
+
+func fileInfosIntoDocumentVersionFiles(documentVersiononID uu.ID, batches ...[]*docdb.FileInfo) (versionFiles []*DocumentVersionFile) {
+	for _, items := range batches {
+		for _, item := range items {
+			versionFiles = append(
+				versionFiles,
+				&DocumentVersionFile{
+					DocumentVersionID: documentVersiononID,
+					Name:              item.Name,
+					Hash:              item.Hash,
+					Size:              item.Size,
+				},
+			)
+		}
+	}
+
+	return versionFiles
 }
