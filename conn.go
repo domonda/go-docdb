@@ -379,7 +379,6 @@ func (c *conn) AddDocumentVersion(
 		}
 
 		fileInfo := &FileInfo{Name: file.Name(), Size: file.Size(), Hash: ContentHash(data)}
-
 		if fileExists, _ := fileProvider.HasFile(file.Name()); fileExists {
 			modifiedFiles = append(modifiedFiles, fileInfo)
 		} else {

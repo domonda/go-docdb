@@ -93,6 +93,10 @@ func (store *s3DocStore) DocumentHashFileProvider(
 	docID uu.ID,
 	hashes []string,
 ) (docdb.FileProvider, error) {
+	if len(hashes) == 0 {
+		return &emptyFileProvider{}, nil
+	}
+
 	// assume a version has max 1000 files
 	response, err := store.client.ListObjectsV2(
 		ctx,

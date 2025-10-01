@@ -38,8 +38,6 @@ var FixtureGlobalConn = fix.New(func(t *testing.T) sqldb.Connection {
 })
 
 var FixtureCtxWithTestTx = fix.New(func(t *testing.T) context.Context {
-	t.Parallel()
-
 	tx, err := FixtureGlobalConn.Value(t).Begin(nil, 0)
 	if err != nil {
 		t.Fatalf("Failed to begin the transaction, %v", err)
@@ -51,24 +49,19 @@ var FixtureCtxWithTestTx = fix.New(func(t *testing.T) context.Context {
 	return ctx
 })
 
-var FixturePopulator = fix.New(func(t *testing.T) Populator {
-	return &populatorImpl{
+var FixturePopulator = fix.New(func(t *testing.T) *Populator {
+	return &Populator{
 		t:   t,
 		ctx: FixtureCtxWithTestTx.Value(t),
 	}
 })
 
-type Populator interface {
-	DocumentVersion(data ...map[string]any) *postgres.DocumentVersion
-	DocumentVersionFile(data ...map[string]any) *postgres.DocumentVersionFile
-}
-
-type populatorImpl struct {
+type Populator struct {
 	t   *testing.T
 	ctx context.Context
 }
 
-func (populator *populatorImpl) DocumentVersion(data ...map[string]any) *postgres.DocumentVersion {
+func (populator *Populator) DocumentVersion(data ...map[string]any) *postgres.DocumentVersion {
 	return insertRecordWithExtraData(
 		postgres.DocumentVersion{
 			ID:            uu.IDv7(),
@@ -84,7 +77,7 @@ func (populator *populatorImpl) DocumentVersion(data ...map[string]any) *postgre
 		}, populator, "docdb.document_version", data...)
 }
 
-func (populator *populatorImpl) DocumentVersionFile(data ...map[string]any) *postgres.DocumentVersionFile {
+func (populator *Populator) DocumentVersionFile(data ...map[string]any) *postgres.DocumentVersionFile {
 	docVersion := createRecordIfNeeded("DocumentVersion", populator.DocumentVersion, data...)
 
 	return insertRecordWithExtraData(
@@ -116,7 +109,7 @@ func createRecordIfNeeded[T any](
 
 func insertRecordWithExtraData[T any](
 	baseRecord T,
-	populator *populatorImpl,
+	populator *Populator,
 	table string,
 	data ...map[string]any,
 ) *T {

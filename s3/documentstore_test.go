@@ -56,7 +56,7 @@ func TestDocumentExists(t *testing.T) {
 			if scenario.bucketExists {
 				bucketName = s3fixtures.FixtureCleanBucket.Value(t)
 			}
-			documentID := uu.IDFrom("25a3eabf-6676-4c44-ae8a-a8007d0f6f1a")
+			documentID := uu.IDv7()
 			filename := "doc.pdf"
 
 			createDocument := func(docID uu.ID, filename string, content []byte) error {
@@ -128,7 +128,7 @@ func TestEnumDocumentIDs(t *testing.T) {
 		// given
 		documentStore := s3fixtures.FixtureGlobalDocumentStore.Value(t)
 		filename := "doc.pdf"
-		docID := uu.IDFrom("637c3457-f243-4ae6-b3b0-4182654832bc")
+		docID := uu.IDv7()
 		createDocument := s3fixtures.FixtureCreateDocument.Value(t)
 		createDocument(docID, filename, []byte("asd"))
 
@@ -162,7 +162,7 @@ func TestCreateDocument(t *testing.T) {
 		bucketName := s3fixtures.FixtureCleanBucket.Value(t)
 		documentStore := s3fixtures.FixtureGlobalDocumentStore.Value(t)
 		client := s3fixtures.FixtureGlobalS3Client.Value(t)
-		docID := uu.IDFrom("40224cda-26d3-4691-ad4a-97abc65230c1")
+		docID := uu.IDv7()
 
 		files := []*fs.MemFile{
 			{
@@ -210,8 +210,8 @@ func TestDocumentHashFileProvider(t *testing.T) {
 	t.Run("Returns proper versions", func(t *testing.T) {
 		// given
 		documentStore := s3fixtures.FixtureGlobalDocumentStore.Value(t)
-		docID1 := uu.IDFrom("531a747b-a814-47a9-90cb-0d59ce52df7e")
-		docID2 := uu.IDFrom("14f8f36c-8778-4567-9c8d-b1b998cb525a")
+		docID1 := uu.IDv7()
+		docID2 := uu.IDv7()
 		filename1 := "doc1.pdf"
 		filename2 := "doc2.pdf"
 		content1 := []byte("asd")
@@ -233,11 +233,11 @@ func TestDocumentHashFileProvider(t *testing.T) {
 
 		file1Exists, err := fileProvider.HasFile(filename1)
 		require.NoError(t, err)
-		require.True(t, true, file1Exists)
+		require.True(t, file1Exists)
 
 		file2Exists, err := fileProvider.HasFile(filename2)
 		require.NoError(t, err)
-		require.True(t, true, file2Exists)
+		require.True(t, file2Exists)
 
 		filenames, err := fileProvider.ListFiles(t.Context())
 		require.NoError(t, err)
@@ -251,12 +251,34 @@ func TestDocumentHashFileProvider(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, content2, savedContent2)
 	})
+
+	t.Run("Empty provider when no hashes", func(t *testing.T) {
+		// given
+		documentStore := s3fixtures.FixtureGlobalDocumentStore.Value(t)
+
+		// when
+		fileProvider, err := documentStore.DocumentHashFileProvider(t.Context(), uu.IDv7(), nil)
+
+		// then
+		require.NoError(t, err)
+
+		fileExists, err := fileProvider.HasFile("a")
+		require.NoError(t, err)
+		require.False(t, fileExists)
+
+		filenames, err := fileProvider.ListFiles(t.Context())
+		require.NoError(t, err)
+		require.Nil(t, filenames)
+
+		_, err = fileProvider.ReadFile(t.Context(), "b")
+		require.Error(t, err)
+	})
 }
 
 func TestReadDocumentHashFile(t *testing.T) {
 	t.Run("Returns file contents", func(t *testing.T) {
 		// given
-		docID := uu.IDFrom("45afa44f-3b8a-4b54-99dd-28ca92bb17cd")
+		docID := uu.IDv7()
 		documentStore := s3fixtures.FixtureGlobalDocumentStore.Value(t)
 		filename := "doc1.pdf"
 		content := []byte("asdasd")
@@ -275,7 +297,7 @@ func TestReadDocumentHashFile(t *testing.T) {
 	t.Run("Returns error if file does not exists", func(t *testing.T) {
 		// given
 		documentStore := s3fixtures.FixtureGlobalDocumentStore.Value(t)
-		docID := uu.IDFrom("24e4397c-c3bf-4e55-b993-ebef77107f17")
+		docID := uu.IDv7()
 		filename := "doc1.pdf"
 
 		// when
@@ -291,8 +313,8 @@ func TestDeleteDocument(t *testing.T) {
 		// given
 		createDocument := s3fixtures.FixtureCreateDocument.Value(t)
 		documentStore := s3fixtures.FixtureGlobalDocumentStore.Value(t)
-		docID1 := uu.IDFrom("c44677a0-d835-4ca5-9e27-4356296f94b2")
-		docID2 := uu.IDFrom("b1c3b01f-7c5b-45e4-b5c4-b5c10e38c43a")
+		docID1 := uu.IDv7()
+		docID2 := uu.IDv7()
 		filename1 := "doc1.pdf"
 		filename2 := "doc2.pdf"
 		content := []byte("asd")
@@ -327,8 +349,8 @@ func TestDeleteDocumentVersion(t *testing.T) {
 		// given
 		createDocument := s3fixtures.FixtureCreateDocument.Value(t)
 		documentStore := s3fixtures.FixtureGlobalDocumentStore.Value(t)
-		docID1 := uu.IDFrom("10a93961-cf1a-4352-bca2-49c8d46dbdd1")
-		docID2 := uu.IDFrom("cd1d5e85-08fa-4408-9a2f-a4c6013a7dad")
+		docID1 := uu.IDv7()
+		docID2 := uu.IDv7()
 		filename1 := "doc1.pdf"
 		filename2 := "doc2.pdf"
 		content1 := []byte("asd1")

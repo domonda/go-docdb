@@ -2,6 +2,7 @@ package s3
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 
@@ -73,4 +74,20 @@ func filenameFromKey(key string) string {
 	}
 
 	return parts[1]
+}
+
+var NoSuchFileErr = errors.New("no such file")
+
+type emptyFileProvider struct{}
+
+func (fileProvider *emptyFileProvider) HasFile(filename string) (bool, error) {
+	return false, nil
+}
+
+func (fileProvider *emptyFileProvider) ListFiles(ctx context.Context) (filenames []string, err error) {
+	return filenames, nil
+}
+
+func (fileProvider *emptyFileProvider) ReadFile(ctx context.Context, filename string) ([]byte, error) {
+	return nil, NoSuchFileErr
 }

@@ -90,6 +90,7 @@ func (store *postgresMetadataStore) AddDocumentVersion(
 		DocID:         docID,
 		CompanyID:     companyID,
 		Version:       newVersion,
+		PrevVersion:   previousVersion,
 		CommitUserID:  userID,
 		CommitReason:  reason,
 		AddedFiles:    addedFilenames,
@@ -267,8 +268,8 @@ func (store *postgresMetadataStore) DocumentVersionInfo(ctx context.Context, doc
 		/* sql */ `
 		select *
 		from docdb.document_version dv
-		join docdb.document_version_file dvf on dv.id = dvf.document_version_id
-		where document_id = $1 and version = $2`,
+		left join docdb.document_version_file dvf on dv.id = dvf.document_version_id
+		where dv.document_id = $1 and dv.version = $2`,
 		docID,
 		version,
 	)
@@ -283,10 +284,14 @@ func (store *postgresMetadataStore) DocumentVersionInfo(ctx context.Context, doc
 
 	files := map[string]docdb.FileInfo{}
 	for _, rec := range records {
-		files[rec.Name] = docdb.FileInfo{
-			Name: rec.Name,
-			Size: rec.Size,
-			Hash: rec.Hash,
+		if rec.DocumentVersionID == nil {
+			continue
+		}
+
+		files[*rec.Name] = docdb.FileInfo{
+			Name: *rec.Name,
+			Size: *rec.Size,
+			Hash: *rec.Hash,
 		}
 	}
 
@@ -313,7 +318,7 @@ func (store *postgresMetadataStore) LatestDocumentVersionInfo(ctx context.Contex
 		/* sql */ `
 		select *
 		from docdb.document_version dv
-		join docdb.document_version_file dvf on dv.id = dvf.document_version_id
+		left join docdb.document_version_file dvf on dv.id = dvf.document_version_id
 		where document_id = $1 and dv.version = (
 			select version
 			from docdb.document_version
@@ -334,10 +339,14 @@ func (store *postgresMetadataStore) LatestDocumentVersionInfo(ctx context.Contex
 
 	files := map[string]docdb.FileInfo{}
 	for _, rec := range records {
-		files[rec.Name] = docdb.FileInfo{
-			Name: rec.Name,
-			Size: rec.Size,
-			Hash: rec.Hash,
+		if rec.DocumentVersionID == nil {
+			continue
+		}
+
+		files[*rec.Name] = docdb.FileInfo{
+			Name: *rec.Name,
+			Size: *rec.Size,
+			Hash: *rec.Hash,
 		}
 	}
 
@@ -360,7 +369,11 @@ func (store *postgresMetadataStore) LatestDocumentVersionInfo(ctx context.Contex
 
 type docVersionQueryResult struct {
 	DocumentVersion
-	DocumentVersionFile
+
+	DocumentVersionID *uu.ID  `db:"document_version_id"`
+	Name              *string `db:"name"`
+	Size              *int64  `db:"size"`
+	Hash              *string `db:"hash"`
 }
 
 func (store *postgresMetadataStore) DeleteDocument(ctx context.Context, docID uu.ID) error {
