@@ -9,7 +9,11 @@ docker compose up -d --wait
 exit_code=0
 
 # when
-go test ./... -count 1 || exit_code=$?
+( \
+    go test ./postgres -count 1 \
+    && go test ./s3 -count 1 \
+    && go test . -count 1 \
+) || exit_code=$?
 
 # then
 docker compose down -v

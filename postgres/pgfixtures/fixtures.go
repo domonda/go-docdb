@@ -38,7 +38,7 @@ var FixtureGlobalConn = fix.New(func(t *testing.T) sqldb.Connection {
 })
 
 var FixtureCtxWithTestTx = fix.New(func(t *testing.T) context.Context {
-	tx, err := FixtureGlobalConn.Value(t).Begin(nil, 0)
+	tx, err := FixtureGlobalConn(t).Begin(nil, 0)
 	if err != nil {
 		t.Fatalf("Failed to begin the transaction, %v", err)
 		return nil
@@ -52,7 +52,7 @@ var FixtureCtxWithTestTx = fix.New(func(t *testing.T) context.Context {
 var FixturePopulator = fix.New(func(t *testing.T) *Populator {
 	return &Populator{
 		t:   t,
-		ctx: FixtureCtxWithTestTx.Value(t),
+		ctx: FixtureCtxWithTestTx(t),
 	}
 })
 

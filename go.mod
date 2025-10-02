@@ -5,7 +5,7 @@ go 1.25
 require (
 	github.com/aws/aws-sdk-go-v2/config v1.29.18
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.84.1
-	github.com/datek/fix v0.1.1
+	github.com/datek/fix v0.2.0
 	github.com/domonda/go-errs v0.0.0-20250603150208-71d6de0c48ea
 	github.com/domonda/go-pretty v0.0.0-20250602142956-1b467adc6387
 	github.com/domonda/go-sqldb/pqconn v0.0.0-20250723122821-e867f71cc84c

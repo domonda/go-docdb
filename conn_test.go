@@ -19,14 +19,14 @@ func TestConn(t *testing.T) {
 	t.Run("Test AddDocumentVersion with postgres and S3", func(t *testing.T) {
 		t.Run("Adds new files to the new version", func(t *testing.T) {
 			// given
-			bucketName := s3fixtures.FixtureCleanBucket.Value(t)
+			bucketName := s3fixtures.FixtureCleanBucket(t)
 			documentStore, err := s3.NewS3DocumentStore(bucketName)
 			require.NoError(t, err)
 			conn := docdb.NewConn(
 				documentStore,
 				postgres.NewMetadataStore(),
 			)
-			populator := pgfixtures.FixturePopulator.Value(t)
+			populator := pgfixtures.FixturePopulator(t)
 			documentVersionFile := populator.DocumentVersionFile()
 
 			newFile := fs.NewMemFile("doc-a.pdf", []byte("a"))
@@ -51,7 +51,7 @@ func TestConn(t *testing.T) {
 				return nil
 			}
 
-			ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
+			ctx := pgfixtures.FixtureCtxWithTestTx(t)
 
 			// when
 			err = conn.AddDocumentVersion(
@@ -69,7 +69,7 @@ func TestConn(t *testing.T) {
 			require.Equal(t, 0, len(newVersion.RemovedFiles))
 			require.Equal(t, 0, len(newVersion.ModifiedFiles))
 
-			objectExists := s3fixtures.FixtureObjextExists.Value(t)
+			objectExists := s3fixtures.FixtureObjextExists(t)
 			require.True(t, objectExists(newVersion.DocID, newVersion.AddedFiles[0], docdb.ContentHash(newFile.FileData)))
 
 			res, err := db.QueryValue[int](
@@ -92,15 +92,15 @@ func TestConn(t *testing.T) {
 
 		t.Run("Adds modified files to the new version", func(t *testing.T) {
 			// given
-			documentStore := s3fixtures.FixtureGlobalDocumentStore.Value(t)
+			documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
 			conn := docdb.NewConn(
 				documentStore,
 				postgres.NewMetadataStore(),
 			)
-			populator := pgfixtures.FixturePopulator.Value(t)
+			populator := pgfixtures.FixturePopulator(t)
 			content := []byte("a")
 			documentVersionFile := populator.DocumentVersionFile(map[string]any{"Hash": docdb.ContentHash(content)})
-			createDocument := s3fixtures.FixtureCreateDocument.Value(t)
+			createDocument := s3fixtures.FixtureCreateDocument(t)
 
 			createDocument(
 				documentVersionFile.DocumentVersion.DocumentID,
@@ -131,7 +131,7 @@ func TestConn(t *testing.T) {
 				return nil
 			}
 
-			ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
+			ctx := pgfixtures.FixtureCtxWithTestTx(t)
 
 			// when
 			err := conn.AddDocumentVersion(
@@ -149,7 +149,7 @@ func TestConn(t *testing.T) {
 			require.Equal(t, 0, len(newVersion.RemovedFiles))
 			require.Equal(t, 1, len(newVersion.ModifiedFiles))
 
-			objectExists := s3fixtures.FixtureObjextExists.Value(t)
+			objectExists := s3fixtures.FixtureObjextExists(t)
 			require.True(t, objectExists(newVersion.DocID, newVersion.ModifiedFiles[0], docdb.ContentHash(modifiedFile.FileData)))
 
 			res, err := db.QueryValue[int](
@@ -172,15 +172,15 @@ func TestConn(t *testing.T) {
 
 		t.Run("Adds removed files to the new version", func(t *testing.T) {
 			// given
-			documentStore := s3fixtures.FixtureGlobalDocumentStore.Value(t)
+			documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
 			conn := docdb.NewConn(
 				documentStore,
 				postgres.NewMetadataStore(),
 			)
-			populator := pgfixtures.FixturePopulator.Value(t)
+			populator := pgfixtures.FixturePopulator(t)
 			content := []byte("a")
 			documentVersionFile := populator.DocumentVersionFile(map[string]any{"Hash": docdb.ContentHash(content)})
-			createDocument := s3fixtures.FixtureCreateDocument.Value(t)
+			createDocument := s3fixtures.FixtureCreateDocument(t)
 
 			createDocument(
 				documentVersionFile.DocumentVersion.DocumentID,
@@ -208,7 +208,7 @@ func TestConn(t *testing.T) {
 				return nil
 			}
 
-			ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
+			ctx := pgfixtures.FixtureCtxWithTestTx(t)
 
 			// when
 			err := conn.AddDocumentVersion(
@@ -225,7 +225,7 @@ func TestConn(t *testing.T) {
 			require.Equal(t, 0, len(newVersion.AddedFiles))
 			require.Equal(t, 1, len(newVersion.RemovedFiles))
 			require.Equal(t, 0, len(newVersion.ModifiedFiles))
-			objectExists := s3fixtures.FixtureObjextExists.Value(t)
+			objectExists := s3fixtures.FixtureObjextExists(t)
 			require.True(t, objectExists(newVersion.DocID, newVersion.RemovedFiles[0], documentVersionFile.Hash))
 
 			res, err := db.QueryValue[int](
@@ -248,12 +248,12 @@ func TestConn(t *testing.T) {
 
 		t.Run("Basic document version data is correct", func(t *testing.T) {
 			// given
-			documentStore := s3fixtures.FixtureGlobalDocumentStore.Value(t)
+			documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
 			conn := docdb.NewConn(
 				documentStore,
 				postgres.NewMetadataStore(),
 			)
-			populator := pgfixtures.FixturePopulator.Value(t)
+			populator := pgfixtures.FixturePopulator(t)
 			documentVersion := populator.DocumentVersion()
 			companyID := uu.IDv7()
 
@@ -276,7 +276,7 @@ func TestConn(t *testing.T) {
 				return nil
 			}
 
-			ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
+			ctx := pgfixtures.FixtureCtxWithTestTx(t)
 
 			// when
 			err := conn.AddDocumentVersion(

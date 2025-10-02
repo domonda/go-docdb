@@ -22,7 +22,7 @@ func TestCreateDocument(t *testing.T) {
 	t.Run("Creates document version with proper file metadata", func(t *testing.T) {
 		// given
 		t.Parallel()
-		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
 
 		memFiles := []*fs.MemFile{
 			{
@@ -93,13 +93,13 @@ func TestDocumentCompanyID(t *testing.T) {
 	t.Run("Returns company ID from the latest version", func(t *testing.T) {
 		// given
 		t.Parallel()
-		populator := pgfixtures.FixturePopulator.Value(t)
+		populator := pgfixtures.FixturePopulator(t)
 		docVersion1 := populator.DocumentVersion()
 		docVersion2 := populator.DocumentVersion(map[string]any{
 			"DocumentID": docVersion1.DocumentID,
 			"Version":    docdb.VersionTimeFrom(time.Now().Add(time.Second)),
 		})
-		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
 
 		// when
 		clientCompanyId, err := store.DocumentCompanyID(
@@ -115,7 +115,7 @@ func TestDocumentCompanyID(t *testing.T) {
 	t.Run("Returns error if document not found", func(t *testing.T) {
 		// given
 		t.Parallel()
-		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
 
 		// when
 		_, err := store.DocumentCompanyID(
@@ -132,13 +132,13 @@ func TestSetDocumentCompanyID(t *testing.T) {
 	t.Run("Sets the company ID for all versions", func(t *testing.T) {
 		// given
 		t.Parallel()
-		populator := pgfixtures.FixturePopulator.Value(t)
+		populator := pgfixtures.FixturePopulator(t)
 		docVersion1 := populator.DocumentVersion()
 		populator.DocumentVersion(map[string]any{
 			"DocumentID": docVersion1.DocumentID,
 			"Version":    docdb.VersionTimeFrom(time.Now().Add(time.Second)),
 		})
-		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
 
 		// when
 		newCompanyID := uu.IDv7()
@@ -162,7 +162,7 @@ func TestSetDocumentCompanyID(t *testing.T) {
 	t.Run("Returns error if document version does not exist", func(t *testing.T) {
 		// given
 		t.Parallel()
-		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
 
 		// when
 		err := store.SetDocumentCompanyID(ctx, uu.IDv7(), uu.IDv7())
@@ -176,8 +176,8 @@ func TestDocumentVersions(t *testing.T) {
 	t.Run("Returns all versions belonging to a document", func(t *testing.T) {
 		// given
 		t.Parallel()
-		populator := pgfixtures.FixturePopulator.Value(t)
-		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
+		populator := pgfixtures.FixturePopulator(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
 
 		docVersion1 := populator.DocumentVersion()
 		docVersion2 := populator.DocumentVersion(map[string]any{
@@ -200,7 +200,7 @@ func TestDocumentVersions(t *testing.T) {
 	t.Run("Returns error if no versions", func(t *testing.T) {
 		// given
 		t.Parallel()
-		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
 
 		// when
 		_, err := store.DocumentVersions(ctx, uu.IDv7())
@@ -214,8 +214,8 @@ func TestEnumCompanyDocumentIDs(t *testing.T) {
 	t.Run("Iterates over all company related documents", func(t *testing.T) {
 		// given
 		t.Parallel()
-		populator := pgfixtures.FixturePopulator.Value(t)
-		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
+		populator := pgfixtures.FixturePopulator(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
 		doc1Version1 := populator.DocumentVersion(map[string]any{"DocumentID": uu.IDFrom("a3c60853-022c-403d-85cc-6ea146ec6a4a")})
 		populator.DocumentVersion(map[string]any{
 			"DocumentID": doc1Version1.DocumentID,
@@ -250,7 +250,7 @@ func TestEnumCompanyDocumentIDs(t *testing.T) {
 	t.Run("Returns error if no versions", func(t *testing.T) {
 		// given
 		t.Parallel()
-		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
 
 		// when
 		err := store.EnumCompanyDocumentIDs(
@@ -266,8 +266,8 @@ func TestEnumCompanyDocumentIDs(t *testing.T) {
 	t.Run("Returns error from callback", func(t *testing.T) {
 		// given
 		t.Parallel()
-		populator := pgfixtures.FixturePopulator.Value(t)
-		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
+		populator := pgfixtures.FixturePopulator(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
 		docVersion := populator.DocumentVersion()
 
 		// when
@@ -289,8 +289,8 @@ func TestLatestDocumentVersion(t *testing.T) {
 	t.Run("Returns latest docuemnt version", func(t *testing.T) {
 		// given
 		t.Parallel()
-		populator := pgfixtures.FixturePopulator.Value(t)
-		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
+		populator := pgfixtures.FixturePopulator(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
 
 		docVersion1 := populator.DocumentVersion()
 		docVersion2 := populator.DocumentVersion(map[string]any{
@@ -311,7 +311,7 @@ func TestLatestDocumentVersion(t *testing.T) {
 	t.Run("Returns error if no version found", func(t *testing.T) {
 		// given
 		t.Parallel()
-		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
 
 		// when
 		_, err := store.LatestDocumentVersion(ctx, uu.IDv7())
@@ -325,8 +325,8 @@ func TestDocumentVersionInfo(t *testing.T) {
 	t.Run("Returns document version info", func(t *testing.T) {
 		// given
 		t.Parallel()
-		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
-		populator := pgfixtures.FixturePopulator.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		populator := pgfixtures.FixturePopulator(t)
 		docVersionFile1 := populator.DocumentVersionFile()
 
 		docVersionFile2 := populator.DocumentVersionFile(map[string]any{
@@ -369,8 +369,8 @@ func TestDocumentVersionInfo(t *testing.T) {
 	t.Run("Returns document version info without files", func(t *testing.T) {
 		// given
 		t.Parallel()
-		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
-		populator := pgfixtures.FixturePopulator.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		populator := pgfixtures.FixturePopulator(t)
 		docVersion := populator.DocumentVersion()
 
 		// not wanted
@@ -397,7 +397,7 @@ func TestDocumentVersionInfo(t *testing.T) {
 	t.Run("Returns error if no version info found", func(t *testing.T) {
 		// given
 		t.Parallel()
-		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
 
 		// when
 		_, err := store.DocumentVersionInfo(ctx, uu.IDv7(), docdb.VersionTimeFrom(time.Now()))
@@ -411,8 +411,8 @@ func TestLatestDocumentVersionInfo(t *testing.T) {
 	t.Run("Returns latest document version info", func(t *testing.T) {
 		// given
 		t.Parallel()
-		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
-		populator := pgfixtures.FixturePopulator.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		populator := pgfixtures.FixturePopulator(t)
 		// older, not wanted
 		docVersion1File := populator.DocumentVersionFile()
 
@@ -464,8 +464,8 @@ func TestLatestDocumentVersionInfo(t *testing.T) {
 	t.Run("Returns latest document version info without files", func(t *testing.T) {
 		// given
 		t.Parallel()
-		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
-		populator := pgfixtures.FixturePopulator.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		populator := pgfixtures.FixturePopulator(t)
 		docVersion := populator.DocumentVersion()
 
 		// not wanted
@@ -491,7 +491,7 @@ func TestLatestDocumentVersionInfo(t *testing.T) {
 	t.Run("Returns error if no version info found", func(t *testing.T) {
 		// given
 		t.Parallel()
-		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
 
 		// when
 		_, err := store.LatestDocumentVersion(ctx, uu.IDv7())
@@ -505,8 +505,8 @@ func TestDeleteDocument(t *testing.T) {
 	t.Run("Deletes document versions", func(t *testing.T) {
 		// given
 		t.Parallel()
-		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
-		populator := pgfixtures.FixturePopulator.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		populator := pgfixtures.FixturePopulator(t)
 		doc1Version1 := populator.DocumentVersion()
 		populator.DocumentVersion(map[string]any{
 			"DocumentID": doc1Version1.DocumentID,
@@ -540,7 +540,7 @@ func TestDeleteDocument(t *testing.T) {
 	t.Run("Returns error if nothing to delete", func(t *testing.T) {
 		// given
 		t.Parallel()
-		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
 
 		// when
 		err := store.DeleteDocument(ctx, uu.IDv7())
@@ -554,8 +554,8 @@ func TestDeleteDocumentVersion(t *testing.T) {
 	t.Run("Deletes document version", func(t *testing.T) {
 		// given
 		t.Parallel()
-		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
-		populator := pgfixtures.FixturePopulator.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		populator := pgfixtures.FixturePopulator(t)
 		versionFile1 := populator.DocumentVersionFile(map[string]any{
 			"Hash": docdb.ContentHash([]byte("b")),
 		})
@@ -597,7 +597,7 @@ func TestDeleteDocumentVersion(t *testing.T) {
 	t.Run("Returns error if nothing to delete", func(t *testing.T) {
 		// given
 		t.Parallel()
-		ctx := pgfixtures.FixtureCtxWithTestTx.Value(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
 
 		// when
 		_, _, err := store.DeleteDocumentVersion(ctx, uu.IDv7(), docdb.VersionTimeFrom(time.Now()))

@@ -21,6 +21,8 @@ github.com/cncf/xds/go v0.0.0-20250326154945-ae57f3c0d45f/go.mod h1:W+zGtBO5Y1Ig
 github.com/creack/pty v1.1.9/go.mod h1:oKZEueFk5CKHvIhNR5MUki03XCEU+Q6VDXinZuGJ33E=
 github.com/datek/fix v0.1.1 h1:pUx5BGQ1Hh/n8j6K07sOBnYx7/hQyNdNsmDGQC7Qwe4=
 github.com/datek/fix v0.1.1/go.mod h1:/9R0aM9UCRl5/DpsCqqANpjdJDACfLVgwf7YYQ+LREc=
+github.com/datek/fix v0.2.0 h1:oYSZ8qd8MkBhORgCbunlRXY2l29xRlhUA9u8Jep8iCY=
+github.com/datek/fix v0.2.0/go.mod h1:/9R0aM9UCRl5/DpsCqqANpjdJDACfLVgwf7YYQ+LREc=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/domonda/go-encjson v0.0.0-20210830085227-1beee57a72d8/go.mod h1:i9MgoQ+iTNvBGS63YftEDoNsr6dW6lAefUibkoCdMS4=
 github.com/domonda/go-errs v0.0.0-20230207132857-bf0bda36a13a/go.mod h1:r9rjz9Xo8n4hNV3M47CY5quNOLBlNYuzBVC4Qk2JDOY=

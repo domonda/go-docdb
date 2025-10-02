@@ -41,6 +41,7 @@ github.com/bahlo/generic-list-go v0.2.0/go.mod h1:2KvAjgMlE5NNynlg/5iLrrCCZ2+5xW
 github.com/buger/jsonparser v1.1.1 h1:2PnMjfWD7wBILjqQbt530v576A/cAbQvEW9gGIpYMUs=
 github.com/buger/jsonparser v1.1.1/go.mod h1:6RYKKt7H4d4+iWqouImQ9R2FZql3VbhNgx27UK13J/0=
 <<<<<<< HEAD
+<<<<<<< HEAD
 github.com/corazawaf/libinjection-go v0.2.2 h1:Chzodvb6+NXh6wew5/yhD0Ggioif9ACrQGR4qjTCs1g=
 github.com/corazawaf/libinjection-go v0.2.2/go.mod h1:OP4TM7xdJ2skyXqNX1AN1wN5nNZEmJNuWbNPOItn7aw=
 github.com/creack/pty v1.1.9/go.mod h1:oKZEueFk5CKHvIhNR5MUki03XCEU+Q6VDXinZuGJ33E=
@@ -49,6 +50,10 @@ github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc/go.mod h1:J7Y8Yc
 =======
 github.com/datek/fix v0.1.1 h1:pUx5BGQ1Hh/n8j6K07sOBnYx7/hQyNdNsmDGQC7Qwe4=
 github.com/datek/fix v0.1.1/go.mod h1:/9R0aM9UCRl5/DpsCqqANpjdJDACfLVgwf7YYQ+LREc=
+=======
+github.com/datek/fix v0.2.0 h1:oYSZ8qd8MkBhORgCbunlRXY2l29xRlhUA9u8Jep8iCY=
+github.com/datek/fix v0.2.0/go.mod h1:/9R0aM9UCRl5/DpsCqqANpjdJDACfLVgwf7YYQ+LREc=
+>>>>>>> ba9b73f (Use new github.com/datek/fix)
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 >>>>>>> 00646aa (WIP postgres metadata store)

@@ -76,7 +76,7 @@ func filenameFromKey(key string) string {
 	return parts[1]
 }
 
-var NoSuchFileErr = errors.New("no such file")
+var ErrNoSuchFile = errors.New("no such file")
 
 type emptyFileProvider struct{}
 
@@ -89,5 +89,5 @@ func (fileProvider *emptyFileProvider) ListFiles(ctx context.Context) (filenames
 }
 
 func (fileProvider *emptyFileProvider) ReadFile(ctx context.Context, filename string) ([]byte, error) {
-	return nil, NoSuchFileErr
+	return nil, ErrNoSuchFile
 }

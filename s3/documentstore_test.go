@@ -50,18 +50,18 @@ func TestDocumentExists(t *testing.T) {
 	for _, scenario := range scenarios {
 		t.Run(scenario.name, func(t *testing.T) {
 			// given
-			documentStore := s3fixtures.FixtureGlobalDocumentStore.Value(t)
+			documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
 
-			bucketName := s3fixtures.FixtureNoBucket.Value(t)
+			bucketName := s3fixtures.FixtureNoBucket(t)
 			if scenario.bucketExists {
-				bucketName = s3fixtures.FixtureCleanBucket.Value(t)
+				bucketName = s3fixtures.FixtureCleanBucket(t)
 			}
 			documentID := uu.IDv7()
 			filename := "doc.pdf"
 
 			createDocument := func(docID uu.ID, filename string, content []byte) error {
 				hash := docdb.ContentHash(content)
-				_, err := s3fixtures.FixtureGlobalS3Client.Value(t).PutObject(
+				_, err := s3fixtures.FixtureGlobalS3Client(t).PutObject(
 					t.Context(),
 					&awss3.PutObjectInput{
 						Bucket: p(bucketName),
@@ -99,8 +99,8 @@ func TestEnumDocumentIDs(t *testing.T) {
 
 		t.Cleanup(func() { timeout.Stop() })
 
-		createDocument := s3fixtures.FixtureCreateDocument.Value(t)
-		documentStore := s3fixtures.FixtureGlobalDocumentStore.Value(t)
+		createDocument := s3fixtures.FixtureCreateDocument(t)
+		documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
 
 		// max keys = 1000, this ensures pagination works correctly, because 501 * 2 = 1002
 		numDocuments := 501
@@ -126,10 +126,10 @@ func TestEnumDocumentIDs(t *testing.T) {
 
 	t.Run("Returns error from callback", func(t *testing.T) {
 		// given
-		documentStore := s3fixtures.FixtureGlobalDocumentStore.Value(t)
+		documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
 		filename := "doc.pdf"
 		docID := uu.IDv7()
-		createDocument := s3fixtures.FixtureCreateDocument.Value(t)
+		createDocument := s3fixtures.FixtureCreateDocument(t)
 		createDocument(docID, filename, []byte("asd"))
 
 		// when
@@ -144,7 +144,7 @@ func TestEnumDocumentIDs(t *testing.T) {
 
 	t.Run("Returns error if bucket does not exist", func(t *testing.T) {
 		// when
-		documentStore := s3fixtures.FixtureGlobalDocumentStore.Value(t)
+		documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
 
 		err := documentStore.EnumDocumentIDs(t.Context(), func(ctx context.Context, i uu.ID) error {
 			return nil
@@ -159,9 +159,9 @@ func TestCreateDocument(t *testing.T) {
 
 	t.Run("Saves files", func(t *testing.T) {
 		// given
-		bucketName := s3fixtures.FixtureCleanBucket.Value(t)
-		documentStore := s3fixtures.FixtureGlobalDocumentStore.Value(t)
-		client := s3fixtures.FixtureGlobalS3Client.Value(t)
+		bucketName := s3fixtures.FixtureCleanBucket(t)
+		documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
+		client := s3fixtures.FixtureGlobalS3Client(t)
 		docID := uu.IDv7()
 
 		files := []*fs.MemFile{
@@ -194,7 +194,7 @@ func TestCreateDocument(t *testing.T) {
 
 	t.Run("Returns error if bucket does not exist", func(t *testing.T) {
 		// when
-		documentStore := s3fixtures.FixtureGlobalDocumentStore.Value(t)
+		documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
 		err := documentStore.CreateDocument(
 			t.Context(),
 			uu.IDv4(),
@@ -209,14 +209,14 @@ func TestCreateDocument(t *testing.T) {
 func TestDocumentHashFileProvider(t *testing.T) {
 	t.Run("Returns proper versions", func(t *testing.T) {
 		// given
-		documentStore := s3fixtures.FixtureGlobalDocumentStore.Value(t)
+		documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
 		docID1 := uu.IDv7()
 		docID2 := uu.IDv7()
 		filename1 := "doc1.pdf"
 		filename2 := "doc2.pdf"
 		content1 := []byte("asd")
 		content2 := []byte("asdasd")
-		createDoc := s3fixtures.FixtureCreateDocument.Value(t)
+		createDoc := s3fixtures.FixtureCreateDocument(t)
 		createDoc(docID1, filename1, content1) // expected
 		createDoc(docID1, filename2, content2) // expected
 		createDoc(docID2, filename1, content1)
@@ -254,7 +254,7 @@ func TestDocumentHashFileProvider(t *testing.T) {
 
 	t.Run("Empty provider when no hashes", func(t *testing.T) {
 		// given
-		documentStore := s3fixtures.FixtureGlobalDocumentStore.Value(t)
+		documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
 
 		// when
 		fileProvider, err := documentStore.DocumentHashFileProvider(t.Context(), uu.IDv7(), nil)
@@ -279,10 +279,10 @@ func TestReadDocumentHashFile(t *testing.T) {
 	t.Run("Returns file contents", func(t *testing.T) {
 		// given
 		docID := uu.IDv7()
-		documentStore := s3fixtures.FixtureGlobalDocumentStore.Value(t)
+		documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
 		filename := "doc1.pdf"
 		content := []byte("asdasd")
-		createDocument := s3fixtures.FixtureCreateDocument.Value(t)
+		createDocument := s3fixtures.FixtureCreateDocument(t)
 		createDocument(docID, filename, content)
 		hash := docdb.ContentHash(content)
 
@@ -296,7 +296,7 @@ func TestReadDocumentHashFile(t *testing.T) {
 
 	t.Run("Returns error if file does not exists", func(t *testing.T) {
 		// given
-		documentStore := s3fixtures.FixtureGlobalDocumentStore.Value(t)
+		documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
 		docID := uu.IDv7()
 		filename := "doc1.pdf"
 
@@ -311,8 +311,8 @@ func TestReadDocumentHashFile(t *testing.T) {
 func TestDeleteDocument(t *testing.T) {
 	t.Run("Deletes all objects belonging to a document", func(t *testing.T) {
 		// given
-		createDocument := s3fixtures.FixtureCreateDocument.Value(t)
-		documentStore := s3fixtures.FixtureGlobalDocumentStore.Value(t)
+		createDocument := s3fixtures.FixtureCreateDocument(t)
+		documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
 		docID1 := uu.IDv7()
 		docID2 := uu.IDv7()
 		filename1 := "doc1.pdf"
@@ -322,7 +322,7 @@ func TestDeleteDocument(t *testing.T) {
 		createDocument(docID1, filename1, []byte("asd"))
 		createDocument(docID1, filename2, []byte("asd"))
 		createDocument(docID2, filename1, []byte("asd")) // shouldn't be deleted
-		exists := s3fixtures.FixtureObjextExists.Value(t)
+		exists := s3fixtures.FixtureObjextExists(t)
 
 		// when
 		err := documentStore.DeleteDocument(t.Context(), docID1)
@@ -336,7 +336,7 @@ func TestDeleteDocument(t *testing.T) {
 
 	t.Run("Returns error if bucket does not exist", func(t *testing.T) {
 		// when
-		documentStore := s3fixtures.FixtureGlobalDocumentStore.Value(t)
+		documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
 		err := documentStore.DeleteDocument(t.Context(), uu.IDFrom("f8075810-a28a-47da-be72-05f0023b3112"))
 
 		// then
@@ -347,8 +347,8 @@ func TestDeleteDocument(t *testing.T) {
 func TestDeleteDocumentVersion(t *testing.T) {
 	t.Run("Deletes all objects belonging to a document version", func(t *testing.T) {
 		// given
-		createDocument := s3fixtures.FixtureCreateDocument.Value(t)
-		documentStore := s3fixtures.FixtureGlobalDocumentStore.Value(t)
+		createDocument := s3fixtures.FixtureCreateDocument(t)
+		documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
 		docID1 := uu.IDv7()
 		docID2 := uu.IDv7()
 		filename1 := "doc1.pdf"
@@ -365,7 +365,7 @@ func TestDeleteDocumentVersion(t *testing.T) {
 		createDocument(docID1, filename2, content2)
 		createDocument(docID1, filename2, content3) // shouldn't be deleted
 		createDocument(docID2, filename1, content4) // shouldn't be deleted
-		exists := s3fixtures.FixtureObjextExists.Value(t)
+		exists := s3fixtures.FixtureObjextExists(t)
 
 		// when
 		err := documentStore.DeleteDocumentHashes(t.Context(), docID1, []string{hash1, hash2})
@@ -380,7 +380,7 @@ func TestDeleteDocumentVersion(t *testing.T) {
 
 	t.Run("Returns error if bucket does not exist", func(t *testing.T) {
 		// when
-		documentStore := s3fixtures.FixtureGlobalDocumentStore.Value(t)
+		documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
 		err := documentStore.DeleteDocumentHashes(
 			t.Context(),
 			uu.IDFrom("6920916f-8684-4d7e-9114-7b7409b2d279"),

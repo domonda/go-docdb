@@ -23,8 +23,8 @@ var FixtureCreateDocument = fix.New(func(t *testing.T) func(
 	filename string,
 	content []byte,
 ) {
-	client := FixtureGlobalS3Client.Value(t)
-	bucketName := FixtureCleanBucket.Value(t)
+	client := FixtureGlobalS3Client(t)
+	bucketName := FixtureCleanBucket(t)
 
 	return func(docID uu.ID, filename string, content []byte) {
 		hash := docdb.ContentHash(content)
@@ -44,8 +44,8 @@ var FixtureCreateDocument = fix.New(func(t *testing.T) func(
 })
 
 var FixtureObjextExists = fix.New(func(t *testing.T) func(docID uu.ID, filename, hash string) bool {
-	bucketName := FixtureCleanBucket.Value(t)
-	client := FixtureGlobalS3Client.Value(t)
+	bucketName := FixtureCleanBucket(t)
+	client := FixtureGlobalS3Client(t)
 
 	return func(docID uu.ID, filename, hash string) bool {
 		_, err := client.GetObject(
@@ -61,8 +61,8 @@ var FixtureObjextExists = fix.New(func(t *testing.T) func(docID uu.ID, filename,
 })
 
 var FixtureNoBucket = fix.New(func(t *testing.T) string {
-	bucketName := FixtureBucketName.Value(t)
-	if err := deleteBucket(t.Context(), FixtureGlobalS3Client.Value(t), p(bucketName)); err != nil {
+	bucketName := FixtureBucketName(t)
+	if err := deleteBucket(t.Context(), FixtureGlobalS3Client(t), p(bucketName)); err != nil {
 		t.Fatalf("Failed to delete bucket %s, %v", bucketName, err)
 	}
 
@@ -70,8 +70,8 @@ var FixtureNoBucket = fix.New(func(t *testing.T) string {
 })
 
 var FixtureCleanBucket = fix.New(func(t *testing.T) string {
-	bucketName := FixtureBucketName.Value(t)
-	client := FixtureGlobalS3Client.Value(t)
+	bucketName := FixtureBucketName(t)
+	client := FixtureGlobalS3Client(t)
 	createBucket := func() (*awss3.CreateBucketOutput, error) {
 		return client.CreateBucket(t.Context(), &awss3.CreateBucketInput{
 			Bucket: &bucketName,
@@ -111,7 +111,7 @@ var FixtureGlobalDocumentStore = fix.New(func(t *testing.T) docdb.DocumentStore 
 		return docStore
 	}
 
-	documentStore, err := s3.NewS3DocumentStore(FixtureBucketName.Value(t))
+	documentStore, err := s3.NewS3DocumentStore(FixtureBucketName(t))
 	if err != nil {
 		t.Fatalf("Failed to create document store, %v", err)
 	}
