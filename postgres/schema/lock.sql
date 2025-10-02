@@ -8,8 +8,6 @@ create table docdb.lock (
 );
 
 
-grant select on table docdb.lock to domonda_user;
-
 create index docdb_lock_user_id_idx on docdb.lock(user_id);
 create index docdb_lock_reason_idx on docdb.lock(reason);
 
@@ -22,8 +20,6 @@ create table docdb.locked_document (
 );
 
 create index docdb_locked_document_lock_id_idx on docdb.locked_document(lock_id);
-
-grant select on table docdb.locked_document to domonda_user;
 
 ----
 

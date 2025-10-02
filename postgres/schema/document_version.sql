@@ -32,6 +32,5 @@ create        index document_version_commit_reason_idx  on docdb.document_versio
 
 
 comment on type docdb.document_version is 'Document version meta data';
-grant select on table docdb.document_version to domonda_user;
 
 
