@@ -1,4 +1,4 @@
-package docdb_test
+package integrationtests
 
 import (
 	"context"

@@ -12,7 +12,7 @@ exit_code=0
 ( \
     go test ./postgres -count 1 \
     && go test ./s3 -count 1 \
-    && go test . -count 1 \
+    && go test ./integrationtests -count 1 \
 ) || exit_code=$?
 
 # then
