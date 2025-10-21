@@ -43,18 +43,23 @@ func (fileProvider *s3FileProvider) ListFiles(ctx context.Context) (filenames []
 }
 
 func (fileProvider *s3FileProvider) ReadFile(ctx context.Context, filename string) ([]byte, error) {
+	key := fileProvider.findKey(filename)
+	if key == "" {
+		return nil, ErrNoSuchFile
+	}
+
 	resp, err := fileProvider.client.GetObject(
 		ctx,
 		&awss3.GetObjectInput{
 			Bucket: &fileProvider.bucketName,
-			Key:    p(fileProvider.findKey(filename)),
+			Key:    p(key),
 		},
 	)
 
 	if err != nil {
 		return nil, err
 	}
-
+	defer resp.Body.Close()
 	return io.ReadAll(resp.Body)
 }
 

@@ -111,11 +111,7 @@ var FixtureGlobalDocumentStore = fix.New(func(t *testing.T) docdb.DocumentStore 
 		return docStore
 	}
 
-	documentStore, err := s3.NewS3DocumentStore(FixtureBucketName(t))
-	if err != nil {
-		t.Fatalf("Failed to create document store, %v", err)
-	}
-
+	documentStore := s3.NewS3DocumentStore(FixtureBucketName(t), FixtureGlobalS3Client(t))
 	docStore = documentStore
 	return docStore
 })

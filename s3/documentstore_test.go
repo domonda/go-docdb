@@ -250,6 +250,9 @@ func TestDocumentHashFileProvider(t *testing.T) {
 		savedContent2, err := fileProvider.ReadFile(t.Context(), filename2)
 		require.NoError(t, err)
 		require.Equal(t, content2, savedContent2)
+
+		_, err = fileProvider.ReadFile(t.Context(), "imaginary file")
+		require.ErrorIs(t, err, s3.ErrNoSuchFile)
 	})
 
 	t.Run("Empty provider when no hashes", func(t *testing.T) {
@@ -271,7 +274,7 @@ func TestDocumentHashFileProvider(t *testing.T) {
 		require.Nil(t, filenames)
 
 		_, err = fileProvider.ReadFile(t.Context(), "b")
-		require.Error(t, err)
+		require.ErrorIs(t, err, s3.ErrNoSuchFile)
 	})
 }
 

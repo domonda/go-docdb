@@ -20,8 +20,7 @@ func TestConn(t *testing.T) {
 		t.Run("Adds new files to the new version", func(t *testing.T) {
 			// given
 			bucketName := s3fixtures.FixtureCleanBucket(t)
-			documentStore, err := s3.NewS3DocumentStore(bucketName)
-			require.NoError(t, err)
+			documentStore := s3.NewS3DocumentStore(bucketName, s3fixtures.FixtureGlobalS3Client(t))
 			conn := docdb.NewConn(
 				documentStore,
 				postgres.NewMetadataStore(),
@@ -54,7 +53,7 @@ func TestConn(t *testing.T) {
 			ctx := pgfixtures.FixtureCtxWithTestTx(t)
 
 			// when
-			err = conn.AddDocumentVersion(
+			err := conn.AddDocumentVersion(
 				ctx,
 				documentVersionFile.DocumentVersion.DocumentID,
 				uu.IDv7(),

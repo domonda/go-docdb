@@ -8,7 +8,6 @@ import (
 	"io"
 	"strings"
 
-	"github.com/aws/aws-sdk-go-v2/config"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/domonda/go-docdb"
@@ -16,17 +15,11 @@ import (
 	"github.com/ungerik/go-fs"
 )
 
-func NewS3DocumentStore(bucketName string) (docdb.DocumentStore, error) {
-	cfg, err := config.LoadDefaultConfig(context.Background())
-	if err != nil {
-		return nil, err
-	}
-
-	client := awss3.NewFromConfig(cfg)
+func NewS3DocumentStore(bucketName string, s3Client *awss3.Client) docdb.DocumentStore {
 	return &s3DocStore{
-		client:     client,
+		client:     s3Client,
 		bucketName: bucketName,
-	}, nil
+	}
 }
 
 type s3DocStore struct {
@@ -68,6 +61,10 @@ func (store *s3DocStore) CreateDocument(
 	files []fs.FileReader,
 ) error {
 	for _, file := range files {
+		if strings.Contains(file.Name(), "/") {
+			return fmt.Errorf("filename '%s' contains '/'", file.Name())
+		}
+
 		data, err := file.ReadAll()
 		if err != nil {
 			return err
@@ -102,7 +99,7 @@ func (store *s3DocStore) DocumentHashFileProvider(
 		ctx,
 		&awss3.ListObjectsV2Input{
 			Bucket: &store.bucketName,
-			Prefix: p(docID.String()),
+			Prefix: p(docID.String() + "/"),
 		},
 	)
 
@@ -113,7 +110,7 @@ func (store *s3DocStore) DocumentHashFileProvider(
 	keys := []string{}
 	for _, obj := range response.Contents {
 		for _, hash := range hashes {
-			if strings.Contains(*obj.Key, hash) {
+			if hashFromKey(*obj.Key) == hash {
 				keys = append(keys, *obj.Key)
 			}
 		}
@@ -140,6 +137,7 @@ func (store *s3DocStore) ReadDocumentHashFile(
 		return nil, err
 	}
 
+	defer res.Body.Close()
 	return io.ReadAll(res.Body)
 }
 
@@ -186,7 +184,7 @@ func (store *s3DocStore) DeleteDocumentHashes(ctx context.Context, docID uu.ID, 
 	objectsToDelete := []types.ObjectIdentifier{}
 	for _, obj := range response.Contents {
 		for _, hash := range hashes {
-			if strings.Contains(*obj.Key, hash) {
+			if hashFromKey(*obj.Key) == hash {
 				objectsToDelete = append(objectsToDelete, types.ObjectIdentifier{Key: obj.Key})
 			}
 		}
@@ -299,4 +297,13 @@ func idFromKey(key string) uu.ID {
 	}
 
 	return uu.IDFrom(parts[0])
+}
+
+func hashFromKey(key string) string {
+	parts := strings.Split(key, "/")
+	if len(parts) != 3 {
+		return ""
+	}
+
+	return parts[2]
 }
