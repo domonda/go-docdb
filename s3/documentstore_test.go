@@ -325,7 +325,7 @@ func TestDeleteDocument(t *testing.T) {
 		createDocument(docID1, filename1, []byte("asd"))
 		createDocument(docID1, filename2, []byte("asd"))
 		createDocument(docID2, filename1, []byte("asd")) // shouldn't be deleted
-		exists := s3fixtures.FixtureObjextExists(t)
+		exists := s3fixtures.FixtureObjectExists(t)
 
 		// when
 		err := documentStore.DeleteDocument(t.Context(), docID1)
@@ -368,7 +368,7 @@ func TestDeleteDocumentVersion(t *testing.T) {
 		createDocument(docID1, filename2, content2)
 		createDocument(docID1, filename2, content3) // shouldn't be deleted
 		createDocument(docID2, filename1, content4) // shouldn't be deleted
-		exists := s3fixtures.FixtureObjextExists(t)
+		exists := s3fixtures.FixtureObjectExists(t)
 
 		// when
 		err := documentStore.DeleteDocumentHashes(t.Context(), docID1, []string{hash1, hash2})

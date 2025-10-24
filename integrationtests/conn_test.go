@@ -68,7 +68,7 @@ func TestConn(t *testing.T) {
 			require.Equal(t, 0, len(newVersion.RemovedFiles))
 			require.Equal(t, 0, len(newVersion.ModifiedFiles))
 
-			objectExists := s3fixtures.FixtureObjextExists(t)
+			objectExists := s3fixtures.FixtureObjectExists(t)
 			require.True(t, objectExists(newVersion.DocID, newVersion.AddedFiles[0], docdb.ContentHash(newFile.FileData)))
 
 			res, err := db.QueryValue[int](
@@ -148,7 +148,7 @@ func TestConn(t *testing.T) {
 			require.Equal(t, 0, len(newVersion.RemovedFiles))
 			require.Equal(t, 1, len(newVersion.ModifiedFiles))
 
-			objectExists := s3fixtures.FixtureObjextExists(t)
+			objectExists := s3fixtures.FixtureObjectExists(t)
 			require.True(t, objectExists(newVersion.DocID, newVersion.ModifiedFiles[0], docdb.ContentHash(modifiedFile.FileData)))
 
 			res, err := db.QueryValue[int](
@@ -224,7 +224,7 @@ func TestConn(t *testing.T) {
 			require.Equal(t, 0, len(newVersion.AddedFiles))
 			require.Equal(t, 1, len(newVersion.RemovedFiles))
 			require.Equal(t, 0, len(newVersion.ModifiedFiles))
-			objectExists := s3fixtures.FixtureObjextExists(t)
+			objectExists := s3fixtures.FixtureObjectExists(t)
 			require.True(t, objectExists(newVersion.DocID, newVersion.RemovedFiles[0], documentVersionFile.Hash))
 
 			res, err := db.QueryValue[int](

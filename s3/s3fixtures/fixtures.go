@@ -14,8 +14,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/datek/fix"
 	"github.com/domonda/go-docdb"
-	"github.com/domonda/go-docdb/s3"
 	"github.com/domonda/go-types/uu"
+
+	"github.com/domonda/go-docdb/s3"
 )
 
 var FixtureCreateDocument = fix.New(func(t *testing.T) func(
@@ -38,12 +39,12 @@ var FixtureCreateDocument = fix.New(func(t *testing.T) func(
 		)
 
 		if err != nil {
-			t.Fatalf("Falied to put object in S3, %v", err)
+			t.Fatalf("Failed to put object in S3, %v", err)
 		}
 	}
 })
 
-var FixtureObjextExists = fix.New(func(t *testing.T) func(docID uu.ID, filename, hash string) bool {
+var FixtureObjectExists = fix.New(func(t *testing.T) func(docID uu.ID, filename, hash string) bool {
 	bucketName := FixtureCleanBucket(t)
 	client := FixtureGlobalS3Client(t)
 
