@@ -1,9 +1,11 @@
-go 1.25
+go 1.25.0
 
 use (
 	.
 	./hashdb
+	./postgres
 	./proxyconn
+	./s3
 )
 
 // replace github.com/domonda/golog => ../golog

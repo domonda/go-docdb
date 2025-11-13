@@ -81,25 +81,25 @@ func IdenticalDocumentVersionsOfDrivers(ctx context.Context, docID uu.ID, driver
 func LatestDocumentVersionFileProvider(ctx context.Context, docID uu.ID) (p FileProvider, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
-	version, err := conn.LatestDocumentVersion(ctx, docID)
+	version, err := globalConn.LatestDocumentVersion(ctx, docID)
 	if err != nil {
 		return nil, err
 	}
 
-	return conn.DocumentVersionFileProvider(ctx, docID, version)
+	return globalConn.DocumentVersionFileProvider(ctx, docID, version)
 }
 
 func FirstDocumentVersionCommitUserID(ctx context.Context, docID uu.ID) (userID uu.ID, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
-	versions, err := conn.DocumentVersions(ctx, docID)
+	versions, err := globalConn.DocumentVersions(ctx, docID)
 	if err != nil {
 		return uu.IDNil, err
 	}
 	if len(versions) == 0 {
 		return uu.IDNil, NewErrDocumentHasNoCommitedVersion(docID)
 	}
-	versionInfo, err := conn.DocumentVersionInfo(ctx, docID, versions[0])
+	versionInfo, err := globalConn.DocumentVersionInfo(ctx, docID, versions[0])
 	if err != nil {
 		return uu.IDNil, err
 	}
