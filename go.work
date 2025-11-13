@@ -3,13 +3,9 @@ go 1.25.0
 use (
 	.
 	./hashdb
-<<<<<<< HEAD
-	./proxyconn
-=======
-	./integrationtests
 	./postgres
+	./proxyconn
 	./s3
->>>>>>> c63f981 (Fix package structure)
 )
 
 // replace github.com/domonda/golog => ../golog

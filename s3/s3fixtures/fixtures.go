@@ -13,6 +13,7 @@ import (
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/datek/fix"
+
 	"github.com/domonda/go-docdb"
 	"github.com/domonda/go-types/uu"
 

@@ -7,15 +7,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/domonda/go-docdb"
-	"github.com/domonda/go-docdb/postgres"
-	"github.com/domonda/go-docdb/postgres/pgfixtures"
-	"github.com/domonda/go-sqldb/db"
-	"github.com/domonda/go-types/uu"
 	"github.com/stretchr/testify/require"
 	"github.com/ungerik/go-fs"
-)
 
+	"github.com/domonda/go-docdb"
+	"github.com/domonda/go-sqldb/db"
+	"github.com/domonda/go-types/uu"
+
+	"github.com/domonda/go-docdb/postgres"
+	"github.com/domonda/go-docdb/postgres/pgfixtures"
+)
+ 
 var store = postgres.NewMetadataStore()
 
 func TestCreateDocument(t *testing.T) {

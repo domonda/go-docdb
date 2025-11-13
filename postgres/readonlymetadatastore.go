@@ -3,15 +3,16 @@ package postgres
 import (
 	"context"
 
+	"github.com/ungerik/go-fs"
+
 	"github.com/domonda/go-docdb"
 	"github.com/domonda/go-types/uu"
-	"github.com/ungerik/go-fs"
 )
 
 func NewReadOnlyMetadataStore() docdb.MetadataStore {
 	return &readonlyMetadataStore{}
 }
-
+ 
 type readonlyMetadataStore struct {
 	postgresMetadataStore
 }

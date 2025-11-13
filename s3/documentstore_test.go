@@ -8,13 +8,14 @@ import (
 	"time"
 
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/domonda/go-docdb"
-	"github.com/domonda/go-docdb/s3"
-	"github.com/domonda/go-docdb/s3/s3fixtures"
+	"github.com/stretchr/testify/require"
 	"github.com/ungerik/go-fs"
 
+	"github.com/domonda/go-docdb"
 	"github.com/domonda/go-types/uu"
-	"github.com/stretchr/testify/require"
+
+	"github.com/domonda/go-docdb/s3"
+	"github.com/domonda/go-docdb/s3/s3fixtures"
 )
 
 func TestDocumentExists(t *testing.T) {
@@ -90,7 +91,6 @@ func TestDocumentExists(t *testing.T) {
 }
 
 func TestEnumDocumentIDs(t *testing.T) {
-
 	t.Run("Iterates over fetched keys", func(t *testing.T) {
 		// given
 		timeout := time.AfterFunc(10*time.Second, func() {
@@ -156,7 +156,6 @@ func TestEnumDocumentIDs(t *testing.T) {
 }
 
 func TestCreateDocument(t *testing.T) {
-
 	t.Run("Saves files", func(t *testing.T) {
 		// given
 		bucketName := s3fixtures.FixtureCleanBucket(t)

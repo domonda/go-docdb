@@ -6,10 +6,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ungerik/go-fs"
+
 	"github.com/domonda/go-docdb"
 	"github.com/domonda/go-sqldb/db"
 	"github.com/domonda/go-types/uu"
-	"github.com/ungerik/go-fs"
 )
 
 func NewMetadataStore() docdb.MetadataStore {
@@ -145,7 +146,7 @@ func (store *postgresMetadataStore) CreateDocument(
 			Hash:              docdb.ContentHash(data),
 		})
 	}
-
+ 
 	if err := db.InsertStructs(
 		ctx,
 		"docdb.document_version_file",

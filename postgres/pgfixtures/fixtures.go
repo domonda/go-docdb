@@ -1,7 +1,7 @@
 // Provides test fixtures for the postgres package
 
 package pgfixtures
-
+ 
 import (
 	"context"
 	"fmt"
@@ -12,12 +12,14 @@ import (
 	"time"
 
 	"github.com/datek/fix"
+
 	"github.com/domonda/go-docdb"
-	"github.com/domonda/go-docdb/postgres"
 	"github.com/domonda/go-sqldb"
 	"github.com/domonda/go-sqldb/db"
 	"github.com/domonda/go-sqldb/pqconn"
 	"github.com/domonda/go-types/uu"
+
+	"github.com/domonda/go-docdb/postgres"
 )
 
 var conn sqldb.Connection

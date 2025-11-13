@@ -10,9 +10,10 @@ import (
 
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/ungerik/go-fs"
+
 	"github.com/domonda/go-docdb"
 	"github.com/domonda/go-types/uu"
-	"github.com/ungerik/go-fs"
 )
 
 func NewS3DocumentStore(bucketName string, s3Client *awss3.Client) docdb.DocumentStore {
@@ -26,7 +27,7 @@ type s3DocStore struct {
 	client     *awss3.Client
 	bucketName string
 }
-
+ 
 func (store *s3DocStore) DocumentExists(ctx context.Context, docID uu.ID) (exists bool, err error) {
 	response, err := store.client.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{
 		Bucket:  &store.bucketName,

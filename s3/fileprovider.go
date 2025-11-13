@@ -7,9 +7,10 @@ import (
 	"strings"
 
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
+
 	"github.com/domonda/go-docdb"
 )
-
+ 
 func FileProviderFromS3Keys(client *awss3.Client, bucketName string, keys []string) docdb.FileProvider {
 	return &s3FileProvider{
 		keys:       keys,
