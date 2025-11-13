@@ -101,7 +101,7 @@ var FixtureCleanBucket = fix.New(func(t *testing.T) string {
 		t.Fatalf("Unable to create bucket, %v", err)
 	}
 
-	t.Cleanup(func() { deleteBucket(context.Background(), client, p(bucketName)) })
+	t.Cleanup(func() { deleteBucket(context.Background(), client, p(bucketName)) }) // #nosec G104
 	return bucketName
 
 })

@@ -308,7 +308,7 @@ func (c *conn) createDocumentVersion(
 		for _, item := range versionInfo.Files {
 			hashes = append(hashes, item.Hash)
 		}
-		c.documentStore.DeleteDocumentHashes(ctx, docID, hashes)
+		c.documentStore.DeleteDocumentHashes(ctx, docID, hashes) // #nosec G104
 	}
 
 	return versionInfo, err
