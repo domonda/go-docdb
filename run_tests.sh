@@ -11,6 +11,7 @@ exit_code=0
 # when
 ( \
     go test ./proxyconn -count 1 \
+    && go test ./localfsdb -count 1 \
     && go test ./postgres -count 1 \
     && go test ./s3 -count 1 \
     && go test ./integrationtests -count 1 
