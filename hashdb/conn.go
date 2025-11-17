@@ -196,8 +196,8 @@ func (c *Conn) CheckInDocument(ctx context.Context, docID uu.ID) (versionInfo *d
 	panic("TODO")
 }
 
-func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, files []fs.FileReader) (versionInfo *docdb.VersionInfo, err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, companyID, docID, userID, reason, files)
+func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, files []fs.FileReader, onNewVersion docdb.OnNewVersionFunc) (err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, companyID, docID, userID, reason, files, onNewVersion)
 
 	panic("TODO")
 }

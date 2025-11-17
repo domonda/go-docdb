@@ -3,7 +3,7 @@ package docdb
 import (
 	"context"
 
-	fs "github.com/ungerik/go-fs"
+	"github.com/ungerik/go-fs"
 
 	"github.com/domonda/go-errs"
 	"github.com/domonda/go-types/uu"
@@ -19,9 +19,36 @@ func NewConn(
 	}
 }
 
-type CreateVersionFunc func(ctx context.Context, prevVersion VersionTime, prevFiles FileProvider) (writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error)
+// Callbacks
+type (
+	// CreateVersionFunc is a callback function used to create a new document version
+	// based on the previous version.
+	//
+	// It receives the previous version timestamp and a FileProvider for accessing
+	// the files from the previous version.
+	//
+	// It should return:
+	//   - writeFiles: Files to write or overwrite in the new version
+	//   - removeFiles: Filenames to remove from the previous version
+	//   - newCompanyID: Optional new company ID to assign to the document (nil to keep current)
+	//   - err: An error if version creation should be aborted
+	//
+	// If this function returns an error or panics, the entire version creation
+	// is atomically rolled back.
+	CreateVersionFunc func(ctx context.Context, prevVersion VersionTime, prevFiles FileProvider) (writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error)
 
-type OnNewVersionFunc func(ctx context.Context, versionInfo *VersionInfo) error
+	// OnNewVersionFunc is a callback function invoked after a new document version
+	// has been created but before it is committed.
+	//
+	// It receives the VersionInfo for the newly created version and can perform
+	// validation or side effects.
+	//
+	// If this function returns an error or panics, the entire document/version creation
+	// is atomically rolled back, preventing the new version from being committed.
+	// This allows the callback to act as a validation gate or to ensure related
+	// operations complete successfully before committing the new version.
+	OnNewVersionFunc func(ctx context.Context, versionInfo *VersionInfo) error
+)
 
 // Conn is an interface for a docdb connection.
 type Conn interface {
@@ -75,8 +102,32 @@ type Conn interface {
 	// just to clean up mistakes or sync database states.
 	DeleteDocumentVersion(ctx context.Context, docID uu.ID, version VersionTime) (leftVersions []VersionTime, err error)
 
-	CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, files []fs.FileReader) (*VersionInfo, error)
+	// CreateDocument creates a new document with the provided files.
+	// The document is created with companyID, docID, and userID as metadata,
+	// and reason describes why the document is being created.
+	//
+	// After the document version is created but before it is committed,
+	// the onNewVersion callback is called with the resulting VersionInfo.
+	// If onNewVersion returns an error or panics, the entire document creation
+	// is atomically rolled back, the error is returned, or the panic is propagated.
+	//
+	// Returns ErrDocumentAlreadyExists if a document with docID already exists.
+	CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, files []fs.FileReader, onNewVersion OnNewVersionFunc) error
 
+	// AddDocumentVersion adds a new version to an existing document.
+	// The createVersion callback is invoked with the previous version info
+	// and should return the files to write, files to remove, and optionally
+	// a new company ID for the document.
+	//
+	// After the new version is created but before it is committed,
+	// the onNewVersion callback is called with the resulting VersionInfo.
+	// If createVersion or onNewVersion returns an error or panics,
+	// the entire version creation is atomically rolled back,
+	// the error is returned, or the panic is propagated.
+	//
+	// Returns wrapped ErrDocumentNotFound if the document does not exist.
+	// Returns wrapped ErrNoChanges if the new version has identical files
+	// compared to the previous version.
 	AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error
 
 	// RestoreDocument
@@ -285,7 +336,8 @@ func (c *conn) CreateDocument(
 	userID uu.ID,
 	reason string,
 	files []fs.FileReader,
-) (*VersionInfo, error) {
+	onNewVersion OnNewVersionFunc,
+) error {
 	return c.createDocumentVersion(ctx, companyID, docID, userID, reason, files)
 }
 
@@ -296,9 +348,9 @@ func (c *conn) createDocumentVersion(
 	userID uu.ID,
 	reason string,
 	files []fs.FileReader,
-) (*VersionInfo, error) {
+) error {
 	if err := c.documentStore.CreateDocument(ctx, docID, files); err != nil {
-		return nil, err
+		return err
 	}
 
 	versionInfo, err := c.metadataStore.CreateDocument(ctx, companyID, docID, userID, reason, files)
@@ -311,7 +363,7 @@ func (c *conn) createDocumentVersion(
 		c.documentStore.DeleteDocumentHashes(ctx, docID, hashes) // #nosec G104
 	}
 
-	return versionInfo, err
+	return nil
 }
 
 func (c *conn) AddDocumentVersion(

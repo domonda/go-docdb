@@ -204,12 +204,13 @@ func (conn *proxyConn) CreateDocument(
 	userID uu.ID,
 	reason string,
 	files []fs.FileReader,
-) (*docdb.VersionInfo, error) {
+	onNewVersion docdb.OnNewVersionFunc,
+) error {
 	config, err := conn.loadConfig()
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return conn.getConn(config, companyID).CreateDocument(ctx, companyID, docID, userID, reason, files)
+	return conn.getConn(config, companyID).CreateDocument(ctx, companyID, docID, userID, reason, files, onNewVersion)
 }
 
 func (conn *proxyConn) AddDocumentVersion(

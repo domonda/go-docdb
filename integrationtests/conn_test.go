@@ -4,15 +4,17 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+	"github.com/ungerik/go-fs"
+
+	"github.com/domonda/go-sqldb/db"
+	"github.com/domonda/go-types/uu"
+
 	"github.com/domonda/go-docdb"
 	"github.com/domonda/go-docdb/postgres"
 	"github.com/domonda/go-docdb/postgres/pgfixtures"
 	"github.com/domonda/go-docdb/s3"
 	"github.com/domonda/go-docdb/s3/s3fixtures"
-	"github.com/domonda/go-sqldb/db"
-	"github.com/domonda/go-types/uu"
-	"github.com/stretchr/testify/require"
-	"github.com/ungerik/go-fs"
 )
 
 func TestConn(t *testing.T) {
