@@ -361,6 +361,7 @@ func (c *conn) createDocumentVersion(
 			hashes = append(hashes, item.Hash)
 		}
 		c.documentStore.DeleteDocumentHashes(ctx, docID, hashes) // #nosec G104
+		return err
 	}
 
 	return nil
