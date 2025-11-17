@@ -3,8 +3,9 @@ package docdb
 import (
 	"context"
 
+	"github.com/ungerik/go-fs"
+
 	"github.com/domonda/go-types/uu"
-	fs "github.com/ungerik/go-fs"
 )
 
 // NewConnWithError returns a Conn where all
@@ -109,8 +110,8 @@ func (c errConn) InsertDocumentVersion(context.Context, uu.ID, VersionTime, uu.I
 // 	return fs.InvalidFile, c.err
 // }
 
-func (c errConn) CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, files []fs.FileReader) (*VersionInfo, error) {
-	return nil, c.err
+func (c errConn) CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, files []fs.FileReader, onNewVersion OnNewVersionFunc) error {
+	return c.err
 }
 
 func (c errConn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error {

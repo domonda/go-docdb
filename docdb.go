@@ -320,27 +320,46 @@ func DeleteDocumentVersion(ctx context.Context, docID uu.ID, version VersionTime
 	return conn.DeleteDocumentVersion(ctx, docID, version)
 }
 
-// InsertDocumentVersion inserts a new version for an existing document.
-// Returns wrapped ErrDocumentNotFound, ErrDocumentVersionAlreadyExists
-// in case of such error conditions.
-// InsertDocumentVersion should not be used for normal docdb operations,
-// just to clean up mistakes or sync database states.
-// func InsertDocumentVersion(ctx context.Context, docID uu.ID, version VersionTime, userID uu.ID, reason string, files []fs.FileReader) (info *VersionInfo, err error) {
-// 	defer errs.WrapWithFuncParams(&err, ctx, docID, version, userID, reason, files)
+// CreateDocument creates a new document with the provided files.
+// The document is created with companyID, docID, and userID as metadata,
+// and reason describes why the document is being created.
+//
+// After the document version is created but before it is committed,
+// the onNewVersion callback is called with the resulting VersionInfo.
+// If onNewVersion returns an error or panics, the entire document creation
+// is atomically rolled back, the error is returned, or the panic is propagated.
+//
+// Returns ErrDocumentAlreadyExists if a document with docID already exists.
+func CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, files []fs.FileReader, onNewVersion OnNewVersionFunc) (err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, companyID, docID, userID, reason, files, onNewVersion)
 
-// 	return conn.InsertDocumentVersion(ctx, docID, version, userID, reason, files)
-// }
-
-func CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, files []fs.FileReader) (versionInfo *VersionInfo, err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, companyID, docID, userID, reason, files)
-
-	return conn.CreateDocument(ctx, companyID, docID, userID, reason, files)
+	return conn.CreateDocument(ctx, companyID, docID, userID, reason, files, onNewVersion)
 }
 
-// AddDocumentVersion adds a new version to a document
-// using the files returned by createVersion.
-// Returns a wrapped ErrNoChanges if the files returned by
-// createVersion are the same as the latest version.
+func DeprecatedCreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, files []fs.FileReader) (versionInfo *VersionInfo, err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, companyID, docID, userID, reason, files)
+
+	err = conn.CreateDocument(ctx, companyID, docID, userID, reason, files, func(ctx context.Context, info *VersionInfo) error {
+		versionInfo = info
+		return nil
+	})
+	return versionInfo, err
+}
+
+// AddDocumentVersion adds a new version to an existing document.
+// The createVersion callback is invoked with the previous version info
+// and should return the files to write, files to remove, and optionally
+// a new company ID for the document.
+//
+// After the new version is created but before it is committed,
+// the onNewVersion callback is called with the resulting VersionInfo.
+// If createVersion or onNewVersion returns an error or panics,
+// the entire version creation is atomically rolled back,
+// the error is returned, or the panic is propagated.
+//
+// Returns wrapped ErrDocumentNotFound if the document does not exist.
+// Returns wrapped ErrNoChanges if the new version has identical files
+// compared to the previous version.
 func AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) (err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, userID, reason)
 

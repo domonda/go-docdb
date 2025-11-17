@@ -10,9 +10,8 @@ import (
 	"github.com/ungerik/go-fs"
 
 	"github.com/domonda/go-docdb"
-	"github.com/domonda/go-types/uu"
-
 	"github.com/domonda/go-docdb/proxyconn"
+	"github.com/domonda/go-types/uu"
 )
 
 func TestProxyConn(t *testing.T) {
@@ -478,19 +477,21 @@ func TestProxyConn(t *testing.T) {
 		}
 
 		s3Conn := &docdb.MockConn{
-			CreateDocumentMock: func(ctx context.Context, companyID, docID, userID uu.ID, reason string, files []fs.FileReader) (*docdb.VersionInfo, error) {
-				return expectedInfo, nil
+			CreateDocumentMock: func(ctx context.Context, companyID, docID, userID uu.ID, reason string, files []fs.FileReader, onNewVersion docdb.OnNewVersionFunc) error {
+				return onNewVersion(ctx, expectedInfo)
 			},
 		}
 
 		conn := proxyconn.NewProxyConn(s3Conn, nil, nil, nil, getConfig)
 
 		// when
-		info, err := conn.CreateDocument(t.Context(), companyID, docID, userID, reason, files)
+		err := conn.CreateDocument(t.Context(), companyID, docID, userID, reason, files, func(ctx context.Context, versionInfo *docdb.VersionInfo) error {
+			require.Equal(t, expectedInfo, versionInfo)
+			return nil
+		})
 
 		// then
 		require.NoError(t, err)
-		require.Equal(t, expectedInfo, info)
 	})
 
 	t.Run("AddDocumentVersion selects proper conn", func(t *testing.T) {

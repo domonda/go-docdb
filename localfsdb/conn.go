@@ -24,6 +24,12 @@ var _ docdb.DeprecatedConn = new(Conn)
 type Conn struct {
 	documentsDir fs.File
 	workspaceDir fs.File
+
+	// companiesDir containts directories named by the UUID of a company.
+	// Within each company directory, every document of that companty will be
+	// represented by a directory named by the UUID of the document.
+	// Directories are used as atomic, threadsafe filesystem level
+	// mapping mechanism between companyID and docID.
 	companiesDir fs.File
 }
 
@@ -122,6 +128,8 @@ func (c *Conn) documentCheckOutStatusFile(docID uu.ID) fs.File {
 	return c.documentDir(docID).Join("checkout-status.json")
 }
 
+// companyDocumentDir returns the marker directory for a document of a company
+// the existence of this directory acts as a threadsafe marker that a docID belongs to a companyID.
 func (c *Conn) companyDocumentDir(companyID, docID uu.ID) fs.File {
 	companyDir := c.companiesDir.Join(companyID.String())
 	return uuiddir.Join(companyDir, docID)
@@ -990,20 +998,20 @@ func (c *Conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version d
 // 	// TODO
 // }
 
-func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, files []fs.FileReader) (versionInfo *docdb.VersionInfo, err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, companyID, docID, userID, reason, files)
+func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, files []fs.FileReader, onNewVersion docdb.OnNewVersionFunc) (err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, companyID, docID, userID, reason, files, onNewVersion)
 
 	if err = ctx.Err(); err != nil {
-		return nil, err
+		return err
 	}
 	if err = companyID.Validate(); err != nil {
-		return nil, err
+		return err
 	}
 	if err = docID.Validate(); err != nil {
-		return nil, err
+		return err
 	}
 	if err = userID.Validate(); err != nil {
-		return nil, err
+		return err
 	}
 
 	docWriteMtx.Lock(docID)
@@ -1011,12 +1019,13 @@ func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.I
 
 	docDir := c.documentDir(docID)
 	if docDir.IsDir() {
-		return nil, docdb.NewErrDocumentAlreadyExists(docID)
+		return docdb.NewErrDocumentAlreadyExists(docID)
 	}
 
-	newVersion := docdb.NewVersionTime(ctx)
-	newVersionDir := docDir.Join(newVersion.String())
-
+	var (
+		newVersion    = docdb.NewVersionTime(ctx)
+		newVersionDir = docDir.Join(newVersion.String())
+	)
 	defer func() {
 		if err != nil {
 			if docDir.Exists() {
@@ -1030,29 +1039,29 @@ func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.I
 
 	err = newVersionDir.MakeAllDirs()
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	err = docDir.Join("company.id").WriteAll(companyID.StringBytes())
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	err = c.makeCompanyDocumentDir(companyID, docID)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	for _, file := range files {
 		err = fs.CopyFile(ctx, file, newVersionDir)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 
 	// NewVersionInfo reads newVersionDir, this could be optimized
 	// by copying and content hashing the files in one loop
-	versionInfo, err = docdb.NewVersionInfo(
+	versionInfo, err := docdb.NewVersionInfo(
 		companyID,
 		docID,
 		newVersion,
@@ -1060,17 +1069,17 @@ func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.I
 		userID,
 		reason,
 		newVersionDir,
-		"",
+		fs.InvalidFile, // prevVersionDir
 	)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	err = versionInfo.WriteJSON(docDir.Joinf("%s.json", newVersion))
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	return versionInfo, nil
+	return safelyCallOnNewVersionFunc(ctx, versionInfo, onNewVersion)
 }
 
 func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, createVersion docdb.CreateVersionFunc, onNewVersion docdb.OnNewVersionFunc) (err error) {

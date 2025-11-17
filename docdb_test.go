@@ -116,13 +116,18 @@ func testCreateDocument(t *testing.T, conn docdb.Conn) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotVersionInfo, err := conn.CreateDocument(
+			var gotVersionInfo *docdb.VersionInfo
+			err := conn.CreateDocument(
 				tt.args.ctx,
 				tt.args.companyID,
 				tt.args.docID,
 				tt.args.userID,
 				tt.args.reason,
 				tt.args.files,
+				func(ctx context.Context, versionInfo *docdb.VersionInfo) error {
+					gotVersionInfo = versionInfo
+					return nil
+				},
 			)
 			require.True(t, gotVersionInfo != nil && err == nil || gotVersionInfo == nil && err != nil)
 			require.Equal(t, tt.wantVersionInfo, gotVersionInfo)
@@ -393,13 +398,18 @@ func testAddDocumentVersion(t *testing.T, conn docdb.Conn) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			lastVersionInfo, err := conn.CreateDocument(
+			var lastVersionInfo *docdb.VersionInfo
+			err := conn.CreateDocument(
 				tt.createCtx,
 				tt.createCompanyID,
 				tt.createDocID,
 				tt.createUserID,
 				tt.createReason,
 				tt.createFiles,
+				func(ctx context.Context, versionInfo *docdb.VersionInfo) error {
+					lastVersionInfo = versionInfo
+					return nil
+				},
 			)
 			require.NoError(t, err)
 			require.Equal(t, versionTime0, lastVersionInfo.Version)
