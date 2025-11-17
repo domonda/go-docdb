@@ -336,16 +336,6 @@ func CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason 
 	return conn.CreateDocument(ctx, companyID, docID, userID, reason, files, onNewVersion)
 }
 
-func DeprecatedCreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, files []fs.FileReader) (versionInfo *VersionInfo, err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, companyID, docID, userID, reason, files)
-
-	err = conn.CreateDocument(ctx, companyID, docID, userID, reason, files, func(ctx context.Context, info *VersionInfo) error {
-		versionInfo = info
-		return nil
-	})
-	return versionInfo, err
-}
-
 // AddDocumentVersion adds a new version to an existing document.
 // The createVersion callback is invoked with the previous version info
 // and should return the files to write, files to remove, and optionally
