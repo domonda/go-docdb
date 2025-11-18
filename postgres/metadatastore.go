@@ -299,13 +299,17 @@ func (store *postgresMetadataStore) DocumentVersionInfo(ctx context.Context, doc
 		CompanyID:     firstRec.CompanyID,
 		DocID:         firstRec.DocumentID,
 		Version:       firstRec.Version,
-		PrevVersion:   *firstRec.PrevVersion,
+		PrevVersion:   firstRec.Version,
 		CommitUserID:  firstRec.CommitUserID,
 		CommitReason:  firstRec.CommitReason,
 		AddedFiles:    firstRec.AddedFiles,
 		ModifiedFiles: firstRec.ModifiedFiles,
 		RemovedFiles:  firstRec.RemovedFiles,
 		Files:         files,
+	}
+
+	if firstRec.PrevVersion != nil {
+		result.PrevVersion = *firstRec.PrevVersion
 	}
 
 	return result, nil
