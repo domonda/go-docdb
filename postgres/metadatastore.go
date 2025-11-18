@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
 	"strings"
 	"time"
 
@@ -122,40 +121,43 @@ func (store *postgresMetadataStore) CreateDocument(
 		Version:    versionInfo.Version,
 	}
 
-	if err := db.InsertStruct(
-		ctx,
-		"docdb.document_version",
-		docVersion,
-	); err != nil {
-		return nil, err
-	}
-
-	versionFiles := []DocumentVersionFile{}
-
-	for _, file := range files {
-		versionInfo.AddedFiles = append(versionInfo.AddedFiles, file.Name())
-		data, err := file.ReadAll()
-		if err != nil {
-			return nil, err
+	err := db.Transaction(ctx, func(ctx context.Context) error {
+		if err := db.InsertStruct(
+			ctx,
+			"docdb.document_version",
+			docVersion,
+		); err != nil {
+			return err
 		}
 
-		versionFiles = append(versionFiles, DocumentVersionFile{
-			DocumentVersionID: docVersion.ID,
-			Name:              file.Name(),
-			Size:              file.Size(),
-			Hash:              docdb.ContentHash(data),
-		})
-	}
- 
-	if err := db.InsertStructs(
-		ctx,
-		"docdb.document_version_file",
-		versionFiles,
-	); err != nil {
-		return nil, err
-	}
+		versionFiles := []DocumentVersionFile{}
 
-	return versionInfo, nil
+		for _, file := range files {
+			versionInfo.AddedFiles = append(versionInfo.AddedFiles, file.Name())
+			data, err := file.ReadAll()
+			if err != nil {
+				return err
+			}
+
+			versionFiles = append(versionFiles, DocumentVersionFile{
+				DocumentVersionID: docVersion.ID,
+				Name:              file.Name(),
+				Size:              file.Size(),
+				Hash:              docdb.ContentHash(data),
+			})
+		}
+
+		if err := db.InsertStructs(
+			ctx,
+			"docdb.document_version_file",
+			versionFiles,
+		); err != nil {
+			return err
+		}
+		return nil
+	})
+
+	return versionInfo, err
 }
 
 func (store *postgresMetadataStore) DocumentCompanyID(ctx context.Context, docID uu.ID) (companyID uu.ID, err error) {
@@ -188,7 +190,7 @@ func (store *postgresMetadataStore) SetDocumentCompanyID(ctx context.Context, do
 	}
 
 	if len(ids) == 0 {
-		return sql.ErrNoRows
+		return docdb.NewErrDocumentNotFound(docID)
 	}
 
 	return nil
@@ -213,10 +215,10 @@ func (store *postgresMetadataStore) DocumentVersions(ctx context.Context, docID 
 	}
 
 	if len(versions) == 0 {
-		return nil, sql.ErrNoRows
+		return nil, docdb.NewErrDocumentNotFound(docID)
 	}
 
-	return versions, err
+	return versions, nil
 }
 
 func (store *postgresMetadataStore) LatestDocumentVersion(ctx context.Context, docID uu.ID) (docdb.VersionTime, error) {
@@ -250,10 +252,6 @@ func (store *postgresMetadataStore) EnumCompanyDocumentIDs(ctx context.Context, 
 		return err
 	}
 
-	if len(ids) == 0 {
-		return sql.ErrNoRows
-	}
-
 	for _, id := range ids {
 		if err = callback(ctx, id); err != nil {
 			return err
@@ -280,7 +278,7 @@ func (store *postgresMetadataStore) DocumentVersionInfo(ctx context.Context, doc
 	}
 
 	if len(records) == 0 {
-		return nil, sql.ErrNoRows
+		return nil, docdb.NewErrDocumentNotFound(docID)
 	}
 
 	files := map[string]docdb.FileInfo{}
@@ -335,7 +333,7 @@ func (store *postgresMetadataStore) LatestDocumentVersionInfo(ctx context.Contex
 	}
 
 	if len(records) == 0 {
-		return nil, sql.ErrNoRows
+		return nil, docdb.NewErrDocumentNotFound(docID)
 	}
 
 	files := map[string]docdb.FileInfo{}
@@ -378,23 +376,22 @@ type docVersionQueryResult struct {
 }
 
 func (store *postgresMetadataStore) DeleteDocument(ctx context.Context, docID uu.ID) error {
-	deletedIDs := []uu.ID{}
-	err := db.QueryRows(
+	deleted, err := db.QueryValue[bool](
 		ctx,
 		/* sql */ `
 		delete from docdb.document_version
 		where document_id = $1
-		returning id
+		returning true
 		`,
 		docID,
-	).ScanSlice(&deletedIDs)
+	)
 
 	if err != nil {
 		return err
 	}
 
-	if len(deletedIDs) == 0 {
-		return sql.ErrNoRows
+	if !deleted {
+		return docdb.NewErrDocumentNotFound(docID)
 	}
 
 	return nil
@@ -455,7 +452,7 @@ func (store *postgresMetadataStore) DeleteDocumentVersion(
 	}
 
 	if res.DeletedIDs == 0 {
-		return nil, nil, sql.ErrNoRows
+		return nil, nil, docdb.NewErrDocumentNotFound(docID)
 	}
 
 	// array_agg unfortunately appends some characters to the records

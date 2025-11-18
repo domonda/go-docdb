@@ -17,7 +17,7 @@ import (
 	"github.com/domonda/go-docdb/postgres"
 	"github.com/domonda/go-docdb/postgres/pgfixtures"
 )
- 
+
 var store = postgres.NewMetadataStore()
 
 func TestCreateDocument(t *testing.T) {
@@ -249,7 +249,7 @@ func TestEnumCompanyDocumentIDs(t *testing.T) {
 		require.Equal(t, doc2Version1.DocumentID, processedDocumentIDs[1])
 	})
 
-	t.Run("Returns error if no versions", func(t *testing.T) {
+	t.Run("Returns no error if no versions", func(t *testing.T) {
 		// given
 		t.Parallel()
 		ctx := pgfixtures.FixtureCtxWithTestTx(t)
@@ -262,7 +262,7 @@ func TestEnumCompanyDocumentIDs(t *testing.T) {
 		)
 
 		// then
-		require.ErrorIs(t, err, sql.ErrNoRows)
+		require.NoError(t, err)
 	})
 
 	t.Run("Returns error from callback", func(t *testing.T) {

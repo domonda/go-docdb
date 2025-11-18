@@ -1,25 +1,23 @@
 create table docdb.lock (
-    id uuid primary key default uuid_generate_v4(),
-
+    id uuid primary key default uuid_generate_v4 (),
     user_id uuid not null, -- references public.user(id) on delete restrict (only in prod, here the public schema is out of scope)
-    reason  text not null check(length(reason) > 0),
-
-	created_at timestamp not null
+    reason text not null check (length(reason) > 0),
+    created_at timestamp not null
 );
 
+create index docdb_lock_user_id_idx on docdb.lock (user_id);
 
-create index docdb_lock_user_id_idx on docdb.lock(user_id);
-create index docdb_lock_reason_idx on docdb.lock(reason);
+create index docdb_lock_reason_idx on docdb.lock (reason);
 
 ----
 
 create table docdb.locked_document (
     -- document_id as primary key ensures a document to be locked only once
     document_id uuid primary key, -- references public.document(id) on delete restrict (only in prod, here the public schema is out of scope)
-    lock_id     uuid not null    references docdb.lock(id)      on delete cascade
+    lock_id uuid not null references docdb.lock (id) on delete cascade
 );
 
-create index docdb_locked_document_lock_id_idx on docdb.locked_document(lock_id);
+create index docdb_locked_document_lock_id_idx on docdb.locked_document (lock_id);
 
 ----
 
@@ -160,4 +158,3 @@ comment on function docdb.unlock is 'Unlocks all documents locked with the passe
 -- $$;
 
 -- comment on function docdb.unlock_documents is 'Unlocks documents locked with lock_id and returns true if the lock was deleted because no locked documents are left';
-

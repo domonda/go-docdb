@@ -10,8 +10,9 @@ import (
 	"github.com/ungerik/go-fs"
 
 	"github.com/domonda/go-docdb"
-	"github.com/domonda/go-docdb/proxyconn"
 	"github.com/domonda/go-types/uu"
+
+	"github.com/domonda/go-docdb/proxyconn"
 )
 
 func TestProxyConn(t *testing.T) {
@@ -42,7 +43,7 @@ func TestProxyConn(t *testing.T) {
 			return companyID2, nil
 		}
 
-		conn := proxyconn.NewProxyConn(
+		conn := proxyconn.New(
 			s3Conn,
 			nil,
 			nil,
@@ -78,7 +79,7 @@ func TestProxyConn(t *testing.T) {
 			},
 		}
 		var s3Conn docdb.Conn
-		conn := proxyconn.NewProxyConn(
+		conn := proxyconn.New(
 			s3Conn,
 			fsConn,
 			s3Conn,
@@ -104,7 +105,7 @@ func TestProxyConn(t *testing.T) {
 			return uu.IDNil, errors.New("not_found")
 		}
 
-		conn := proxyconn.NewProxyConn(nil, nil, nil, getCompanyIDForDocID, nil)
+		conn := proxyconn.New(nil, nil, nil, getCompanyIDForDocID, nil)
 
 		// when
 		result, err := conn.DocumentCompanyID(t.Context(), docID)
@@ -142,7 +143,7 @@ func TestProxyConn(t *testing.T) {
 			return uu.IDNil, errors.New("not_found")
 		}
 
-		conn := proxyconn.NewProxyConn(nil, fsConn, nil, getCompanyIDForDocID, getConfig)
+		conn := proxyconn.New(nil, fsConn, nil, getCompanyIDForDocID, getConfig)
 
 		// when
 		err := conn.SetDocumentCompanyID(t.Context(), docID, newCompanyID)
@@ -178,7 +179,7 @@ func TestProxyConn(t *testing.T) {
 			return uu.IDNil, errors.New("not_found")
 		}
 
-		conn := proxyconn.NewProxyConn(s3Conn, nil, nil, getCompanyIDForDocID, getConfig)
+		conn := proxyconn.New(s3Conn, nil, nil, getCompanyIDForDocID, getConfig)
 
 		// when
 		versions, err := conn.DocumentVersions(t.Context(), docID)
@@ -215,7 +216,7 @@ func TestProxyConn(t *testing.T) {
 			return uu.IDNil, errors.New("not_found")
 		}
 
-		conn := proxyconn.NewProxyConn(nil, fsConn, nil, getCompanyIDForDocID, getConfig)
+		conn := proxyconn.New(nil, fsConn, nil, getCompanyIDForDocID, getConfig)
 
 		// when
 		version, err := conn.LatestDocumentVersion(t.Context(), docID)
@@ -258,7 +259,7 @@ func TestProxyConn(t *testing.T) {
 			return uu.IDNil, errors.New("not_found")
 		}
 
-		conn := proxyconn.NewProxyConn(s3Conn, nil, nil, getCompanyIDForDocID, getConfig)
+		conn := proxyconn.New(s3Conn, nil, nil, getCompanyIDForDocID, getConfig)
 
 		// when
 		info, err := conn.DocumentVersionInfo(t.Context(), docID, version)
@@ -300,7 +301,7 @@ func TestProxyConn(t *testing.T) {
 			return uu.IDNil, errors.New("not_found")
 		}
 
-		conn := proxyconn.NewProxyConn(nil, fsConn, nil, getCompanyIDForDocID, getConfig)
+		conn := proxyconn.New(nil, fsConn, nil, getCompanyIDForDocID, getConfig)
 
 		// when
 		info, err := conn.LatestDocumentVersionInfo(t.Context(), docID)
@@ -336,7 +337,7 @@ func TestProxyConn(t *testing.T) {
 			return uu.IDNil, errors.New("not_found")
 		}
 
-		conn := proxyconn.NewProxyConn(s3Conn, nil, nil, getCompanyIDForDocID, getConfig)
+		conn := proxyconn.New(s3Conn, nil, nil, getCompanyIDForDocID, getConfig)
 
 		// when
 		provider, err := conn.DocumentVersionFileProvider(t.Context(), docID, version)
@@ -373,7 +374,7 @@ func TestProxyConn(t *testing.T) {
 			return uu.IDNil, errors.New("not_found")
 		}
 
-		conn := proxyconn.NewProxyConn(nil, fsConn, nil, getCompanyIDForDocID, getConfig)
+		conn := proxyconn.New(nil, fsConn, nil, getCompanyIDForDocID, getConfig)
 
 		// when
 		data, err := conn.ReadDocumentVersionFile(t.Context(), docID, version, filename)
@@ -409,7 +410,7 @@ func TestProxyConn(t *testing.T) {
 			return uu.IDNil, errors.New("not_found")
 		}
 
-		conn := proxyconn.NewProxyConn(s3Conn, nil, nil, getCompanyIDForDocID, getConfig)
+		conn := proxyconn.New(s3Conn, nil, nil, getCompanyIDForDocID, getConfig)
 
 		// when
 		err := conn.DeleteDocument(t.Context(), docID)
@@ -445,7 +446,7 @@ func TestProxyConn(t *testing.T) {
 			return uu.IDNil, errors.New("not_found")
 		}
 
-		conn := proxyconn.NewProxyConn(nil, fsConn, nil, getCompanyIDForDocID, getConfig)
+		conn := proxyconn.New(nil, fsConn, nil, getCompanyIDForDocID, getConfig)
 
 		// when
 		result, err := conn.DeleteDocumentVersion(t.Context(), docID, version)
@@ -482,7 +483,7 @@ func TestProxyConn(t *testing.T) {
 			},
 		}
 
-		conn := proxyconn.NewProxyConn(s3Conn, nil, nil, nil, getConfig)
+		conn := proxyconn.New(s3Conn, nil, nil, nil, getConfig)
 
 		// when
 		err := conn.CreateDocument(t.Context(), companyID, docID, userID, reason, files, func(ctx context.Context, versionInfo *docdb.VersionInfo) error {
@@ -522,7 +523,7 @@ func TestProxyConn(t *testing.T) {
 			return uu.IDNil, errors.New("not_found")
 		}
 
-		conn := proxyconn.NewProxyConn(nil, fsConn, nil, getCompanyIDForDocID, getConfig)
+		conn := proxyconn.New(nil, fsConn, nil, getCompanyIDForDocID, getConfig)
 
 		// when
 		err := conn.AddDocumentVersion(t.Context(), docID, userID, reason, nil, nil)
@@ -555,7 +556,7 @@ func TestProxyConn(t *testing.T) {
 			},
 		}
 
-		conn := proxyconn.NewProxyConn(s3Conn, nil, nil, nil, getConfig)
+		conn := proxyconn.New(s3Conn, nil, nil, nil, getConfig)
 
 		// when
 		err := conn.RestoreDocument(t.Context(), doc, false)
@@ -586,7 +587,7 @@ func TestProxyConn(t *testing.T) {
 			return companyID, nil
 		}
 
-		conn := proxyconn.NewProxyConn(nil, nil, defaultConn, getCompanyIDForDocID, getConfig)
+		conn := proxyconn.New(nil, nil, defaultConn, getCompanyIDForDocID, getConfig)
 
 		// when
 		res, err := conn.DocumentExists(t.Context(), docID)
@@ -611,7 +612,7 @@ func TestProxyConn(t *testing.T) {
 			return companyID, nil
 		}
 
-		conn := proxyconn.NewProxyConn(nil, nil, nil, getCompanyIDForDocID, getConfig)
+		conn := proxyconn.New(nil, nil, nil, getCompanyIDForDocID, getConfig)
 
 		// when
 		_, err := conn.DocumentExists(t.Context(), docID)
@@ -630,7 +631,7 @@ func TestProxyConn(t *testing.T) {
 			return uu.IDNil, expectedErr
 		}
 
-		conn := proxyconn.NewProxyConn(nil, nil, nil, getCompanyIDForDocID, nil)
+		conn := proxyconn.New(nil, nil, nil, getCompanyIDForDocID, nil)
 
 		// when
 		_, err := conn.DocumentExists(t.Context(), docID)
