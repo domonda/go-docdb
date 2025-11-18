@@ -21,7 +21,7 @@ const (
 	ConnTypeS3PG ConnType = "S3_PG"
 )
 
-func NewProxyConn(
+func New(
 	s3PostgresConn,
 	fsConn,
 	defaultConn docdb.Conn,

@@ -14,35 +14,35 @@ import (
 func DocumentExists(ctx context.Context, docID uu.ID) (exists bool, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
-	return conn.DocumentExists(ctx, docID)
+	return globalConn.DocumentExists(ctx, docID)
 }
 
 // EnumDocumentIDs calls the passed callback with the ID of every document in the database
 func EnumDocumentIDs(ctx context.Context, callback func(context.Context, uu.ID) error) (err error) {
 	defer errs.WrapWithFuncParams(&err, ctx)
 
-	return conn.EnumDocumentIDs(ctx, callback)
+	return globalConn.EnumDocumentIDs(ctx, callback)
 }
 
 // EnumCompanyDocumentIDs calls the passed callback with the ID of every document of a company in the database
 func EnumCompanyDocumentIDs(ctx context.Context, companyID uu.ID, callback func(context.Context, uu.ID) error) (err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, companyID)
 
-	return conn.EnumCompanyDocumentIDs(ctx, companyID, callback)
+	return globalConn.EnumCompanyDocumentIDs(ctx, companyID, callback)
 }
 
 // DocumentCompanyID returns the companyID for a docID
 func DocumentCompanyID(ctx context.Context, docID uu.ID) (companyID uu.ID, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
-	return conn.DocumentCompanyID(ctx, docID)
+	return globalConn.DocumentCompanyID(ctx, docID)
 }
 
 // SetDocumentCompanyID changes the companyID for a document
 func SetDocumentCompanyID(ctx context.Context, docID, companyID uu.ID) (err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, companyID)
 
-	return conn.SetDocumentCompanyID(ctx, docID, companyID)
+	return globalConn.SetDocumentCompanyID(ctx, docID, companyID)
 }
 
 // DocumentVersions returns all version timestamps of a document in ascending order.
@@ -50,46 +50,46 @@ func SetDocumentCompanyID(ctx context.Context, docID, companyID uu.ID) (err erro
 func DocumentVersions(ctx context.Context, docID uu.ID) (versions []VersionTime, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
-	return conn.DocumentVersions(ctx, docID)
+	return globalConn.DocumentVersions(ctx, docID)
 }
 
 // LatestDocumentVersion returns the lates VersionTime of a document
 func LatestDocumentVersion(ctx context.Context, docID uu.ID) (version VersionTime, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
-	return conn.LatestDocumentVersion(ctx, docID)
+	return globalConn.LatestDocumentVersion(ctx, docID)
 }
 
 // DocumentVersionInfo returns the VersionInfo for a VersionTime
 func DocumentVersionInfo(ctx context.Context, docID uu.ID, version VersionTime) (info *VersionInfo, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, version)
 
-	return conn.DocumentVersionInfo(ctx, docID, version)
+	return globalConn.DocumentVersionInfo(ctx, docID, version)
 }
 
 // LatestDocumentVersionInfo returns the VersionInfo for the latest document version
 func LatestDocumentVersionInfo(ctx context.Context, docID uu.ID) (info *VersionInfo, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
-	return conn.LatestDocumentVersionInfo(ctx, docID)
+	return globalConn.LatestDocumentVersionInfo(ctx, docID)
 }
 
 // DocumentVersionFileProvider returns a FileProvider for the files of a document version
 func DocumentVersionFileProvider(ctx context.Context, docID uu.ID, version VersionTime) (p FileProvider, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, version)
 
-	return conn.DocumentVersionFileProvider(ctx, docID, version)
+	return globalConn.DocumentVersionFileProvider(ctx, docID, version)
 }
 
 // ReadDocumentFile reads a file of the latest document version
 func ReadDocumentFile(ctx context.Context, docID uu.ID, filename string) (data []byte, versionInfo *VersionInfo, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, filename)
 
-	versionInfo, err = conn.LatestDocumentVersionInfo(ctx, docID)
+	versionInfo, err = globalConn.LatestDocumentVersionInfo(ctx, docID)
 	if err != nil {
 		return nil, nil, err
 	}
-	data, err = conn.ReadDocumentVersionFile(ctx, docID, versionInfo.Version, filename)
+	data, err = globalConn.ReadDocumentVersionFile(ctx, docID, versionInfo.Version, filename)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -103,7 +103,7 @@ func ReadDocumentFile(ctx context.Context, docID uu.ID, filename string) (data [
 func SubstituteDeletedDocumentVersion(ctx context.Context, docID uu.ID, version VersionTime) (validVersion VersionTime, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, version)
 
-	_, err = conn.DocumentVersionInfo(ctx, docID, version)
+	_, err = globalConn.DocumentVersionInfo(ctx, docID, version)
 	if err == nil {
 		return version, nil
 	}
@@ -112,7 +112,7 @@ func SubstituteDeletedDocumentVersion(ctx context.Context, docID uu.ID, version 
 		return VersionTime{}, err
 	}
 
-	versions, err := conn.DocumentVersions(ctx, docID)
+	versions, err := globalConn.DocumentVersions(ctx, docID)
 	if err != nil {
 		return VersionTime{}, err
 	}
@@ -136,17 +136,17 @@ func SubstituteDeletedDocumentVersion(ctx context.Context, docID uu.ID, version 
 func ReadDocumentVersionFile(ctx context.Context, docID uu.ID, version VersionTime, filename string) (data []byte, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, version, filename)
 
-	return conn.ReadDocumentVersionFile(ctx, docID, version, filename)
+	return globalConn.ReadDocumentVersionFile(ctx, docID, version, filename)
 }
 
 func ReadLatestDocumentVersionFile(ctx context.Context, docID uu.ID, filename string) (data []byte, version VersionTime, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, version, filename)
 
-	version, err = conn.LatestDocumentVersion(ctx, docID)
+	version, err = globalConn.LatestDocumentVersion(ctx, docID)
 	if err != nil {
 		return nil, VersionTime{}, err
 	}
-	data, err = conn.ReadDocumentVersionFile(ctx, docID, version, filename)
+	data, err = globalConn.ReadDocumentVersionFile(ctx, docID, version, filename)
 	if err != nil {
 		return nil, VersionTime{}, err
 	}
@@ -159,7 +159,7 @@ func ReadLatestDocumentVersionFile(ctx context.Context, docID uu.ID, filename st
 func DocumentVersionFileReader(ctx context.Context, docID uu.ID, version VersionTime, filename string) (fileReader fs.FileReader, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, version, filename)
 
-	data, err := conn.ReadDocumentVersionFile(ctx, docID, version, filename)
+	data, err := globalConn.ReadDocumentVersionFile(ctx, docID, version, filename)
 	if err != nil {
 		return nil, err
 	}
@@ -172,11 +172,11 @@ func DocumentVersionFileReader(ctx context.Context, docID uu.ID, version Version
 func DocumentFileReader(ctx context.Context, docID uu.ID, filename string) (fileReader fs.FileReader, versionInfo *VersionInfo, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, filename)
 
-	versionInfo, err = conn.LatestDocumentVersionInfo(ctx, docID)
+	versionInfo, err = globalConn.LatestDocumentVersionInfo(ctx, docID)
 	if err != nil {
 		return nil, nil, err
 	}
-	data, err := conn.ReadDocumentVersionFile(ctx, docID, versionInfo.Version, filename)
+	data, err := globalConn.ReadDocumentVersionFile(ctx, docID, versionInfo.Version, filename)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -204,7 +204,7 @@ func DocumentFileExists(ctx context.Context, docID uu.ID, filename string) (exis
 func DocumentCheckOutStatus(ctx context.Context, docID uu.ID) (status *CheckOutStatus, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
-	conn, ok := conn.(DeprecatedConn)
+	conn, ok := globalConn.(DeprecatedConn)
 	if !ok {
 		return nil, errs.Errorf("conn does not implement DeprecatedConn")
 	}
@@ -214,7 +214,7 @@ func DocumentCheckOutStatus(ctx context.Context, docID uu.ID) (status *CheckOutS
 // CheckedOutDocumentDir returns a fs.File for the directory
 // where a document would be checked out.
 func CheckedOutDocumentDir(docID uu.ID) fs.File {
-	conn, ok := conn.(DeprecatedConn)
+	conn, ok := globalConn.(DeprecatedConn)
 	if !ok {
 		return ""
 	}
@@ -226,7 +226,7 @@ func CheckedOutDocumentDir(docID uu.ID) fs.File {
 func CheckedOutDocumentFileProvider(docID uu.ID) (p FileProvider, err error) {
 	defer errs.WrapWithFuncParams(&err, docID)
 
-	conn, ok := conn.(DeprecatedConn)
+	conn, ok := globalConn.(DeprecatedConn)
 	if !ok {
 		return nil, errs.Errorf("conn does not implement DeprecatedConn")
 	}
@@ -245,7 +245,7 @@ func CheckedOutDocumentFileProvider(docID uu.ID) (p FileProvider, err error) {
 func CancelCheckOutDocument(ctx context.Context, docID uu.ID) (wasCheckedOut bool, lastVersion VersionTime, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
-	conn, ok := conn.(DeprecatedConn)
+	conn, ok := globalConn.(DeprecatedConn)
 	if !ok {
 		return false, VersionTime{}, errs.Errorf("conn does not implement DeprecatedConn")
 	}
@@ -257,7 +257,7 @@ func CancelCheckOutDocument(ctx context.Context, docID uu.ID) (wasCheckedOut boo
 func CheckInDocument(ctx context.Context, docID uu.ID) (v *VersionInfo, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
-	conn, ok := conn.(DeprecatedConn)
+	conn, ok := globalConn.(DeprecatedConn)
 	if !ok {
 		return nil, errs.Errorf("conn does not implement DeprecatedConn")
 	}
@@ -268,7 +268,7 @@ func CheckInDocument(ctx context.Context, docID uu.ID) (v *VersionInfo, err erro
 func CheckedOutDocuments(ctx context.Context) (stati []*CheckOutStatus, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx)
 
-	conn, ok := conn.(DeprecatedConn)
+	conn, ok := globalConn.(DeprecatedConn)
 	if !ok {
 		return nil, errs.Errorf("conn does not implement DeprecatedConn")
 	}
@@ -279,7 +279,7 @@ func CheckedOutDocuments(ctx context.Context) (stati []*CheckOutStatus, err erro
 func CheckOutNewDocument(ctx context.Context, docID, companyID, userID uu.ID, reason string) (status *CheckOutStatus, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, companyID, userID, reason)
 
-	conn, ok := conn.(DeprecatedConn)
+	conn, ok := globalConn.(DeprecatedConn)
 	if !ok {
 		return nil, errs.Errorf("conn does not implement DeprecatedConn")
 	}
@@ -291,7 +291,7 @@ func CheckOutNewDocument(ctx context.Context, docID, companyID, userID uu.ID, re
 func CheckOutDocument(ctx context.Context, docID, userID uu.ID, reason string) (status *CheckOutStatus, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, userID, reason)
 
-	conn, ok := conn.(DeprecatedConn)
+	conn, ok := globalConn.(DeprecatedConn)
 	if !ok {
 		return nil, errs.Errorf("conn does not implement DeprecatedConn")
 	}
@@ -303,7 +303,7 @@ func CheckOutDocument(ctx context.Context, docID, userID uu.ID, reason string) (
 func DeleteDocument(ctx context.Context, docID uu.ID) (err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
-	return conn.DeleteDocument(ctx, docID)
+	return globalConn.DeleteDocument(ctx, docID)
 }
 
 // DeleteDocumentVersion deletes a version of a document that must not be checked out
@@ -317,7 +317,7 @@ func DeleteDocument(ctx context.Context, docID uu.ID) (err error) {
 func DeleteDocumentVersion(ctx context.Context, docID uu.ID, version VersionTime) (leftVersions []VersionTime, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, version)
 
-	return conn.DeleteDocumentVersion(ctx, docID, version)
+	return globalConn.DeleteDocumentVersion(ctx, docID, version)
 }
 
 // CreateDocument creates a new document with the provided files.
@@ -333,7 +333,7 @@ func DeleteDocumentVersion(ctx context.Context, docID uu.ID, version VersionTime
 func CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, files []fs.FileReader, onNewVersion OnNewVersionFunc) (err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, companyID, docID, userID, reason, files, onNewVersion)
 
-	return conn.CreateDocument(ctx, companyID, docID, userID, reason, files, onNewVersion)
+	return globalConn.CreateDocument(ctx, companyID, docID, userID, reason, files, onNewVersion)
 }
 
 // AddDocumentVersion adds a new version to an existing document.
@@ -353,7 +353,7 @@ func CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason 
 func AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) (err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, userID, reason)
 
-	return conn.AddDocumentVersion(ctx, docID, userID, reason, createVersion, onNewVersion)
+	return globalConn.AddDocumentVersion(ctx, docID, userID, reason, createVersion, onNewVersion)
 }
 
 // CopyDocumentFiles copies the files of all versions of
