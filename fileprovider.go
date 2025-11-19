@@ -15,6 +15,36 @@ type FileProvider interface {
 	ReadFile(ctx context.Context, filename string) ([]byte, error)
 }
 
+func NewFileProvider(files ...fs.FileReader) FileProvider {
+	return fileReaderProvider(files)
+}
+
+type fileReaderProvider []fs.FileReader
+
+func (p fileReaderProvider) HasFile(filename string) (bool, error) {
+	return slices.ContainsFunc(p, func(f fs.FileReader) bool {
+		return f.Name() == filename
+	}), nil
+}
+
+func (p fileReaderProvider) ListFiles(ctx context.Context) (filenames []string, err error) {
+	filenames = make([]string, len(p))
+	for i, f := range p {
+		filenames[i] = f.Name()
+	}
+	slices.Sort(filenames)
+	return filenames, nil
+}
+
+func (p fileReaderProvider) ReadFile(ctx context.Context, filename string) ([]byte, error) {
+	for _, f := range p {
+		if f.Name() == filename {
+			return f.ReadAllContext(ctx)
+		}
+	}
+	return nil, fs.NewErrPathDoesNotExist(filename)
+}
+
 // ReadMemFile reads a file from a FileProvider and returns it as an fs.MemFile.
 func ReadMemFile(ctx context.Context, provider FileProvider, filename string) (fs.MemFile, error) {
 	data, err := provider.ReadFile(ctx, filename)
@@ -87,13 +117,18 @@ func (p extFileProvider) HasFile(filename string) (bool, error) {
 			return true, nil
 		}
 	}
+	if p.base == nil {
+		return false, nil
+	}
 	return p.base.HasFile(filename)
 }
 
 func (p extFileProvider) ListFiles(ctx context.Context) (filenames []string, err error) {
-	filenames, err = p.base.ListFiles(ctx)
-	if err != nil {
-		return nil, err
+	if p.base != nil {
+		filenames, err = p.base.ListFiles(ctx)
+		if err != nil {
+			return nil, err
+		}
 	}
 	for _, f := range p.extFiles {
 		if !slices.Contains(filenames, f.Name()) {
@@ -109,6 +144,9 @@ func (p extFileProvider) ReadFile(ctx context.Context, filename string) ([]byte,
 		if f.Name() == filename {
 			return f.ReadAllContext(ctx)
 		}
+	}
+	if p.base == nil {
+		return nil, fs.NewErrPathDoesNotExist(filename)
 	}
 	return p.base.ReadFile(ctx, filename)
 }
@@ -174,25 +212,28 @@ func (fp *MockFileProvider) ReadFile(ctx context.Context, filename string) ([]by
 
 var _ FileProvider = &MockFileProvider{}
 
-// func MemFileProvider(file fs.MemFile) FileProvider {
-// 	return memFileProvider{file}
-// }
+var _ FileProvider = memFileProvider{}
 
-// type memFileProvider struct {
-// 	file fs.MemFile
-// }
+// SingleMemFileProvider returns a FileProvider that contains a single MemFile.
+func SingleMemFileProvider(file fs.MemFile) FileProvider {
+	return memFileProvider{file}
+}
 
-// func (mem memFileProvider) HasFile(filename string) (bool, error) {
-// 	return mem.file.FileName == filename, nil
-// }
+type memFileProvider struct {
+	file fs.MemFile
+}
 
-// func (mem memFileProvider) ListFiles(ctx context.Context) (filenames []string, err error) {
-// 	return []string{mem.file.FileName}, nil
-// }
+func (mem memFileProvider) HasFile(filename string) (bool, error) {
+	return mem.file.FileName == filename, nil
+}
 
-// func (mem memFileProvider) ReadFile(ctx context.Context, filename string) ([]byte, error) {
-// 	if filename != mem.file.FileName {
-// 		return nil, fs.NewErrPathDoesNotExist(filename)
-// 	}
-// 	return mem.file.FileData, nil
-// }
+func (mem memFileProvider) ListFiles(ctx context.Context) (filenames []string, err error) {
+	return []string{mem.file.FileName}, nil
+}
+
+func (mem memFileProvider) ReadFile(ctx context.Context, filename string) ([]byte, error) {
+	if filename != mem.file.FileName {
+		return nil, fs.NewErrPathDoesNotExist(filename)
+	}
+	return mem.file.FileData, nil
+}
