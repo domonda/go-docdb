@@ -10,7 +10,7 @@ psql -v ON_ERROR_STOP=1 -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" -h "${POSTGRES
 BEGIN;
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-CREATE schema docdb;
+CREATE SCHEMA IF NOT EXISTS docdb;
 \ir $schema_dir/document_version.sql
 \ir $schema_dir/document_version_file.sql
 \ir $schema_dir/lock.sql

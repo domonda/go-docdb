@@ -1,10 +1,15 @@
-create domain docdb.version_time timestamp(3) without time zone;
+do $$
+begin
+    if not exists (select 1 from pg_type where typname = 'version_time' and typnamespace = 'docdb'::regnamespace) then
+        create domain docdb.version_time timestamp(3) without time zone;
+    end if;
+end $$;
 
 comment on domain docdb.version_time is 'Document version as UTC timestamp with millisecond precision';
 
 ----
 
-create table docdb.document_version (
+create table if not exists docdb.document_version (
     id uuid primary key,
     document_id uuid not null, -- references public.document(id) on delete cascade (only in prod, here the public schema is out of scope)
     company_id uuid not null, -- references public.dcument(company_id) on delete cascade (only in prod, here the public schema is out of scope)
@@ -19,14 +24,14 @@ create table docdb.document_version (
     modified_files text []
 );
 
-create unique index document_version_doc_ver_idx on docdb.document_version (document_id, version);
+create unique index if not exists document_version_doc_ver_idx on docdb.document_version (document_id, version);
 
-create index document_version_document_id_idx on docdb.document_version (document_id);
+create index if not exists document_version_document_id_idx on docdb.document_version (document_id);
 
-create index document_version_version_idx on docdb.document_version (version);
+create index if not exists document_version_version_idx on docdb.document_version (version);
 
-create index document_version_commit_user_id_idx on docdb.document_version (commit_user_id);
+create index if not exists document_version_commit_user_id_idx on docdb.document_version (commit_user_id);
 
-create index document_version_commit_reason_idx on docdb.document_version (commit_reason);
+create index if not exists document_version_commit_reason_idx on docdb.document_version (commit_reason);
 
 comment on type docdb.document_version is 'Document version meta data';

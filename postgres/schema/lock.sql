@@ -1,27 +1,27 @@
-create table docdb.lock (
+create table if not exists docdb.lock (
     id uuid primary key default uuid_generate_v4 (),
     user_id uuid not null, -- references public.user(id) on delete restrict (only in prod, here the public schema is out of scope)
     reason text not null check (length(reason) > 0),
     created_at timestamp not null
 );
 
-create index docdb_lock_user_id_idx on docdb.lock (user_id);
+create index if not exists docdb_lock_user_id_idx on docdb.lock (user_id);
 
-create index docdb_lock_reason_idx on docdb.lock (reason);
+create index if not exists docdb_lock_reason_idx on docdb.lock (reason);
 
 ----
 
-create table docdb.locked_document (
+create table if not exists docdb.locked_document (
     -- document_id as primary key ensures a document to be locked only once
     document_id uuid primary key, -- references public.document(id) on delete restrict (only in prod, here the public schema is out of scope)
     lock_id uuid not null references docdb.lock (id) on delete cascade
 );
 
-create index docdb_locked_document_lock_id_idx on docdb.locked_document (lock_id);
+create index if not exists docdb_locked_document_lock_id_idx on docdb.locked_document (lock_id);
 
 ----
 
-create function docdb.is_document_locked(document_id uuid) returns boolean
+create or replace function docdb.is_document_locked(document_id uuid) returns boolean
 language sql stable as
 $$
     select exists (
@@ -45,7 +45,7 @@ comment on function docdb.is_document_locked is 'Returns if a document is locked
 
 ----
 
-create function docdb.is_document_processing(document_id uuid) returns boolean
+create or replace function docdb.is_document_processing(document_id uuid) returns boolean
 language sql stable as
 $$
     select exists (
@@ -60,7 +60,7 @@ comment on function docdb.is_document_processing is 'Returns if a document is cu
 
 ----
 
-create function docdb.lock_document(
+create or replace function docdb.lock_document(
     document_id uuid,
     user_id     uuid,
     reason      text
@@ -89,7 +89,7 @@ comment on function docdb.lock_document is 'Locks a single document, using the d
 
 ----
 
-create function docdb.lock_documents(
+create or replace function docdb.lock_documents(
     document_ids   uuid[],
     user_id        uuid,
     reason         text
@@ -111,7 +111,7 @@ comment on function docdb.lock_documents is 'Locks multiple documents and return
 
 ----
 
-create function docdb.lock_additional_documents(lock_id uuid, document_ids uuid[]) returns void
+create or replace function docdb.lock_additional_documents(lock_id uuid, document_ids uuid[]) returns void
 language sql volatile as
 $$
     insert into docdb.locked_document (document_id, lock_id)
@@ -122,7 +122,7 @@ comment on function docdb.lock_additional_documents is 'Locks additional documen
 
 ----
 
-create function docdb.unlock(lock_id uuid) returns setof docdb.lock
+create or replace function docdb.unlock(lock_id uuid) returns setof docdb.lock
 language sql volatile as
 $$
     delete from docdb.lock where id = lock_id

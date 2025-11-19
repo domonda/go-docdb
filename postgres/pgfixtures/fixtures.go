@@ -3,23 +3,25 @@
 package pgfixtures
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"math/rand"
 	"os"
 	"reflect"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/datek/fix"
 
 	"github.com/domonda/go-docdb"
+	"github.com/domonda/go-docdb/postgres"
+	"github.com/domonda/go-errs"
 	"github.com/domonda/go-sqldb"
 	"github.com/domonda/go-sqldb/db"
 	"github.com/domonda/go-sqldb/pqconn"
 	"github.com/domonda/go-types/uu"
-
-	"github.com/domonda/go-docdb/postgres"
 )
 
 var conn sqldb.Connection
@@ -155,9 +157,17 @@ func randomDocName() string {
 func p[T any](v T) *T { return &v }
 
 func newConnFromEnv() sqldb.Connection {
+	portStr := cmp.Or(os.Getenv("POSTGRES_PORT"), "5432")
+
+	port, err := strconv.ParseUint(portStr, 10, 16)
+	if err != nil {
+		panic(errs.Errorf("invalid POSTGRES_PORT: %v", err))
+	}
+
 	config := &sqldb.Config{
 		Driver:   "postgres",
 		Host:     "localhost",
+		Port:     uint16(port),
 		User:     os.Getenv("POSTGRES_USER"),
 		Database: os.Getenv("POSTGRES_DB"),
 		Password: os.Getenv("POSTGRES_PASSWORD"),
