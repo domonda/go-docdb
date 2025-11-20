@@ -12,10 +12,9 @@ import (
 	"github.com/ungerik/go-fs"
 
 	"github.com/domonda/go-docdb"
-	"github.com/domonda/go-types/uu"
-
 	"github.com/domonda/go-docdb/s3"
 	"github.com/domonda/go-docdb/s3/s3fixtures"
+	"github.com/domonda/go-types/uu"
 )
 
 func TestDocumentExists(t *testing.T) {
@@ -162,6 +161,7 @@ func TestCreateDocument(t *testing.T) {
 		documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
 		client := s3fixtures.FixtureGlobalS3Client(t)
 		docID := uu.IDv7()
+		version := docdb.NewVersionTime()
 
 		files := []*fs.MemFile{
 			{
@@ -178,6 +178,7 @@ func TestCreateDocument(t *testing.T) {
 		err := documentStore.CreateDocument(
 			t.Context(),
 			docID,
+			version,
 			[]fs.FileReader{files[0], files[1]},
 		)
 
@@ -197,6 +198,7 @@ func TestCreateDocument(t *testing.T) {
 		err := documentStore.CreateDocument(
 			t.Context(),
 			uu.IDv4(),
+			docdb.NewVersionTime(),
 			[]fs.FileReader{&fs.MemFile{}},
 		)
 

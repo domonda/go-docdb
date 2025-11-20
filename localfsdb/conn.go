@@ -836,7 +836,7 @@ func (c *Conn) CheckInDocument(ctx context.Context, docID uu.ID) (versionInfo *d
 	docDir := c.documentDir(docID)
 	workDir := c.CheckedOutDocumentDir(docID)
 
-	newVersion := docdb.NewVersionTime(ctx)
+	newVersion := docdb.NewVersionTime()
 	newVersionDir = docDir.Join(newVersion.String())
 
 	err = fs.CopyRecursive(ctx, workDir, newVersionDir)
@@ -998,8 +998,8 @@ func (c *Conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version d
 // 	// TODO
 // }
 
-func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, files []fs.FileReader, onNewVersion docdb.OnNewVersionFunc) (err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, companyID, docID, userID, reason, files, onNewVersion)
+func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, newVersion docdb.VersionTime, files []fs.FileReader, onNewVersion docdb.OnNewVersionFunc) (err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, companyID, docID, userID, reason, newVersion, files, onNewVersion)
 
 	if err = ctx.Err(); err != nil {
 		return err
@@ -1013,6 +1013,12 @@ func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.I
 	if err = userID.Validate(); err != nil {
 		return err
 	}
+	if newVersion.IsNull() {
+		return errs.New("null newVersion passed to CreateDocument")
+	}
+	if onNewVersion == nil {
+		return errs.New("nil onNewVersion func passed to CreateDocument")
+	}
 
 	docWriteMtx.Lock(docID)
 	defer docWriteMtx.Unlock(docID)
@@ -1022,10 +1028,8 @@ func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.I
 		return docdb.NewErrDocumentAlreadyExists(docID)
 	}
 
-	var (
-		newVersion    = docdb.NewVersionTime(ctx)
-		newVersionDir = docDir.Join(newVersion.String())
-	)
+	newVersionDir := docDir.Join(newVersion.String())
+
 	defer func() {
 		if err != nil {
 			if docDir.Exists() {
@@ -1082,8 +1086,8 @@ func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.I
 	return safelyCallOnNewVersionFunc(ctx, versionInfo, onNewVersion)
 }
 
-func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, createVersion docdb.CreateVersionFunc, onNewVersion docdb.OnNewVersionFunc) (err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, docID, userID, reason, createVersion, onNewVersion)
+func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, newVersion docdb.VersionTime, createVersion docdb.CreateVersionFunc, onNewVersion docdb.OnNewVersionFunc) (err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, docID, userID, reason, newVersion, createVersion, onNewVersion)
 
 	if err = ctx.Err(); err != nil {
 		return err
@@ -1094,8 +1098,14 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 	if err = userID.Validate(); err != nil {
 		return err
 	}
+	if newVersion.IsNull() {
+		return errs.New("null newVersion passed to AddDocumentVersion")
+	}
 	if createVersion == nil {
 		return errs.New("nil createVersion func passed to AddDocumentVersion")
+	}
+	if onNewVersion == nil {
+		return errs.New("nil onNewVersion func passed to AddDocumentVersion")
 	}
 
 	var (
@@ -1136,7 +1146,6 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 		}
 	}
 
-	newVersion := docdb.NewVersionTime(ctx)
 	if !newVersion.After(prevVersionInfo.Version) {
 		return errs.Errorf("new version %s not after previous version %s", newVersion, prevVersionInfo.Version)
 	}
@@ -1209,15 +1218,13 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 		}
 	}
 
-	if onNewVersion != nil {
-		err = safelyCallOnNewVersionFunc(ctx, versionInfo, onNewVersion)
-		if err != nil {
-			// Undo company change
-			if companyID != prevVersionInfo.CompanyID {
-				err = errors.Join(err, c.setDocumentCompanyID(ctx, docID, prevVersionInfo.CompanyID))
-			}
-			return err
+	err = safelyCallOnNewVersionFunc(ctx, versionInfo, onNewVersion)
+	if err != nil {
+		// Undo company change
+		if companyID != prevVersionInfo.CompanyID {
+			err = errors.Join(err, c.setDocumentCompanyID(ctx, docID, prevVersionInfo.CompanyID))
 		}
+		return err
 	}
 
 	return nil

@@ -203,6 +203,7 @@ func (conn *proxyConn) CreateDocument(
 	docID,
 	userID uu.ID,
 	reason string,
+	version docdb.VersionTime,
 	files []fs.FileReader,
 	onNewVersion docdb.OnNewVersionFunc,
 ) error {
@@ -210,7 +211,7 @@ func (conn *proxyConn) CreateDocument(
 	if err != nil {
 		return err
 	}
-	return conn.getConn(config, companyID).CreateDocument(ctx, companyID, docID, userID, reason, files, onNewVersion)
+	return conn.getConn(config, companyID).CreateDocument(ctx, companyID, docID, userID, reason, version, files, onNewVersion)
 }
 
 func (conn *proxyConn) AddDocumentVersion(
@@ -218,6 +219,7 @@ func (conn *proxyConn) AddDocumentVersion(
 	docID,
 	userID uu.ID,
 	reason string,
+	version docdb.VersionTime,
 	createVersion docdb.CreateVersionFunc,
 	onNewVersion docdb.OnNewVersionFunc,
 ) error {
@@ -229,7 +231,7 @@ func (conn *proxyConn) AddDocumentVersion(
 	if err != nil {
 		return err
 	}
-	return conn.getConn(config, companyID).AddDocumentVersion(ctx, docID, userID, reason, createVersion, onNewVersion)
+	return conn.getConn(config, companyID).AddDocumentVersion(ctx, docID, userID, reason, version, createVersion, onNewVersion)
 }
 
 func (conn *proxyConn) RestoreDocument(

@@ -11,11 +11,10 @@ import (
 	"github.com/ungerik/go-fs"
 
 	"github.com/domonda/go-docdb"
-	"github.com/domonda/go-sqldb/db"
-	"github.com/domonda/go-types/uu"
-
 	"github.com/domonda/go-docdb/postgres"
 	"github.com/domonda/go-docdb/postgres/pgfixtures"
+	"github.com/domonda/go-sqldb/db"
+	"github.com/domonda/go-types/uu"
 )
 
 var store = postgres.NewMetadataStore()
@@ -25,6 +24,7 @@ func TestCreateDocument(t *testing.T) {
 		// given
 		t.Parallel()
 		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		version := docdb.NewVersionTime()
 
 		memFiles := []*fs.MemFile{
 			{
@@ -44,6 +44,7 @@ func TestCreateDocument(t *testing.T) {
 			uu.IDv7(),
 			uu.IDv7(),
 			"reason",
+			version,
 			[]fs.FileReader{memFiles[0], memFiles[1]},
 		)
 

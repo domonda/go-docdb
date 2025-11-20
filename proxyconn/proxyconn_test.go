@@ -10,9 +10,8 @@ import (
 	"github.com/ungerik/go-fs"
 
 	"github.com/domonda/go-docdb"
-	"github.com/domonda/go-types/uu"
-
 	"github.com/domonda/go-docdb/proxyconn"
+	"github.com/domonda/go-types/uu"
 )
 
 func TestProxyConn(t *testing.T) {
@@ -462,6 +461,7 @@ func TestProxyConn(t *testing.T) {
 		docID := uu.IDv7()
 		userID := uu.IDv7()
 		reason := "create document"
+		version := docdb.NewVersionTime()
 		files := []fs.FileReader{fs.NewMemFile("test.txt", []byte("content"))}
 
 		expectedInfo := &docdb.VersionInfo{
@@ -478,7 +478,7 @@ func TestProxyConn(t *testing.T) {
 		}
 
 		s3Conn := &docdb.MockConn{
-			CreateDocumentMock: func(ctx context.Context, companyID, docID, userID uu.ID, reason string, files []fs.FileReader, onNewVersion docdb.OnNewVersionFunc) error {
+			CreateDocumentMock: func(ctx context.Context, companyID, docID, userID uu.ID, reason string, version docdb.VersionTime, files []fs.FileReader, onNewVersion docdb.OnNewVersionFunc) error {
 				return onNewVersion(ctx, expectedInfo)
 			},
 		}
@@ -486,7 +486,7 @@ func TestProxyConn(t *testing.T) {
 		conn := proxyconn.New(s3Conn, nil, nil, nil, getConfig)
 
 		// when
-		err := conn.CreateDocument(t.Context(), companyID, docID, userID, reason, files, func(ctx context.Context, versionInfo *docdb.VersionInfo) error {
+		err := conn.CreateDocument(t.Context(), companyID, docID, userID, reason, version, files, func(ctx context.Context, versionInfo *docdb.VersionInfo) error {
 			require.Equal(t, expectedInfo, versionInfo)
 			return nil
 		})
@@ -501,6 +501,7 @@ func TestProxyConn(t *testing.T) {
 		docID := uu.IDv7()
 		userID := uu.IDv7()
 		reason := "add version"
+		version := docdb.NewVersionTime()
 
 		var getConfig proxyconn.ConfigMapLoader = func() (proxyconn.ConfigMap, error) {
 			return proxyconn.ConfigMap{
@@ -510,7 +511,7 @@ func TestProxyConn(t *testing.T) {
 
 		called := false
 		fsConn := &docdb.MockConn{
-			AddDocumentVersionMock: func(ctx context.Context, docID, userID uu.ID, reason string, createVersion docdb.CreateVersionFunc, onNewVersion docdb.OnNewVersionFunc) error {
+			AddDocumentVersionMock: func(ctx context.Context, docID, userID uu.ID, reason string, version docdb.VersionTime, createVersion docdb.CreateVersionFunc, onNewVersion docdb.OnNewVersionFunc) error {
 				called = true
 				return nil
 			},
@@ -526,7 +527,7 @@ func TestProxyConn(t *testing.T) {
 		conn := proxyconn.New(nil, fsConn, nil, getCompanyIDForDocID, getConfig)
 
 		// when
-		err := conn.AddDocumentVersion(t.Context(), docID, userID, reason, nil, nil)
+		err := conn.AddDocumentVersion(t.Context(), docID, userID, reason, version, nil, nil)
 
 		// then
 		require.NoError(t, err)

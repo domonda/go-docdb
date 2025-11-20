@@ -330,10 +330,10 @@ func DeleteDocumentVersion(ctx context.Context, docID uu.ID, version VersionTime
 // is atomically rolled back, the error is returned, or the panic is propagated.
 //
 // Returns ErrDocumentAlreadyExists if a document with docID already exists.
-func CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, files []fs.FileReader, onNewVersion OnNewVersionFunc) (err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, companyID, docID, userID, reason, files, onNewVersion)
+func CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, version VersionTime, files []fs.FileReader, onNewVersion OnNewVersionFunc) (err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, companyID, docID, userID, reason, version, files, onNewVersion)
 
-	return globalConn.CreateDocument(ctx, companyID, docID, userID, reason, files, onNewVersion)
+	return globalConn.CreateDocument(ctx, companyID, docID, userID, reason, version, files, onNewVersion)
 }
 
 // AddDocumentVersion adds a new version to an existing document.
@@ -350,10 +350,10 @@ func CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason 
 // Returns wrapped ErrDocumentNotFound if the document does not exist.
 // Returns wrapped ErrNoChanges if the new version has identical files
 // compared to the previous version.
-func AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) (err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, docID, userID, reason)
+func AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, version VersionTime, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) (err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, docID, userID, reason, version)
 
-	return globalConn.AddDocumentVersion(ctx, docID, userID, reason, createVersion, onNewVersion)
+	return globalConn.AddDocumentVersion(ctx, docID, userID, reason, version, createVersion, onNewVersion)
 }
 
 // CopyDocumentFiles copies the files of all versions of

@@ -27,7 +27,7 @@ type s3DocStore struct {
 	client     *awss3.Client
 	bucketName string
 }
- 
+
 func (store *s3DocStore) DocumentExists(ctx context.Context, docID uu.ID) (exists bool, err error) {
 	response, err := store.client.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{
 		Bucket:  &store.bucketName,
@@ -59,6 +59,7 @@ func (store *s3DocStore) EnumDocumentIDs(ctx context.Context, callback func(cont
 func (store *s3DocStore) CreateDocument(
 	ctx context.Context,
 	docID uu.ID,
+	version docdb.VersionTime,
 	files []fs.FileReader,
 ) error {
 	for _, file := range files {

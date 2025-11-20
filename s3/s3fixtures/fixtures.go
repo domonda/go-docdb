@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -19,6 +20,27 @@ import (
 
 	"github.com/domonda/go-docdb/s3"
 )
+
+// getEndpointResolver returns an endpoint resolver that uses AWS_ENDPOINT_URL
+// environment variable for LocalStack compatibility
+func getEndpointResolver() aws.EndpointResolverWithOptionsFunc {
+	customEndpoint := os.Getenv("AWS_ENDPOINT_URL")
+	if customEndpoint == "" {
+		return nil
+	}
+
+	return func(service, region string, options ...any) (aws.Endpoint, error) {
+		if service == awss3.ServiceID {
+			return aws.Endpoint{
+				URL:               customEndpoint,
+				HostnameImmutable: true,
+				Source:            aws.EndpointSourceCustom,
+			}, nil
+		}
+		// Return default endpoint for other services
+		return aws.Endpoint{}, &aws.EndpointNotFoundError{}
+	}
+}
 
 var FixtureCreateDocument = fix.New(func(t *testing.T) func(
 	docID uu.ID,
@@ -125,12 +147,21 @@ var FixtureGlobalS3Client = fix.New(func(t *testing.T) *awss3.Client {
 		return s3Client
 	}
 
-	cfg, err := config.LoadDefaultConfig(context.Background())
+	ctx := context.Background()
+
+	// Load config with custom endpoint resolver for LocalStack
+	cfg, err := config.LoadDefaultConfig(
+		ctx,
+		config.WithEndpointResolverWithOptions(getEndpointResolver()),
+	)
 	if err != nil {
 		t.Fatalf("Unable to load AWS SDK config, %v", err)
 	}
 
-	s3Client = awss3.NewFromConfig(cfg)
+	s3Client = awss3.NewFromConfig(cfg, func(o *awss3.Options) {
+		// Force path-style addressing for LocalStack compatibility
+		o.UsePathStyle = true
+	})
 	return s3Client
 })
 

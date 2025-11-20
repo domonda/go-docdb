@@ -3,19 +3,20 @@ package docdb
 import (
 	"context"
 
-	"github.com/domonda/go-types/uu"
 	"github.com/ungerik/go-fs"
+
+	"github.com/domonda/go-types/uu"
 )
 
 type MetadataStore interface {
-	CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, files []fs.FileReader) (*VersionInfo, error)
+	CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, version VersionTime, files []fs.FileReader) (*VersionInfo, error)
 
 	AddDocumentVersion(
 		ctx context.Context,
 		newVersion VersionTime,
 		previousVersion VersionTime,
-		docID,
-		companyID,
+		docID uu.ID,
+		companyID uu.ID,
 		userID uu.ID,
 		reason string,
 		addedFiles []*FileInfo,

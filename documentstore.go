@@ -3,14 +3,16 @@ package docdb
 import (
 	"context"
 
-	"github.com/domonda/go-types/uu"
 	"github.com/ungerik/go-fs"
+
+	"github.com/domonda/go-types/uu"
 )
 
 type DocumentStore interface {
 	CreateDocument(
 		ctx context.Context,
 		docID uu.ID,
+		version VersionTime,
 		files []fs.FileReader,
 	) error
 

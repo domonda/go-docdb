@@ -12,7 +12,7 @@ import (
 func NewReadOnlyMetadataStore() docdb.MetadataStore {
 	return &readonlyMetadataStore{}
 }
- 
+
 type readonlyMetadataStore struct {
 	postgresMetadataStore
 }
@@ -38,6 +38,7 @@ func (store *readonlyMetadataStore) CreateDocument(
 	docID,
 	userID uu.ID,
 	reason string,
+	version docdb.VersionTime,
 	files []fs.FileReader,
 ) (*docdb.VersionInfo, error) {
 	return nil, nil

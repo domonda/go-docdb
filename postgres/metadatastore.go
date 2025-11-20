@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"strings"
-	"time"
 
 	"github.com/ungerik/go-fs"
 
@@ -106,10 +105,11 @@ func (store *postgresMetadataStore) CreateDocument(
 	docID,
 	userID uu.ID,
 	reason string,
+	version docdb.VersionTime,
 	files []fs.FileReader,
 ) (*docdb.VersionInfo, error) {
 	versionInfo := &docdb.VersionInfo{
-		Version:   docdb.VersionTimeFrom(time.Now()),
+		Version:   version,
 		DocID:     docID,
 		CompanyID: companyID,
 	}

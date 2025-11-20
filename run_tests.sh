@@ -9,6 +9,8 @@ docker compose up -d --wait
 exit_code=0
 
 # when
+echo ""
+echo "Running tests..."
 ( \
     go test ./proxyconn -count 1 \
     && go test ./localfsdb -count 1 \
@@ -16,7 +18,7 @@ exit_code=0
     && go test ./s3 -count 1 \
     && go test ./integrationtests -count 1 
 ) || exit_code=$?
-
+echo ""
 
 # then
 docker compose down -v

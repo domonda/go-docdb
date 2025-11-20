@@ -110,11 +110,11 @@ func (c errConn) InsertDocumentVersion(context.Context, uu.ID, VersionTime, uu.I
 // 	return fs.InvalidFile, c.err
 // }
 
-func (c errConn) CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, files []fs.FileReader, onNewVersion OnNewVersionFunc) error {
+func (c errConn) CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, version VersionTime, files []fs.FileReader, onNewVersion OnNewVersionFunc) error {
 	return c.err
 }
 
-func (c errConn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error {
+func (c errConn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, version VersionTime, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error {
 	return c.err
 }
 

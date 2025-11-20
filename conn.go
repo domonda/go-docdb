@@ -2,6 +2,7 @@ package docdb
 
 import (
 	"context"
+	"errors"
 
 	"github.com/ungerik/go-fs"
 
@@ -106,84 +107,39 @@ type Conn interface {
 	// The document is created with companyID, docID, and userID as metadata,
 	// and reason describes why the document is being created.
 	//
+	// The passed version time is the timestamp of the new version.
+	//
 	// After the document version is created but before it is committed,
 	// the onNewVersion callback is called with the resulting VersionInfo.
 	// If onNewVersion returns an error or panics, the entire document creation
 	// is atomically rolled back, the error is returned, or the panic is propagated.
+	// onNewVersion must not be nil.
 	//
 	// Returns ErrDocumentAlreadyExists if a document with docID already exists.
-	CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, files []fs.FileReader, onNewVersion OnNewVersionFunc) error
+	CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, version VersionTime, files []fs.FileReader, onNewVersion OnNewVersionFunc) error
 
 	// AddDocumentVersion adds a new version to an existing document.
 	// The createVersion callback is invoked with the previous version info
 	// and should return the files to write, files to remove, and optionally
-	// a new company ID for the document.
+	// a changed company ID for the document (nil to keep current).
+	//
+	// The passed version time is the timestamp of the new version
+	// and must be after the latest version of the document.
 	//
 	// After the new version is created but before it is committed,
 	// the onNewVersion callback is called with the resulting VersionInfo.
 	// If createVersion or onNewVersion returns an error or panics,
 	// the entire version creation is atomically rolled back,
 	// the error is returned, or the panic is propagated.
+	// createVersion and onNewVersion must not be nil.
 	//
 	// Returns wrapped ErrDocumentNotFound if the document does not exist.
 	// Returns wrapped ErrNoChanges if the new version has identical files
 	// compared to the previous version.
-	AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error
+	AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, version VersionTime, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error
 
 	// RestoreDocument
 	RestoreDocument(ctx context.Context, doc *HashedDocument, merge bool) error
-
-	// InsertDocumentVersion inserts a new version for an existing document.
-	// Returns wrapped ErrDocumentNotFound, ErrDocumentVersionAlreadyExists
-	// in case of such error conditions.
-	// InsertDocumentVersion should not be used for normal docdb operations,
-	// just to clean up mistakes or sync database states.
-	// InsertDocumentVersion(ctx context.Context, docID uu.ID, version VersionTime, userID uu.ID, reason string, files []fs.FileReader) (info *VersionInfo, err error)
-
-	// CreateDocumentVersion creates a new document version.
-	//
-	// The new version is based on the passed baseVersion
-	// which is null (zero value) for a new document.
-	// A wrapped ErrVersionNotFound error is returned
-	// if the passed non null baseVersion does not exist.
-	// A wrapped ErrDocumentAlreadyExists errors is returned
-	// in case of a null null baseVersion where a document
-	// with the passed docID already exists.
-	//
-	// If there is already a later version than baseVersion
-	// then a wrapped ErrDocumentChanged error is returned.
-	//
-	// It is valid to change the company a document with a new version
-	// by passing a different companyID compared to the baseVersion.
-	//
-	// It is valid to pass an empty string as reason.
-	//
-	// The changes for the new version passed as fileChanges
-	// map from filenames to content.
-	//   - Files with identical names from the base version
-	//     will be overwritten with the passed content.
-	//   - If a non nil empty slice is passed,
-	//     then an empty file will be written.
-	//   - If nil is passed as content for a filname,
-	//     then the file from the base version will be deleted.
-	//     No error is returned if the file to be deleted
-	//     does not exist in the base version.
-	//
-	// If creating the new version was successful so far
-	// then the passed onCreate function will be called
-	// if it is not nil.
-	// The callback is passed the resulting VersionInfo
-	// and can prevent the new version from being commited
-	// by returning an error.
-	//
-	// Calling CreateDocumentVersion is atomic per docID
-	// meaning that other CreateDocumentVersion calls are blocked
-	// until the first call with the same docID retunred.
-	//
-	// Document IDs are unique accross the whole database
-	// so different companies can not have documents with
-	// the same ID.
-	// CreateDocumentVersion(ctx context.Context, companyID, docID, userID uu.ID, reason string, baseVersion VersionTime, fileChanges map[string][]byte, onCreate OnCreateVersionFunc) (*VersionInfo, error)
 }
 
 // DeprecatedConn has check-out, check-in and checkout directory methods.
@@ -335,10 +291,11 @@ func (c *conn) CreateDocument(
 	docID,
 	userID uu.ID,
 	reason string,
+	version VersionTime,
 	files []fs.FileReader,
 	onNewVersion OnNewVersionFunc,
 ) error {
-	return c.createDocumentVersion(ctx, companyID, docID, userID, reason, files)
+	return c.createDocumentVersion(ctx, companyID, docID, userID, reason, version, files, onNewVersion)
 }
 
 func (c *conn) createDocumentVersion(
@@ -347,24 +304,44 @@ func (c *conn) createDocumentVersion(
 	docID,
 	userID uu.ID,
 	reason string,
+	version VersionTime,
 	files []fs.FileReader,
-) error {
-	if err := c.documentStore.CreateDocument(ctx, docID, files); err != nil {
-		return err
+	onNewVersion OnNewVersionFunc,
+) (err error) {
+	if version.IsNull() {
+		return errs.New("null version passed to createDocumentVersion")
+	}
+	if onNewVersion == nil {
+		return errs.New("nil onNewVersion func passed to createDocumentVersion")
 	}
 
-	versionInfo, err := c.metadataStore.CreateDocument(ctx, companyID, docID, userID, reason, files)
+	var versionInfo *VersionInfo
 
-	if err != nil {
-		hashes := []string{}
-		for _, item := range versionInfo.Files {
-			hashes = append(hashes, item.Hash)
+	defer func() {
+		errs.RecoverPanicAsErrorWithFuncParams(&err, ctx, companyID, docID, userID, reason, version, files, onNewVersion)
+		if err != nil {
+			if versionInfo != nil {
+				hashes := []string{}
+				for _, item := range versionInfo.Files {
+					hashes = append(hashes, item.Hash)
+				}
+				err = errors.Join(c.documentStore.DeleteDocumentHashes(ctx, docID, hashes))
+			}
+			err = errors.Join(err, c.metadataStore.DeleteDocument(ctx, docID))
 		}
-		c.documentStore.DeleteDocumentHashes(ctx, docID, hashes) // #nosec G104
+	}()
+
+	err = c.documentStore.CreateDocument(ctx, docID, version, files)
+	if err != nil {
 		return err
 	}
 
-	return nil
+	versionInfo, err = c.metadataStore.CreateDocument(ctx, companyID, docID, userID, reason, version, files)
+	if err != nil {
+		return err
+	}
+
+	return onNewVersion(ctx, versionInfo)
 }
 
 func (c *conn) AddDocumentVersion(
@@ -372,18 +349,25 @@ func (c *conn) AddDocumentVersion(
 	docID,
 	userID uu.ID,
 	reason string,
+	newVersion VersionTime,
 	createVersion CreateVersionFunc,
 	onNewVersion OnNewVersionFunc,
 ) (err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, docID, userID, reason, createVersion, onNewVersion)
+	defer errs.WrapWithFuncParams(&err, ctx, docID, userID, reason, newVersion, createVersion, onNewVersion)
+
 	for _, check := range []func() error{ctx.Err, docID.Validate, userID.Validate} {
 		if err := check(); err != nil {
 			return err
 		}
 	}
-
+	if newVersion.IsNull() {
+		return errs.New("null newVersion passed to AddDocumentVersion")
+	}
 	if createVersion == nil {
 		return errs.New("nil createVersion func passed to AddDocumentVersion")
+	}
+	if onNewVersion == nil {
+		return errs.New("nil onNewVersion func passed to AddDocumentVersion")
 	}
 
 	latestVersionInfo, err := c.metadataStore.LatestDocumentVersionInfo(ctx, docID)
@@ -391,7 +375,6 @@ func (c *conn) AddDocumentVersion(
 		return err
 	}
 
-	newVersion := NewVersionTime(ctx)
 	if !newVersion.After(latestVersionInfo.Version) {
 		return errs.Errorf("new version %s not after previous version %s", newVersion, latestVersionInfo.Version)
 	}
@@ -413,13 +396,12 @@ func (c *conn) AddDocumentVersion(
 		fileProvider,
 		createVersion,
 	)
+	if err != nil {
+		return err
+	}
 
 	if newCompanyID != nil {
 		companyID = *newCompanyID
-	}
-
-	if err != nil {
-		return err
 	}
 
 	addedFiles := []*FileInfo{}
@@ -456,12 +438,13 @@ func (c *conn) AddDocumentVersion(
 		return err
 	}
 
-	if err := c.documentStore.CreateDocument(ctx, docID, writeFiles); err != nil {
+	if err := c.documentStore.CreateDocument(ctx, docID, newVersion, writeFiles); err != nil {
 		return err
 	}
 
+	// TODO 1. catch panics from onNewVersion and rollback new document version
+	// TODO 2. rollback new document version on any error from onNewVersion
 	return onNewVersion(ctx, newVersionInfo)
-
 }
 
 func (c *conn) RestoreDocument(ctx context.Context, doc *HashedDocument, merge bool) error {
@@ -475,5 +458,6 @@ func safelyCallCreateVersionFunc(
 	createVersion CreateVersionFunc,
 ) (writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error) {
 	defer errs.RecoverPanicAsError(&err)
+
 	return createVersion(ctx, prevVersion, prevFiles)
 }
