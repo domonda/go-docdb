@@ -163,7 +163,7 @@ func TestCreateDocument(t *testing.T) {
 		docID := uu.IDv7()
 		version := docdb.NewVersionTime()
 
-		files := []*fs.MemFile{
+		files := []fs.MemFile{
 			{
 				FileName: "a.pdf",
 				FileData: []byte("a"),

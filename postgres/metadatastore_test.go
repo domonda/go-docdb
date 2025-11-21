@@ -26,7 +26,7 @@ func TestCreateDocument(t *testing.T) {
 		ctx := pgfixtures.FixtureCtxWithTestTx(t)
 		version := docdb.NewVersionTime()
 
-		memFiles := []*fs.MemFile{
+		memFiles := []fs.MemFile{
 			{
 				FileName: "doc1.pdf",
 				FileData: []byte("a"),
