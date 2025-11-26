@@ -6,9 +6,10 @@ import (
 
 	"github.com/ungerik/go-fs"
 
-	"github.com/domonda/go-docdb"
 	"github.com/domonda/go-sqldb/db"
 	"github.com/domonda/go-types/uu"
+
+	"github.com/domonda/go-docdb"
 )
 
 func NewMetadataStore() docdb.MetadataStore {

@@ -442,9 +442,47 @@ func (c *conn) AddDocumentVersion(
 		return err
 	}
 
-	// TODO 1. catch panics from onNewVersion and rollback new document version
-	// TODO 2. rollback new document version on any error from onNewVersion
-	return onNewVersion(ctx, newVersionInfo)
+	safeOnNewVersion := func() (err error) {
+		params := []any{ctx,
+			docID,
+			userID,
+			reason,
+			newVersion,
+		}
+
+		if newVersionInfo != nil {
+			params = append(params, *newVersionInfo)
+		}
+
+		defer errs.RecoverPanicAsErrorWithFuncParams(&err, params...)
+
+		return onNewVersion(ctx, newVersionInfo)
+	}
+
+	err = safeOnNewVersion()
+	if err == nil {
+		return nil
+	}
+
+	_, _, pgCleanupErr := c.metadataStore.DeleteDocumentVersion(ctx, docID, newVersion)
+	if pgCleanupErr != nil {
+		err = errors.Join(err, pgCleanupErr)
+	}
+
+	hashesToDelete := []string{}
+	for _, f := range addedFiles {
+		hashesToDelete = append(hashesToDelete, f.Hash)
+	}
+
+	for _, f := range modifiedFiles {
+		hashesToDelete = append(hashesToDelete, f.Hash)
+	}
+
+	if s3Err := c.documentStore.DeleteDocumentHashes(ctx, docID, hashesToDelete); s3Err != nil {
+		err = errors.Join(err, s3Err)
+	}
+
+	return err
 }
 
 func (c *conn) RestoreDocument(ctx context.Context, doc *HashedDocument, merge bool) error {

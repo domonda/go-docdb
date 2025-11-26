@@ -12,8 +12,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/ungerik/go-fs"
 
-	"github.com/domonda/go-docdb"
 	"github.com/domonda/go-types/uu"
+
+	"github.com/domonda/go-docdb"
 )
 
 func NewS3DocumentStore(bucketName string, s3Client *awss3.Client) docdb.DocumentStore {

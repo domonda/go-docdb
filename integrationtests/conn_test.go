@@ -4,16 +4,18 @@ import (
 	"context"
 	"testing"
 
+	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/stretchr/testify/require"
 	"github.com/ungerik/go-fs"
+
+	"github.com/domonda/go-sqldb/db"
+	"github.com/domonda/go-types/uu"
 
 	"github.com/domonda/go-docdb"
 	"github.com/domonda/go-docdb/postgres"
 	"github.com/domonda/go-docdb/postgres/pgfixtures"
 	"github.com/domonda/go-docdb/s3"
 	"github.com/domonda/go-docdb/s3/s3fixtures"
-	"github.com/domonda/go-sqldb/db"
-	"github.com/domonda/go-types/uu"
 )
 
 func TestConn(t *testing.T) {
@@ -314,5 +316,78 @@ func TestConn(t *testing.T) {
 			require.Equal(t, newVersion.CompanyID, savedNewVersion.CompanyID)
 			require.Equal(t, companyID, savedNewVersion.CompanyID)
 		})
+
+		t.Run("Rolls back changes if onNewVersion panics", func(t *testing.T) {
+			// given
+			documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
+			bucketName := s3fixtures.FixtureCleanBucket(t)
+			conn := docdb.NewConn(
+				documentStore,
+				postgres.NewMetadataStore(),
+			)
+			populator := pgfixtures.FixturePopulator(t)
+			documentVersion := populator.DocumentVersion()
+			companyID := uu.IDv7()
+
+			var createVersion docdb.CreateVersionFunc = func(
+				ctx context.Context,
+				prevVersion docdb.VersionTime,
+				prevFiles docdb.FileProvider,
+			) (
+				writeFiles []fs.FileReader,
+				removeFiles []string,
+				newCompanyID *uu.ID,
+				err error,
+			) {
+				newFile := fs.NewMemFile("doc-a.pdf", []byte("a"))
+				writeFiles = append(writeFiles, newFile)
+				return writeFiles, removeFiles, &companyID, nil
+			}
+
+			var onNewVersion docdb.OnNewVersionFunc = func(ctx context.Context, versionInfo *docdb.VersionInfo) error {
+				panic("bug")
+			}
+
+			ctx := pgfixtures.FixtureCtxWithTestTx(t)
+
+			// when
+			err := conn.AddDocumentVersion(
+				ctx,
+				documentVersion.DocumentID,
+				uu.IDv7(),
+				"reason",
+				docdb.NewVersionTime(),
+				createVersion,
+				onNewVersion,
+			)
+
+			// then
+			require.ErrorContains(t, err, "bug")
+			versions, err := db.QueryValue[int](
+				ctx,
+				/* sql */ `
+				select count(*) from docdb.document_version where document_id = $1`,
+				documentVersion.DocumentID,
+			)
+
+			require.NoError(t, err)
+			require.Equal(t, 1, versions)
+
+			s3client := s3fixtures.FixtureGlobalS3Client(t)
+
+			response, err := s3client.ListObjectsV2(
+				ctx,
+				&awss3.ListObjectsV2Input{
+					Bucket: p(bucketName),
+					Prefix: p(documentVersion.DocumentID.String() + "/"),
+				},
+			)
+
+			require.Nil(t, err)
+			require.Equal(t, 0, len(response.Contents))
+
+		})
 	})
 }
+
+func p[T any](v T) *T { return &v }
