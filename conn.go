@@ -29,6 +29,7 @@ type (
 	// the files from the previous version.
 	//
 	// It should return:
+	//   - version: timestamp of the new version wich must be after prevVersion
 	//   - writeFiles: Files to write or overwrite in the new version
 	//   - removeFiles: Filenames to remove from the previous version
 	//   - newCompanyID: Optional new company ID to assign to the document (nil to keep current)
@@ -36,7 +37,7 @@ type (
 	//
 	// If this function returns an error or panics, the entire version creation
 	// is atomically rolled back.
-	CreateVersionFunc func(ctx context.Context, prevVersion VersionTime, prevFiles FileProvider) (writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error)
+	CreateVersionFunc func(ctx context.Context, prevVersion VersionTime, prevFiles FileProvider) (version VersionTime, writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error)
 
 	// OnNewVersionFunc is a callback function invoked after a new document version
 	// has been created but before it is committed.
@@ -123,9 +124,6 @@ type Conn interface {
 	// and should return the files to write, files to remove, and optionally
 	// a changed company ID for the document (nil to keep current).
 	//
-	// The passed version time is the timestamp of the new version
-	// and must be after the latest version of the document.
-	//
 	// After the new version is created but before it is committed,
 	// the onNewVersion callback is called with the resulting VersionInfo.
 	// If createVersion or onNewVersion returns an error or panics,
@@ -136,7 +134,7 @@ type Conn interface {
 	// Returns wrapped ErrDocumentNotFound if the document does not exist.
 	// Returns wrapped ErrNoChanges if the new version has identical files
 	// compared to the previous version.
-	AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, version VersionTime, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error
+	AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error
 
 	// RestoreDocument
 	RestoreDocument(ctx context.Context, doc *HashedDocument, merge bool) error
@@ -349,19 +347,15 @@ func (c *conn) AddDocumentVersion(
 	docID,
 	userID uu.ID,
 	reason string,
-	newVersion VersionTime,
 	createVersion CreateVersionFunc,
 	onNewVersion OnNewVersionFunc,
 ) (err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, docID, userID, reason, newVersion, createVersion, onNewVersion)
+	defer errs.WrapWithFuncParams(&err, ctx, docID, userID, reason, createVersion, onNewVersion)
 
 	for _, check := range []func() error{ctx.Err, docID.Validate, userID.Validate} {
 		if err := check(); err != nil {
 			return err
 		}
-	}
-	if newVersion.IsNull() {
-		return errs.New("null newVersion passed to AddDocumentVersion")
 	}
 	if createVersion == nil {
 		return errs.New("nil createVersion func passed to AddDocumentVersion")
@@ -375,10 +369,6 @@ func (c *conn) AddDocumentVersion(
 		return err
 	}
 
-	if !newVersion.After(latestVersionInfo.Version) {
-		return errs.Errorf("new version %s not after previous version %s", newVersion, latestVersionInfo.Version)
-	}
-
 	hashes := []string{}
 	for _, file := range latestVersionInfo.Files {
 		hashes = append(hashes, file.Hash)
@@ -390,7 +380,7 @@ func (c *conn) AddDocumentVersion(
 	}
 
 	companyID := latestVersionInfo.CompanyID
-	writeFiles, removeFiles, newCompanyID, err := safelyCallCreateVersionFunc(
+	newVersion, writeFiles, removeFiles, newCompanyID, err := safelyCallCreateVersionFunc(
 		ctx,
 		latestVersionInfo.Version,
 		fileProvider,
@@ -398,6 +388,12 @@ func (c *conn) AddDocumentVersion(
 	)
 	if err != nil {
 		return err
+	}
+	if newVersion.IsNull() {
+		return errs.New("version returned from CreateVersionFunc is null")
+	}
+	if !newVersion.After(latestVersionInfo.Version) {
+		return errs.Errorf("version %s returned from CreateVersionFunc is not after previous version %s", newVersion, latestVersionInfo.Version)
 	}
 
 	if newCompanyID != nil {
@@ -482,7 +478,7 @@ func safelyCallCreateVersionFunc(
 	prevVersion VersionTime,
 	prevFiles FileProvider,
 	createVersion CreateVersionFunc,
-) (writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error) {
+) (version VersionTime, writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error) {
 	defer errs.RecoverPanicAsError(&err)
 
 	return createVersion(ctx, prevVersion, prevFiles)

@@ -350,10 +350,10 @@ func CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason 
 // Returns wrapped ErrDocumentNotFound if the document does not exist.
 // Returns wrapped ErrNoChanges if the new version has identical files
 // compared to the previous version.
-func AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, version VersionTime, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) (err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, docID, userID, reason, version)
+func AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) (err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, docID, userID, reason, createVersion, onNewVersion)
 
-	return globalConn.AddDocumentVersion(ctx, docID, userID, reason, version, createVersion, onNewVersion)
+	return globalConn.AddDocumentVersion(ctx, docID, userID, reason, createVersion, onNewVersion)
 }
 
 // CopyDocumentFiles copies the files of all versions of

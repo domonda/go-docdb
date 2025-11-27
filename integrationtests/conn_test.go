@@ -8,14 +8,13 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/ungerik/go-fs"
 
-	"github.com/domonda/go-sqldb/db"
-	"github.com/domonda/go-types/uu"
-
 	"github.com/domonda/go-docdb"
 	"github.com/domonda/go-docdb/postgres"
 	"github.com/domonda/go-docdb/postgres/pgfixtures"
 	"github.com/domonda/go-docdb/s3"
 	"github.com/domonda/go-docdb/s3/s3fixtures"
+	"github.com/domonda/go-sqldb/db"
+	"github.com/domonda/go-types/uu"
 )
 
 func TestConn(t *testing.T) {
@@ -37,6 +36,7 @@ func TestConn(t *testing.T) {
 				prevVersion docdb.VersionTime,
 				prevFiles docdb.FileProvider,
 			) (
+				newVersion docdb.VersionTime,
 				writeFiles []fs.FileReader,
 				removeFiles []string,
 				newCompanyID *uu.ID,
@@ -44,7 +44,7 @@ func TestConn(t *testing.T) {
 			) {
 				writeFiles = append(writeFiles, newFile)
 
-				return writeFiles, removeFiles, newCompanyID, nil
+				return docdb.NewVersionTime(), writeFiles, removeFiles, newCompanyID, nil
 			}
 
 			newVersion := &docdb.VersionInfo{}
@@ -61,7 +61,6 @@ func TestConn(t *testing.T) {
 				documentVersionFile.DocumentVersion.DocumentID,
 				uu.IDv7(),
 				"reason",
-				docdb.NewVersionTime(),
 				createVersion,
 				onNewVersion,
 			)
@@ -118,6 +117,7 @@ func TestConn(t *testing.T) {
 				prevVersion docdb.VersionTime,
 				prevFiles docdb.FileProvider,
 			) (
+				newVersion docdb.VersionTime,
 				writeFiles []fs.FileReader,
 				removeFiles []string,
 				newCompanyID *uu.ID,
@@ -125,7 +125,7 @@ func TestConn(t *testing.T) {
 			) {
 				writeFiles = append(writeFiles, modifiedFile)
 
-				return writeFiles, removeFiles, newCompanyID, nil
+				return docdb.NewVersionTime(), writeFiles, removeFiles, newCompanyID, nil
 			}
 
 			newVersion := &docdb.VersionInfo{}
@@ -142,7 +142,6 @@ func TestConn(t *testing.T) {
 				documentVersionFile.DocumentVersion.DocumentID,
 				uu.IDv7(),
 				"reason",
-				docdb.NewVersionTime(),
 				createVersion,
 				onNewVersion,
 			)
@@ -197,13 +196,14 @@ func TestConn(t *testing.T) {
 				prevVersion docdb.VersionTime,
 				prevFiles docdb.FileProvider,
 			) (
+				newVersion docdb.VersionTime,
 				writeFiles []fs.FileReader,
 				removeFiles []string,
 				newCompanyID *uu.ID,
 				err error,
 			) {
 				removeFiles = append(removeFiles, documentVersionFile.Name)
-				return writeFiles, removeFiles, newCompanyID, nil
+				return docdb.NewVersionTime(), writeFiles, removeFiles, newCompanyID, nil
 			}
 
 			newVersion := &docdb.VersionInfo{}
@@ -220,7 +220,6 @@ func TestConn(t *testing.T) {
 				documentVersionFile.DocumentVersion.DocumentID,
 				uu.IDv7(),
 				"reason",
-				docdb.NewVersionTime(),
 				createVersion,
 				onNewVersion,
 			)
@@ -267,12 +266,13 @@ func TestConn(t *testing.T) {
 				prevVersion docdb.VersionTime,
 				prevFiles docdb.FileProvider,
 			) (
+				newVersion docdb.VersionTime,
 				writeFiles []fs.FileReader,
 				removeFiles []string,
 				newCompanyID *uu.ID,
 				err error,
 			) {
-				return writeFiles, removeFiles, &companyID, nil
+				return docdb.NewVersionTime(), writeFiles, removeFiles, &companyID, nil
 			}
 
 			newVersion := &docdb.VersionInfo{}
@@ -289,7 +289,6 @@ func TestConn(t *testing.T) {
 				documentVersion.DocumentID,
 				uu.IDv7(),
 				"reason",
-				docdb.NewVersionTime(),
 				createVersion,
 				onNewVersion,
 			)
@@ -334,6 +333,7 @@ func TestConn(t *testing.T) {
 				prevVersion docdb.VersionTime,
 				prevFiles docdb.FileProvider,
 			) (
+				newVersion docdb.VersionTime,
 				writeFiles []fs.FileReader,
 				removeFiles []string,
 				newCompanyID *uu.ID,
@@ -341,7 +341,7 @@ func TestConn(t *testing.T) {
 			) {
 				newFile := fs.NewMemFile("doc-a.pdf", []byte("a"))
 				writeFiles = append(writeFiles, newFile)
-				return writeFiles, removeFiles, &companyID, nil
+				return docdb.NewVersionTime(), writeFiles, removeFiles, &companyID, nil
 			}
 
 			var onNewVersion docdb.OnNewVersionFunc = func(ctx context.Context, versionInfo *docdb.VersionInfo) error {
@@ -356,7 +356,6 @@ func TestConn(t *testing.T) {
 				documentVersion.DocumentID,
 				uu.IDv7(),
 				"reason",
-				docdb.NewVersionTime(),
 				createVersion,
 				onNewVersion,
 			)

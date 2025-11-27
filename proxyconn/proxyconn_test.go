@@ -501,7 +501,6 @@ func TestProxyConn(t *testing.T) {
 		docID := uu.IDv7()
 		userID := uu.IDv7()
 		reason := "add version"
-		version := docdb.NewVersionTime()
 
 		var getConfig proxyconn.ConfigMapLoader = func() (proxyconn.ConfigMap, error) {
 			return proxyconn.ConfigMap{
@@ -511,7 +510,7 @@ func TestProxyConn(t *testing.T) {
 
 		called := false
 		fsConn := &docdb.MockConn{
-			AddDocumentVersionMock: func(ctx context.Context, docID, userID uu.ID, reason string, version docdb.VersionTime, createVersion docdb.CreateVersionFunc, onNewVersion docdb.OnNewVersionFunc) error {
+			AddDocumentVersionMock: func(ctx context.Context, docID, userID uu.ID, reason string, createVersion docdb.CreateVersionFunc, onNewVersion docdb.OnNewVersionFunc) error {
 				called = true
 				return nil
 			},
@@ -527,7 +526,13 @@ func TestProxyConn(t *testing.T) {
 		conn := proxyconn.New(nil, fsConn, nil, getCompanyIDForDocID, getConfig)
 
 		// when
-		err := conn.AddDocumentVersion(t.Context(), docID, userID, reason, version, nil, nil)
+		err := conn.AddDocumentVersion(t.Context(), docID, userID, reason,
+			func(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (version docdb.VersionTime, writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error) {
+				return version, nil, nil, nil, nil
+			},
+			func(ctx context.Context, versionInfo *docdb.VersionInfo) error {
+				return nil
+			})
 
 		// then
 		require.NoError(t, err)

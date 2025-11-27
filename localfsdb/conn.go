@@ -1086,8 +1086,8 @@ func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.I
 	return safelyCallOnNewVersionFunc(ctx, versionInfo, onNewVersion)
 }
 
-func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, newVersion docdb.VersionTime, createVersion docdb.CreateVersionFunc, onNewVersion docdb.OnNewVersionFunc) (err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, docID, userID, reason, newVersion, createVersion, onNewVersion)
+func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, createVersion docdb.CreateVersionFunc, onNewVersion docdb.OnNewVersionFunc) (err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, docID, userID, reason, createVersion, onNewVersion)
 
 	if err = ctx.Err(); err != nil {
 		return err
@@ -1097,9 +1097,6 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 	}
 	if err = userID.Validate(); err != nil {
 		return err
-	}
-	if newVersion.IsNull() {
-		return errs.New("null newVersion passed to AddDocumentVersion")
 	}
 	if createVersion == nil {
 		return errs.New("nil createVersion func passed to AddDocumentVersion")
@@ -1131,7 +1128,7 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 		return err
 	}
 
-	writeFiles, deleteFiles, newCompanyID, err := safelyCallCreateVersionFunc(
+	newVersion, writeFiles, deleteFiles, newCompanyID, err := safelyCallCreateVersionFunc(
 		ctx,
 		prevVersionInfo.Version,
 		docdb.DirFileProvider(prevVersionDir),
@@ -1145,10 +1142,13 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 			return errs.Errorf("file returned for new version of document %s does not exist: %#v", docID, f)
 		}
 	}
-
-	if !newVersion.After(prevVersionInfo.Version) {
-		return errs.Errorf("new version %s not after previous version %s", newVersion, prevVersionInfo.Version)
+	if newVersion.IsNull() {
+		return errs.New("version returned from CreateVersionFunc is null")
 	}
+	if !newVersion.After(prevVersionInfo.Version) {
+		return errs.Errorf("version %s returned from CreateVersionFunc is not after previous version %s", newVersion, prevVersionInfo.Version)
+	}
+
 	docDir := c.documentDir(docID)
 	newVersionDir = docDir.Join(newVersion.String())
 	newVersionInfoFile = docDir.Joinf("%s.json", newVersion)
@@ -1230,7 +1230,7 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 	return nil
 }
 
-func safelyCallCreateVersionFunc(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider, createVersion docdb.CreateVersionFunc) (writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error) {
+func safelyCallCreateVersionFunc(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider, createVersion docdb.CreateVersionFunc) (version docdb.VersionTime, writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error) {
 	defer errs.RecoverPanicAsError(&err)
 
 	return createVersion(ctx, prevVersion, prevFiles)

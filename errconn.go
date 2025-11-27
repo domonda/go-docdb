@@ -114,7 +114,7 @@ func (c errConn) CreateDocument(ctx context.Context, companyID, docID, userID uu
 	return c.err
 }
 
-func (c errConn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, version VersionTime, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error {
+func (c errConn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error {
 	return c.err
 }
 

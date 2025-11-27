@@ -23,7 +23,7 @@ type MockConn struct {
 	DeleteDocumentMock              func(ctx context.Context, docID uu.ID) error
 	DeleteDocumentVersionMock       func(ctx context.Context, docID uu.ID, version VersionTime) (leftVersions []VersionTime, err error)
 	CreateDocumentMock              func(ctx context.Context, companyID, docID, userID uu.ID, reason string, version VersionTime, files []fs.FileReader, onNewVersion OnNewVersionFunc) error
-	AddDocumentVersionMock          func(ctx context.Context, docID, userID uu.ID, reason string, version VersionTime, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error
+	AddDocumentVersionMock          func(ctx context.Context, docID, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error
 	RestoreDocumentMock             func(ctx context.Context, doc *HashedDocument, merge bool) error
 }
 
@@ -82,8 +82,8 @@ func (mock *MockConn) CreateDocument(ctx context.Context, companyID, docID, user
 	return mock.CreateDocumentMock(ctx, companyID, docID, userID, reason, version, files, onNewVersion)
 }
 
-func (mock *MockConn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, version VersionTime, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error {
-	return mock.AddDocumentVersionMock(ctx, docID, userID, reason, version, createVersion, onNewVersion)
+func (mock *MockConn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error {
+	return mock.AddDocumentVersionMock(ctx, docID, userID, reason, createVersion, onNewVersion)
 }
 
 func (mock *MockConn) RestoreDocument(ctx context.Context, doc *HashedDocument, merge bool) error {

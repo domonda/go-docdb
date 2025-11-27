@@ -156,17 +156,16 @@ func TestAddDocumentVersion(t *testing.T) {
 		testError2       = errors.New("testError2")
 	)
 	type args struct {
-		docID                 uu.ID
-		userID                uu.ID
-		reason                string
-		version               docdb.VersionTime
-		createVersion         docdb.CreateVersionFunc
-		onNewVersionResultErr error
+		docID         uu.ID
+		userID        uu.ID
+		reason        string
+		createVersion docdb.CreateVersionFunc
 	}
 	type call struct {
-		args            args
-		wantVersionInfo *docdb.VersionInfo
-		wantFiles       []fs.FileReader
+		args                  args
+		onNewVersionResultErr error
+		wantVersionInfo       *docdb.VersionInfo
+		wantFiles             []fs.FileReader
 	}
 	tests := []struct {
 		name            string
@@ -203,15 +202,14 @@ func TestAddDocumentVersion(t *testing.T) {
 			calls: []call{
 				{
 					args: args{
-						docID:   uu.IDFrom("142f465b-bc8b-4285-aed8-21917c924e47"),
-						userID:  defaultUserID,
-						version: versionTime1,
-						reason:  "second version",
-						createVersion: func(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error) {
-							return nil, nil, nil, testError1
+						docID:  uu.IDFrom("142f465b-bc8b-4285-aed8-21917c924e47"),
+						userID: defaultUserID,
+						reason: "second version",
+						createVersion: func(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (version docdb.VersionTime, writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error) {
+							return docdb.VersionTime{}, nil, nil, nil, testError1
 						},
-						onNewVersionResultErr: nil,
 					},
+					onNewVersionResultErr: nil,
 				},
 			},
 			wantFinalErrIs: testError1,
@@ -227,15 +225,14 @@ func TestAddDocumentVersion(t *testing.T) {
 			calls: []call{
 				{
 					args: args{
-						docID:   uu.IDFrom("cae28b7d-1b76-4fe3-b362-758f88396239"),
-						userID:  defaultUserID,
-						reason:  "second version",
-						version: versionTime1,
-						createVersion: func(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error) {
-							return nil, nil, nil, nil
+						docID:  uu.IDFrom("cae28b7d-1b76-4fe3-b362-758f88396239"),
+						userID: defaultUserID,
+						reason: "second version",
+						createVersion: func(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (version docdb.VersionTime, writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error) {
+							return versionTime1, nil, nil, nil, nil
 						},
-						onNewVersionResultErr: nil,
 					},
+					onNewVersionResultErr: nil,
 				},
 			},
 			wantFinalErrIs: docdb.ErrNoChanges,
@@ -251,17 +248,16 @@ func TestAddDocumentVersion(t *testing.T) {
 			calls: []call{
 				{
 					args: args{
-						docID:   uu.IDFrom("21dc078a-b930-42ae-b4f6-6b8bea86050e"),
-						userID:  defaultUserID,
-						reason:  "second version",
-						version: versionTime1,
-						createVersion: func(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error) {
-							return newTestMemFiles("a.txt"), nil, nil, nil
+						docID:  uu.IDFrom("21dc078a-b930-42ae-b4f6-6b8bea86050e"),
+						userID: defaultUserID,
+						reason: "second version",
+						createVersion: func(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (version docdb.VersionTime, writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error) {
+							return versionTime1, newTestMemFiles("a.txt"), nil, nil, nil
 						},
-						onNewVersionResultErr: nil,
 					},
-					wantVersionInfo: nil,
-					wantFiles:       nil,
+					onNewVersionResultErr: nil,
+					wantVersionInfo:       nil,
+					wantFiles:             nil,
 				},
 			},
 			wantFinalErrIs: docdb.ErrNoChanges,
@@ -277,15 +273,14 @@ func TestAddDocumentVersion(t *testing.T) {
 			calls: []call{
 				{
 					args: args{
-						docID:   uu.IDFrom("e48162a3-10b2-471b-8feb-adef5bffd279"),
-						userID:  defaultUserID,
-						reason:  "second version",
-						version: versionTime1,
-						createVersion: func(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error) {
-							return []fs.FileReader{fs.NewMemFile("a.txt", []byte("CHANGED"))}, nil, nil, nil
+						docID:  uu.IDFrom("e48162a3-10b2-471b-8feb-adef5bffd279"),
+						userID: defaultUserID,
+						reason: "second version",
+						createVersion: func(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (version docdb.VersionTime, writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error) {
+							return versionTime1, []fs.FileReader{fs.NewMemFile("a.txt", []byte("CHANGED"))}, nil, nil, nil
 						},
-						onNewVersionResultErr: nil,
 					},
+					onNewVersionResultErr: nil,
 					wantVersionInfo: &docdb.VersionInfo{
 						CompanyID:     defaultCompanyID,
 						DocID:         uu.IDFrom("e48162a3-10b2-471b-8feb-adef5bffd279"),
@@ -302,15 +297,14 @@ func TestAddDocumentVersion(t *testing.T) {
 				},
 				{
 					args: args{
-						docID:   uu.IDFrom("e48162a3-10b2-471b-8feb-adef5bffd279"),
-						userID:  defaultUserID,
-						reason:  "third version",
-						version: versionTime2,
-						createVersion: func(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error) {
-							return []fs.FileReader{fs.NewMemFile("a.txt", []byte("CHANGED AGAIN"))}, nil, nil, nil
+						docID:  uu.IDFrom("e48162a3-10b2-471b-8feb-adef5bffd279"),
+						userID: defaultUserID,
+						reason: "third version",
+						createVersion: func(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (version docdb.VersionTime, writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error) {
+							return versionTime2, []fs.FileReader{fs.NewMemFile("a.txt", []byte("CHANGED AGAIN"))}, nil, nil, nil
 						},
-						onNewVersionResultErr: nil,
 					},
+					onNewVersionResultErr: nil,
 					wantVersionInfo: &docdb.VersionInfo{
 						CompanyID:     defaultCompanyID,
 						DocID:         uu.IDFrom("e48162a3-10b2-471b-8feb-adef5bffd279"),
@@ -327,16 +321,15 @@ func TestAddDocumentVersion(t *testing.T) {
 				},
 				{
 					args: args{
-						docID:   uu.IDFrom("e48162a3-10b2-471b-8feb-adef5bffd279"),
-						userID:  defaultUserID,
-						reason:  "fourth version",
-						version: versionTime3,
-						createVersion: func(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error) {
+						docID:  uu.IDFrom("e48162a3-10b2-471b-8feb-adef5bffd279"),
+						userID: defaultUserID,
+						reason: "fourth version",
+						createVersion: func(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (version docdb.VersionTime, writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error) {
 							companyID := uu.IDMust("32b72879-b489-4d5d-9187-eba8127cc168")
-							return newTestMemFiles("b.txt"), []string{"a.txt"}, &companyID, nil
+							return versionTime3, newTestMemFiles("b.txt"), []string{"a.txt"}, &companyID, nil
 						},
-						onNewVersionResultErr: nil,
 					},
+					onNewVersionResultErr: nil,
 					wantVersionInfo: &docdb.VersionInfo{
 						CompanyID:     uu.IDMust("32b72879-b489-4d5d-9187-eba8127cc168"),
 						DocID:         uu.IDFrom("e48162a3-10b2-471b-8feb-adef5bffd279"),
@@ -364,17 +357,16 @@ func TestAddDocumentVersion(t *testing.T) {
 			calls: []call{
 				{
 					args: args{
-						docID:   uu.IDFrom("0a007614-c66c-4af5-97ba-337c32ae2bc2"),
-						userID:  defaultUserID,
-						reason:  "second version",
-						version: versionTime1,
-						createVersion: func(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error) {
-							return newTestMemFiles("b.txt"), nil, nil, nil
+						docID:  uu.IDFrom("0a007614-c66c-4af5-97ba-337c32ae2bc2"),
+						userID: defaultUserID,
+						reason: "second version",
+						createVersion: func(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (version docdb.VersionTime, writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error) {
+							return versionTime1, newTestMemFiles("b.txt"), nil, nil, nil
 						},
-						onNewVersionResultErr: testError2,
 					},
-					wantVersionInfo: nil,
-					wantFiles:       nil,
+					onNewVersionResultErr: testError2,
+					wantVersionInfo:       nil,
+					wantFiles:             nil,
 				},
 			},
 			wantFinalErrIs: testError2,
@@ -406,22 +398,21 @@ func TestAddDocumentVersion(t *testing.T) {
 					call.args.docID,
 					call.args.userID,
 					call.args.reason,
-					call.args.version,
 					call.args.createVersion,
 					func(ctx context.Context, versionInfo *docdb.VersionInfo) error {
-						if call.args.onNewVersionResultErr != nil {
-							return call.args.onNewVersionResultErr
-						}
 						gotVersionInfo = versionInfo
-						return nil
+						return call.onNewVersionResultErr
 					},
 				)
-				require.True(t, gotVersionInfo != nil && err == nil || gotVersionInfo == nil && err != nil)
 				// Only last call error is compared with wantFinalErrAs
 				// all calls before that must not return an error
 				if i < len(tt.calls)-1 {
 					require.NoError(t, err)
 				}
+				if err != nil {
+					continue // No further checks after error because other results are undefined
+				}
+				require.NotNil(t, gotVersionInfo, "version info must not be nil when error is nil")
 				require.Equal(t, call.wantVersionInfo, gotVersionInfo)
 				if gotVersionInfo != nil {
 					require.NoError(t, docdb.CheckConnDocumentVersionFiles(t.Context(), conn, call.args.docID, gotVersionInfo.Version, call.wantFiles))
