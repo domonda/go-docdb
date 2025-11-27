@@ -31,27 +31,8 @@ func TestConn(t *testing.T) {
 			documentVersionFile := populator.DocumentVersionFile()
 
 			newFile := fs.NewMemFile("doc-a.pdf", []byte("a"))
-			var createVersion docdb.CreateVersionFunc = func(
-				ctx context.Context,
-				prevVersion docdb.VersionTime,
-				prevFiles docdb.FileProvider,
-			) (
-				newVersion docdb.VersionTime,
-				writeFiles []fs.FileReader,
-				removeFiles []string,
-				newCompanyID *uu.ID,
-				err error,
-			) {
-				writeFiles = append(writeFiles, newFile)
-
-				return docdb.NewVersionTime(), writeFiles, removeFiles, newCompanyID, nil
-			}
 
 			newVersion := &docdb.VersionInfo{}
-			var onNewVersion docdb.OnNewVersionFunc = func(ctx context.Context, versionInfo *docdb.VersionInfo) error {
-				newVersion = versionInfo
-				return nil
-			}
 
 			ctx := pgfixtures.FixtureCtxWithTestTx(t)
 
@@ -61,8 +42,13 @@ func TestConn(t *testing.T) {
 				documentVersionFile.DocumentVersion.DocumentID,
 				uu.IDv7(),
 				"reason",
-				createVersion,
-				onNewVersion,
+				func(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+					return &docdb.CreateVersionResult{
+						Version:    docdb.NewVersionTime(),
+						WriteFiles: []fs.FileReader{newFile},
+					}, nil
+				},
+				docdb.CaptureNewVersionInfo(&newVersion),
 			)
 
 			// then
@@ -112,27 +98,7 @@ func TestConn(t *testing.T) {
 
 			modifiedFile := fs.NewMemFile(documentVersionFile.Name, []byte("b"))
 
-			var createVersion docdb.CreateVersionFunc = func(
-				ctx context.Context,
-				prevVersion docdb.VersionTime,
-				prevFiles docdb.FileProvider,
-			) (
-				newVersion docdb.VersionTime,
-				writeFiles []fs.FileReader,
-				removeFiles []string,
-				newCompanyID *uu.ID,
-				err error,
-			) {
-				writeFiles = append(writeFiles, modifiedFile)
-
-				return docdb.NewVersionTime(), writeFiles, removeFiles, newCompanyID, nil
-			}
-
 			newVersion := &docdb.VersionInfo{}
-			var onNewVersion docdb.OnNewVersionFunc = func(ctx context.Context, versionInfo *docdb.VersionInfo) error {
-				newVersion = versionInfo
-				return nil
-			}
 
 			ctx := pgfixtures.FixtureCtxWithTestTx(t)
 
@@ -142,8 +108,13 @@ func TestConn(t *testing.T) {
 				documentVersionFile.DocumentVersion.DocumentID,
 				uu.IDv7(),
 				"reason",
-				createVersion,
-				onNewVersion,
+				func(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+					return &docdb.CreateVersionResult{
+						Version:    docdb.NewVersionTime(),
+						WriteFiles: []fs.FileReader{modifiedFile},
+					}, nil
+				},
+				docdb.CaptureNewVersionInfo(&newVersion),
 			)
 
 			// then
@@ -191,26 +162,7 @@ func TestConn(t *testing.T) {
 				content,
 			)
 
-			var createVersion docdb.CreateVersionFunc = func(
-				ctx context.Context,
-				prevVersion docdb.VersionTime,
-				prevFiles docdb.FileProvider,
-			) (
-				newVersion docdb.VersionTime,
-				writeFiles []fs.FileReader,
-				removeFiles []string,
-				newCompanyID *uu.ID,
-				err error,
-			) {
-				removeFiles = append(removeFiles, documentVersionFile.Name)
-				return docdb.NewVersionTime(), writeFiles, removeFiles, newCompanyID, nil
-			}
-
 			newVersion := &docdb.VersionInfo{}
-			var onNewVersion docdb.OnNewVersionFunc = func(ctx context.Context, versionInfo *docdb.VersionInfo) error {
-				newVersion = versionInfo
-				return nil
-			}
 
 			ctx := pgfixtures.FixtureCtxWithTestTx(t)
 
@@ -220,8 +172,13 @@ func TestConn(t *testing.T) {
 				documentVersionFile.DocumentVersion.DocumentID,
 				uu.IDv7(),
 				"reason",
-				createVersion,
-				onNewVersion,
+				func(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+					return &docdb.CreateVersionResult{
+						Version:     docdb.NewVersionTime(),
+						RemoveFiles: []string{documentVersionFile.Name},
+					}, nil
+				},
+				docdb.CaptureNewVersionInfo(&newVersion),
 			)
 
 			// then
@@ -259,27 +216,9 @@ func TestConn(t *testing.T) {
 			)
 			populator := pgfixtures.FixturePopulator(t)
 			documentVersion := populator.DocumentVersion()
-			companyID := uu.IDv7()
-
-			var createVersion docdb.CreateVersionFunc = func(
-				ctx context.Context,
-				prevVersion docdb.VersionTime,
-				prevFiles docdb.FileProvider,
-			) (
-				newVersion docdb.VersionTime,
-				writeFiles []fs.FileReader,
-				removeFiles []string,
-				newCompanyID *uu.ID,
-				err error,
-			) {
-				return docdb.NewVersionTime(), writeFiles, removeFiles, &companyID, nil
-			}
+			newCompanyID := uu.IDv7()
 
 			newVersion := &docdb.VersionInfo{}
-			var onNewVersion docdb.OnNewVersionFunc = func(ctx context.Context, versionInfo *docdb.VersionInfo) error {
-				newVersion = versionInfo
-				return nil
-			}
 
 			ctx := pgfixtures.FixtureCtxWithTestTx(t)
 
@@ -289,8 +228,13 @@ func TestConn(t *testing.T) {
 				documentVersion.DocumentID,
 				uu.IDv7(),
 				"reason",
-				createVersion,
-				onNewVersion,
+				func(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+					return &docdb.CreateVersionResult{
+						Version:      docdb.NewVersionTime(),
+						NewCompanyID: uu.NullableID(newCompanyID),
+					}, nil
+				},
+				docdb.CaptureNewVersionInfo(&newVersion),
 			)
 			require.NoError(t, err)
 
@@ -313,7 +257,7 @@ func TestConn(t *testing.T) {
 			require.Equal(t, newVersion.RemovedFiles, savedNewVersion.RemovedFiles)
 			require.Equal(t, newVersion.ModifiedFiles, savedNewVersion.ModifiedFiles)
 			require.Equal(t, newVersion.CompanyID, savedNewVersion.CompanyID)
-			require.Equal(t, companyID, savedNewVersion.CompanyID)
+			require.Equal(t, newCompanyID, savedNewVersion.CompanyID)
 		})
 
 		t.Run("Rolls back changes if onNewVersion panics", func(t *testing.T) {
@@ -326,27 +270,7 @@ func TestConn(t *testing.T) {
 			)
 			populator := pgfixtures.FixturePopulator(t)
 			documentVersion := populator.DocumentVersion()
-			companyID := uu.IDv7()
-
-			var createVersion docdb.CreateVersionFunc = func(
-				ctx context.Context,
-				prevVersion docdb.VersionTime,
-				prevFiles docdb.FileProvider,
-			) (
-				newVersion docdb.VersionTime,
-				writeFiles []fs.FileReader,
-				removeFiles []string,
-				newCompanyID *uu.ID,
-				err error,
-			) {
-				newFile := fs.NewMemFile("doc-a.pdf", []byte("a"))
-				writeFiles = append(writeFiles, newFile)
-				return docdb.NewVersionTime(), writeFiles, removeFiles, &companyID, nil
-			}
-
-			var onNewVersion docdb.OnNewVersionFunc = func(ctx context.Context, versionInfo *docdb.VersionInfo) error {
-				panic("bug")
-			}
+			newCompanyID := uu.IDv7()
 
 			ctx := pgfixtures.FixtureCtxWithTestTx(t)
 
@@ -354,10 +278,18 @@ func TestConn(t *testing.T) {
 			err := conn.AddDocumentVersion(
 				ctx,
 				documentVersion.DocumentID,
-				uu.IDv7(),
+				uu.IDv7(), // userID
 				"reason",
-				createVersion,
-				onNewVersion,
+				func(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+					return &docdb.CreateVersionResult{
+						Version:      docdb.NewVersionTime(),
+						WriteFiles:   []fs.FileReader{fs.NewMemFile("doc-a.pdf", []byte("a"))},
+						NewCompanyID: uu.NullableID(newCompanyID),
+					}, nil
+				},
+				func(ctx context.Context, versionInfo *docdb.VersionInfo) error {
+					panic("bug")
+				},
 			)
 
 			// then

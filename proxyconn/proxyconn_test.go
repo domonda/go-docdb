@@ -527,8 +527,8 @@ func TestProxyConn(t *testing.T) {
 
 		// when
 		err := conn.AddDocumentVersion(t.Context(), docID, userID, reason,
-			func(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (version docdb.VersionTime, writeFiles []fs.FileReader, removeFiles []string, newCompanyID *uu.ID, err error) {
-				return version, nil, nil, nil, nil
+			func(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+				return nil, nil
 			},
 			func(ctx context.Context, versionInfo *docdb.VersionInfo) error {
 				return nil
