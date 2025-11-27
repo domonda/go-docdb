@@ -10,11 +10,12 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/ungerik/go-fs"
 
+	"github.com/domonda/go-sqldb/db"
+	"github.com/domonda/go-types/uu"
+
 	"github.com/domonda/go-docdb"
 	"github.com/domonda/go-docdb/postgres"
 	"github.com/domonda/go-docdb/postgres/pgfixtures"
-	"github.com/domonda/go-sqldb/db"
-	"github.com/domonda/go-types/uu"
 )
 
 var store = postgres.NewMetadataStore()
@@ -601,11 +602,12 @@ func TestDeleteDocumentVersion(t *testing.T) {
 		// given
 		t.Parallel()
 		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		docID := uu.IDv7()
 
 		// when
-		_, _, err := store.DeleteDocumentVersion(ctx, uu.IDv7(), docdb.VersionTimeFrom(time.Now()))
+		_, _, err := store.DeleteDocumentVersion(ctx, docID, docdb.VersionTimeFrom(time.Now()))
 
 		// then
-		require.ErrorIs(t, err, sql.ErrNoRows)
+		require.ErrorIs(t, err, docdb.NewErrDocumentNotFound(docID))
 	})
 }
