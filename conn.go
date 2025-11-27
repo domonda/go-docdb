@@ -443,19 +443,7 @@ func (c *conn) AddDocumentVersion(
 	}
 
 	safeOnNewVersion := func() (err error) {
-		params := []any{ctx,
-			docID,
-			userID,
-			reason,
-			newVersion,
-		}
-
-		if newVersionInfo != nil {
-			params = append(params, *newVersionInfo)
-		}
-
-		defer errs.RecoverPanicAsErrorWithFuncParams(&err, params...)
-
+		defer errs.RecoverPanicAsError(&err)
 		return onNewVersion(ctx, newVersionInfo)
 	}
 
