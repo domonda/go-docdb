@@ -6,8 +6,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.32.0
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.91.1
 	github.com/datek/fix v0.2.0
-	github.com/domonda/go-errs v0.0.0-20251015071040-2e5474724d88
-	github.com/domonda/go-pretty v0.0.0-20251015070800-44d406a6d055
+	github.com/domonda/go-errs v1.0.0
+	github.com/domonda/go-pretty v1.0.0
 	github.com/domonda/go-sqldb/pqconn v0.0.0-20251120090743-20d129792df8
 	github.com/domonda/go-types v0.0.0-20251108113343-9bda55002c13
 	github.com/domonda/golog v0.0.0-20251120090724-dc3ea6adbe1b
