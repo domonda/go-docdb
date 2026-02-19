@@ -1,6 +1,6 @@
 do $$
 begin
-    (select 1 from pg_type where typname = 'version_time' and typnamespace = 'docdb'::regnamespace) then
+    if not exists (select from pg_type where typname = 'version_time' and typnamespace = 'docdb'::regnamespace) then
         create domain docdb.version_time timestamp(3) without time zone;
     end if;
 end $$;
