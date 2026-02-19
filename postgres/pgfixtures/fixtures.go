@@ -28,7 +28,7 @@ var conn sqldb.Connection
 
 func CloseGlobalConn() {
 	if conn != nil {
-		conn.Close() // #nosec G104
+		conn.Close() //#nosec G104
 	}
 }
 
@@ -48,7 +48,7 @@ var FixtureCtxWithTestTx = fix.New(func(t *testing.T) context.Context {
 		return nil
 	}
 
-	t.Cleanup(func() { tx.Rollback() }) // #nosec G104
+	t.Cleanup(func() { tx.Rollback() }) //#nosec G104
 	ctx := db.ContextWithConn(t.Context(), tx)
 	return ctx
 })
@@ -88,7 +88,7 @@ func (populator *Populator) DocumentVersionFile(data ...map[string]any) *postgre
 		postgres.DocumentVersionFile{
 			DocumentVersionID: docVersion.ID,
 			Name:              randomDocName(),
-			Size:              rand.Int63n(10000), // #nosec G404
+			Size:              rand.Int63n(10000), //#nosec G404
 			Hash:              docdb.ContentHash(uu.IDv7().Bytes()),
 			DocumentVersion:   docVersion,
 		}, populator, "docdb.document_version_file", data...)
@@ -151,7 +151,7 @@ func fillDataIntoStruct[T any](obj T, data ...map[string]any) *T {
 }
 
 func randomDocName() string {
-	return fmt.Sprintf("doc%d.pdf", rand.Int31n(10000)) // #nosec G404
+	return fmt.Sprintf("doc%d.pdf", rand.Int31n(10000)) //#nosec G404
 }
 
 func p[T any](v T) *T { return &v }

@@ -20,7 +20,6 @@ import (
 	"github.com/domonda/go-docdb/s3"
 )
 
-
 var FixtureCreateDocument = fix.New(func(t *testing.T) func(
 	docID uu.ID,
 	filename string,
@@ -102,7 +101,7 @@ var FixtureCleanBucket = fix.New(func(t *testing.T) string {
 		t.Fatalf("Unable to create bucket, %v", err)
 	}
 
-	t.Cleanup(func() { deleteBucket(context.Background(), client, p(bucketName)) }) // #nosec G104
+	t.Cleanup(func() { deleteBucket(context.Background(), client, p(bucketName)) }) //#nosec G104
 	return bucketName
 
 })
