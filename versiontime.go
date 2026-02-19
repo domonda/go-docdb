@@ -2,7 +2,6 @@ package docdb
 
 import (
 	sqldriver "database/sql/driver"
-	"io"
 	"time"
 
 	"github.com/domonda/go-errs"
@@ -79,13 +78,16 @@ func (v VersionTime) NullableTime() nullable.Time {
 	return nullable.TimeFrom(v.Time)
 }
 
-// PrettyPrint implements the pretty.Printable interface
-func (v VersionTime) PrettyPrint(w io.Writer) {
+var _ pretty.Stringer = VersionTime{}
+
+// PrettyString implements the pretty.Stringer interface
+// to provide a compact representation of the VersionTime
+// in error messages and pretty-printed output.
+func (v VersionTime) PrettyString() string {
 	if v.IsNull() {
-		pretty.Fprint(w, nil)
-	} else {
-		pretty.Fprint(w, v.Time.Format(VersionTimeFormat))
+		return "NULL"
 	}
+	return v.Time.Format(VersionTimeFormat)
 }
 
 // MarshalText implements the encoding.TextMarshaler interface
