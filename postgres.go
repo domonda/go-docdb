@@ -162,9 +162,7 @@ func PostgresInsertDocumentVersionWithFiles(ctx context.Context, versionID uu.ID
 	defer errs.WrapWithFuncParams(&err, ctx, versionID, versionInfo)
 
 	return db.Transaction(ctx, func(ctx context.Context) error {
-		tx := db.Conn(ctx)
-
-		err = tx.Exec(
+		err = db.Exec(ctx,
 			`insert into
 				docdb.document_version (
 					id,
@@ -193,7 +191,7 @@ func PostgresInsertDocumentVersionWithFiles(ctx context.Context, versionID uu.ID
 		}
 
 		for _, fileInfo := range versionInfo.Files {
-			err = tx.Exec(
+			err = db.Exec(ctx,
 				`insert into
 					docdb.document_version_file (
 						document_version_id,
