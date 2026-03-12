@@ -260,6 +260,8 @@ type Conn interface {
 
 	// AddMultiDocumentVersion adds a new version to multiple existing documents as atomic operation.
 	// See AddDocumentVersion for details on the callbacks and error handling.
+	// Documents with no file changes are skipped (ErrNoChanges per-doc is not an error).
+	// Returns wrapped ErrNoChanges only if no document was changed at all.
 	AddMultiDocumentVersion(ctx context.Context, docIDs uu.IDSlice, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error
 
 	// RestoreDocument
@@ -620,6 +622,9 @@ func safelyCallCreateVersionFunc(
 // Conn implementations that can't provide native multi-document atomicity
 // should delegate to this function.
 //
+// Documents with no file changes (ErrNoChanges from AddDocumentVersion) are skipped.
+// Returns ErrNoChanges only if no document was changed at all.
+//
 // Atomicity is achieved by tracking each successfully created version and,
 // on any error, rolling back all of them via conn.DeleteDocumentVersion.
 // Any rollback errors are joined to the returned error.
@@ -658,8 +663,16 @@ func AddMultiDocumentVersionImpl(ctx context.Context, conn Conn, docIDs uu.IDSli
 			return err
 		})
 		if err != nil {
+			// Skip documents that have no changes,
+			// only return ErrNoChanges if no document was changed at all.
+			if errors.Is(err, ErrNoChanges) {
+				continue
+			}
 			return err
 		}
+	}
+	if len(created) == 0 {
+		return ErrNoChanges
 	}
 	return nil
 }
