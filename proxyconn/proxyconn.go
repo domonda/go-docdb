@@ -233,6 +233,17 @@ func (conn *proxyConn) AddDocumentVersion(
 	return conn.getConn(config, companyID).AddDocumentVersion(ctx, docID, userID, reason, createVersion, onNewVersion)
 }
 
+func (conn *proxyConn) AddMultiDocumentVersion(
+	ctx context.Context,
+	docIDs uu.IDSlice,
+	userID uu.ID,
+	reason string,
+	createVersion docdb.CreateVersionFunc,
+	onNewVersion docdb.OnNewVersionFunc,
+) (err error) {
+	return docdb.AddMultiDocumentVersionImpl(ctx, conn, docIDs, userID, reason, createVersion, onNewVersion)
+}
+
 func (conn *proxyConn) RestoreDocument(
 	ctx context.Context,
 	doc *docdb.HashedDocument,

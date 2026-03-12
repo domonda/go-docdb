@@ -1130,6 +1130,7 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 
 	result, err := safelyCallCreateVersionFunc(
 		ctx,
+		docID,
 		prevVersionInfo.Version,
 		docdb.DirFileProvider(prevVersionDir),
 		createVersion,
@@ -1227,10 +1228,16 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 	return nil
 }
 
-func safelyCallCreateVersionFunc(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider, createVersion docdb.CreateVersionFunc) (result *docdb.CreateVersionResult, err error) {
+func (c *Conn) AddMultiDocumentVersion(ctx context.Context, docIDs uu.IDSlice, userID uu.ID, reason string, createVersion docdb.CreateVersionFunc, onNewVersion docdb.OnNewVersionFunc) (err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, docIDs, userID, reason, createVersion, onNewVersion)
+
+	return docdb.AddMultiDocumentVersionImpl(ctx, c, docIDs, userID, reason, createVersion, onNewVersion)
+}
+
+func safelyCallCreateVersionFunc(ctx context.Context, docID uu.ID, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider, createVersion docdb.CreateVersionFunc) (result *docdb.CreateVersionResult, err error) {
 	defer errs.RecoverPanicAsError(&err)
 
-	return createVersion(ctx, prevVersion, prevFiles)
+	return createVersion(ctx, docID, prevVersion, prevFiles)
 }
 
 func safelyCallOnNewVersionFunc(ctx context.Context, versionInfo *docdb.VersionInfo, onNewVersion docdb.OnNewVersionFunc) (err error) {

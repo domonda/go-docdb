@@ -356,6 +356,14 @@ func AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string,
 	return globalConn.AddDocumentVersion(ctx, docID, userID, reason, createVersion, onNewVersion)
 }
 
+// AddMultiDocumentVersion adds a new version to multiple existing documents as atomic operation.
+// See AddDocumentVersion for details on the callbacks and error handling.
+func AddMultiDocumentVersion(ctx context.Context, docIDs uu.IDSlice, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) (err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, docIDs, userID, reason, createVersion, onNewVersion)
+
+	return globalConn.AddMultiDocumentVersion(ctx, docIDs, userID, reason, createVersion, onNewVersion)
+}
+
 // CopyDocumentFiles copies the files of all versions of
 // a document to a backup directory.
 //

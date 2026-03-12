@@ -3,6 +3,7 @@ package docdb
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/ungerik/go-fs"
 
@@ -42,7 +43,7 @@ type (
 	//
 	// If this function returns an error or panics, the entire version creation
 	// is atomically rolled back.
-	CreateVersionFunc func(ctx context.Context, prevVersion VersionTime, prevFiles FileProvider) (*CreateVersionResult, error)
+	CreateVersionFunc func(ctx context.Context, docID uu.ID, prevVersion VersionTime, prevFiles FileProvider) (*CreateVersionResult, error)
 
 	// OnNewVersionFunc is a callback function invoked after a new document version
 	// has been created but before it is committed.
@@ -91,7 +92,7 @@ type (
 // For more complex operations (removing files, changing company ID, or using
 // a specific version timestamp), implement CreateVersionFunc directly.
 func CreateVersionWriteFiles(writeFiles ...fs.FileReader) CreateVersionFunc {
-	return func(ctx context.Context, prevVersion VersionTime, prevFiles FileProvider) (*CreateVersionResult, error) {
+	return func(ctx context.Context, docID uu.ID, prevVersion VersionTime, prevFiles FileProvider) (*CreateVersionResult, error) {
 		return &CreateVersionResult{
 			Version:    NewVersionTime(),
 			WriteFiles: writeFiles,
@@ -128,7 +129,7 @@ func CreateVersionWriteFiles(writeFiles ...fs.FileReader) CreateVersionFunc {
 // company ID, or using a specific version timestamp), implement
 // CreateVersionFunc directly.
 func CreateVersionRemoveFiles(removeFiles ...string) CreateVersionFunc {
-	return func(ctx context.Context, prevVersion VersionTime, prevFiles FileProvider) (*CreateVersionResult, error) {
+	return func(ctx context.Context, docID uu.ID, prevVersion VersionTime, prevFiles FileProvider) (*CreateVersionResult, error) {
 		return &CreateVersionResult{
 			Version:     NewVersionTime(),
 			RemoveFiles: removeFiles,
@@ -256,6 +257,10 @@ type Conn interface {
 	// Returns wrapped ErrNoChanges if the new version has identical files
 	// compared to the previous version.
 	AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error
+
+	// AddMultiDocumentVersion adds a new version to multiple existing documents as atomic operation.
+	// See AddDocumentVersion for details on the callbacks and error handling.
+	AddMultiDocumentVersion(ctx context.Context, docIDs uu.IDSlice, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error
 
 	// RestoreDocument
 	RestoreDocument(ctx context.Context, doc *HashedDocument, merge bool) error
@@ -502,6 +507,7 @@ func (c *conn) AddDocumentVersion(
 
 	result, err := safelyCallCreateVersionFunc(
 		ctx,
+		docID,
 		latestVersionInfo.Version,
 		fileProvider,
 		createVersion,
@@ -587,17 +593,73 @@ func (c *conn) AddDocumentVersion(
 	return err
 }
 
+func (c *conn) AddMultiDocumentVersion(ctx context.Context, docIDs uu.IDSlice, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error {
+	return AddMultiDocumentVersionImpl(ctx, c, docIDs, userID, reason, createVersion, onNewVersion)
+}
+
 func (c *conn) RestoreDocument(ctx context.Context, doc *HashedDocument, merge bool) error {
 	return ErrNotImplemented
 }
 
 func safelyCallCreateVersionFunc(
 	ctx context.Context,
+	docID uu.ID,
 	prevVersion VersionTime,
 	prevFiles FileProvider,
 	createVersion CreateVersionFunc,
 ) (result *CreateVersionResult, err error) {
 	defer errs.RecoverPanicAsError(&err)
 
-	return createVersion(ctx, prevVersion, prevFiles)
+	return createVersion(ctx, docID, prevVersion, prevFiles)
+}
+
+// AddMultiDocumentVersionImpl adds a new version to each document in docIDs
+// by calling conn.AddDocumentVersion for each one sequentially.
+//
+// It is the shared implementation for Conn.AddMultiDocumentVersion.
+// Conn implementations that can't provide native multi-document atomicity
+// should delegate to this function.
+//
+// Atomicity is achieved by tracking each successfully created version and,
+// on any error, rolling back all of them via conn.DeleteDocumentVersion.
+// Any rollback errors are joined to the returned error.
+func AddMultiDocumentVersionImpl(ctx context.Context, conn Conn, docIDs uu.IDSlice, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) (err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, docIDs, userID, reason, createVersion, onNewVersion)
+
+	type createdVersion struct {
+		docID   uu.ID
+		version VersionTime
+	}
+	var created []createdVersion
+
+	defer func() {
+		if r := recover(); r != nil {
+			err = errs.AsErrorWithDebugStack(r)
+		}
+		if err != nil {
+			for _, cv := range created {
+				_, deleteErr := conn.DeleteDocumentVersion(ctx, cv.docID, cv.version)
+				if deleteErr != nil {
+					err = errors.Join(err, fmt.Errorf("failed to undo new document version of atomic multi-document operation: %w", deleteErr))
+				}
+			}
+		}
+	}()
+
+	for _, docID := range docIDs {
+		err = conn.AddDocumentVersion(ctx, docID, userID, reason, createVersion, func(ctx context.Context, versionInfo *VersionInfo) error {
+			err := onNewVersion(ctx, versionInfo)
+			if err == nil {
+				created = append(created, createdVersion{
+					docID:   versionInfo.DocID,
+					version: versionInfo.Version,
+				})
+			}
+			return err
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

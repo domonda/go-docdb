@@ -42,7 +42,7 @@ func TestConn(t *testing.T) {
 				documentVersionFile.DocumentVersion.DocumentID,
 				uu.IDv7(),
 				"reason",
-				func(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+				func(ctx context.Context, docID uu.ID, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (*docdb.CreateVersionResult, error) {
 					return &docdb.CreateVersionResult{
 						Version:    docdb.NewVersionTime(),
 						WriteFiles: []fs.FileReader{newFile},
@@ -108,7 +108,7 @@ func TestConn(t *testing.T) {
 				documentVersionFile.DocumentVersion.DocumentID,
 				uu.IDv7(),
 				"reason",
-				func(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+				func(ctx context.Context, docID uu.ID, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (*docdb.CreateVersionResult, error) {
 					return &docdb.CreateVersionResult{
 						Version:    docdb.NewVersionTime(),
 						WriteFiles: []fs.FileReader{modifiedFile},
@@ -172,7 +172,7 @@ func TestConn(t *testing.T) {
 				documentVersionFile.DocumentVersion.DocumentID,
 				uu.IDv7(),
 				"reason",
-				func(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+				func(ctx context.Context, docID uu.ID, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (*docdb.CreateVersionResult, error) {
 					return &docdb.CreateVersionResult{
 						Version:     docdb.NewVersionTime(),
 						RemoveFiles: []string{documentVersionFile.Name},
@@ -228,7 +228,7 @@ func TestConn(t *testing.T) {
 				documentVersion.DocumentID,
 				uu.IDv7(),
 				"reason",
-				func(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+				func(ctx context.Context, docID uu.ID, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (*docdb.CreateVersionResult, error) {
 					return &docdb.CreateVersionResult{
 						Version:      docdb.NewVersionTime(),
 						NewCompanyID: uu.NullableID(newCompanyID),
@@ -280,7 +280,7 @@ func TestConn(t *testing.T) {
 				documentVersion.DocumentID,
 				uu.IDv7(), // userID
 				"reason",
-				func(ctx context.Context, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+				func(ctx context.Context, docID uu.ID, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (*docdb.CreateVersionResult, error) {
 					return &docdb.CreateVersionResult{
 						Version:      docdb.NewVersionTime(),
 						WriteFiles:   []fs.FileReader{fs.NewMemFile("doc-a.pdf", []byte("a"))},

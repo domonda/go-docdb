@@ -118,6 +118,10 @@ func (c errConn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, re
 	return c.err
 }
 
+func (c errConn) AddMultiDocumentVersion(ctx context.Context, docIDs uu.IDSlice, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error {
+	return c.err
+}
+
 func (c errConn) RestoreDocument(ctx context.Context, doc *HashedDocument, merge bool) error {
 	return c.err
 }

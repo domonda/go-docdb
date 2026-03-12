@@ -24,6 +24,7 @@ type MockConn struct {
 	DeleteDocumentVersionMock       func(ctx context.Context, docID uu.ID, version VersionTime) (leftVersions []VersionTime, err error)
 	CreateDocumentMock              func(ctx context.Context, companyID, docID, userID uu.ID, reason string, version VersionTime, files []fs.FileReader, onNewVersion OnNewVersionFunc) error
 	AddDocumentVersionMock          func(ctx context.Context, docID, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error
+	AddMultiDocumentVersionMock     func(ctx context.Context, docIDs uu.IDSlice, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error
 	RestoreDocumentMock             func(ctx context.Context, doc *HashedDocument, merge bool) error
 }
 
@@ -84,6 +85,10 @@ func (mock *MockConn) CreateDocument(ctx context.Context, companyID, docID, user
 
 func (mock *MockConn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error {
 	return mock.AddDocumentVersionMock(ctx, docID, userID, reason, createVersion, onNewVersion)
+}
+
+func (mock *MockConn) AddMultiDocumentVersion(ctx context.Context, docIDs uu.IDSlice, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error {
+	return mock.AddMultiDocumentVersionMock(ctx, docIDs, userID, reason, createVersion, onNewVersion)
 }
 
 func (mock *MockConn) RestoreDocument(ctx context.Context, doc *HashedDocument, merge bool) error {
