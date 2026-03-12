@@ -4,12 +4,11 @@
 
 ## Directory Structure
 
-The `localfsdb.Conn` manages three main directories:
+The `localfsdb.Conn` manages two main directories:
 
 ```
 <root>/
 ├── documents/       # Document storage with versions
-├── workspace/       # Checked-out documents for editing
 └── companies/       # Company-to-document mappings
 ```
 
@@ -21,7 +20,6 @@ The documents directory uses a UUID-based hierarchical structure (via `uuiddir`)
 documents/
 └── {doc-uuid-path}/              # e.g., ab/cd/ef12/3456/...
     ├── company.id                # Plain text file containing company UUID
-    ├── checkout-status.json      # JSON file tracking checkout status (if checked out)
     ├── {version-timestamp}/      # e.g., 2024-01-15T10:30:45.123456Z/
     │   ├── doc.json              # Document metadata
     │   ├── source.pdf            # Original source file(s)
@@ -52,7 +50,7 @@ documents/
     ├── 2024-11-15T14:30:15.987654321Z/         # Version 2 (OCR data added)
     │   ├── doc.json                            # Updated with OCR results
     │   ├── doc.pdf                             # Unchanged from v1
-    │   ├── extractiondata.json                       # Unchanged from v1
+    │   ├── extractiondata.json                 # Unchanged from v1
     │   └── ocr-data.json                       # New file
     │
     ├── 2024-11-15T14:30:15.987654321Z.json     # VersionInfo for version 2
@@ -80,16 +78,7 @@ Each version directory contains a complete snapshot of the document at that poin
 
 #### Key Files
 
-- **`company.id`**: Contains the UUID of the company that owns this document as plain text. This file is written when a document is created or when the company is changed via `SetDocumentCompanyID()`.
-
-- **`checkout-status.json`**: Present only when the document is checked out. Contains:
-  - `companyID`: Company UUID
-  - `docID`: Document UUID
-  - `version`: Version that was checked out (null for new documents)
-  - `userID`: User who checked out the document
-  - `reason`: Reason for checkout
-  - `time`: Checkout timestamp
-  - `checkOutDir`: Path to the workspace directory
+- **`company.id`**: Contains the UUID of the company that owns this document as plain text. Written when a document is created or when the company is changed via `SetDocumentCompanyID()`.
 
 - **`{version-timestamp}/`**: Directory containing all files for a specific document version. The directory name is a UTC timestamp in RFC3339Nano format (e.g., `2024-01-15T10:30:45.123456789Z`).
 
@@ -151,23 +140,6 @@ Each version directory contains a complete snapshot of the document at that poin
   - `doc.json` was modified (hash differs from previous version)
   - `doc.pdf` and `extractiondata.json` remain unchanged (same hashes as previous version)
 
-### Workspace Directory
-
-The workspace directory contains checked-out documents that are currently being edited. Each document being edited has its own directory named by the document UUID.
-
-```
-workspace/
-└── {doc-uuid}/          # Document UUID (not hierarchical)
-    ├── doc.json         # Working copy of document metadata
-    ├── source.pdf       # Working copy of files
-    └── ...              # Other working files
-```
-
-When a document is checked out:
-1. A directory is created in `workspace/{doc-uuid}/`
-2. All files from the latest version are copied to this directory
-3. A `checkout-status.json` file is created in the document's main directory
-
 ### Companies Directory
 
 The companies directory maintains a mapping from company UUIDs to document UUIDs using marker directories. This provides a threadsafe, filesystem-level index for quick enumeration of all documents belonging to a company.
@@ -187,16 +159,16 @@ The existence of the directory `companies/{company-uuid}/{doc-uuid-path}/` indic
 
 When `CreateDocument()` is called:
 
-1. **Create document directory**: `documents/{doc-uuid-path}/` is created
-2. **Write company ID**: `documents/{doc-uuid-path}/company.id` is written with the company UUID
-3. **Create company mapping**: `companies/{company-uuid}/{doc-uuid-path}/` marker directory is created
-4. **Create version directory**: `documents/{doc-uuid-path}/{version-timestamp}/` is created
+1. **Lock document**: Acquire per-document write mutex
+2. **Create version directory**: `documents/{doc-uuid-path}/{version-timestamp}/` is created (along with the document directory)
+3. **Write company ID**: `documents/{doc-uuid-path}/company.id` is written with the company UUID
+4. **Create company mapping**: `companies/{company-uuid}/{doc-uuid-path}/` marker directory is created
 5. **Copy files**: All provided files are copied into the version directory
 6. **Generate VersionInfo**: File hashes and metadata are computed
 7. **Write VersionInfo**: `documents/{doc-uuid-path}/{version-timestamp}.json` is written
-8. **Call callback**: Optional `OnNewVersionFunc` is invoked
+8. **Call callback**: The required `OnNewVersionFunc` is invoked
 
-The entire operation is protected by a per-document mutex (`docWriteMtx.Lock(docID)`). If any step fails, cleanup logic removes all created directories.
+If any step fails, cleanup logic removes all created directories.
 
 ### Adding a Version to an Existing Document
 
@@ -204,53 +176,33 @@ When `AddDocumentVersion()` is called:
 
 1. **Lock document**: Acquire per-document write mutex
 2. **Get previous version**: Read the latest `VersionInfo` and locate the previous version directory
-3. **Call createVersion callback**: User-provided function determines which files to write/delete
+3. **Call createVersion callback**: User-provided `CreateVersionFunc` determines which files to write/delete and may optionally return a new company ID
 4. **Create new version directory**: `documents/{doc-uuid-path}/{new-version-timestamp}/` is created
 5. **Copy unchanged files**: Files from previous version that aren't being modified or deleted are copied
 6. **Write new files**: Files returned by the callback are copied into the new version directory
 7. **Generate VersionInfo**: Compare with previous version to identify added/modified/removed files
 8. **Check for changes**: If files are identical to previous version, return `docdb.ErrNoChanges`
 9. **Write VersionInfo**: `documents/{doc-uuid-path}/{new-version-timestamp}.json` is written
-10. **Update company if changed**: If company ID changed, update `company.id` and company mapping directories
-11. **Call callback**: Optional `OnNewVersionFunc` is invoked
+10. **Update company if changed**: If the callback returned a new company ID, update `company.id` and company mapping directories
+11. **Call callback**: The required `OnNewVersionFunc` is invoked
 
 If an error occurs, the new version directory and info file are removed during cleanup.
 
-### Check-Out/Check-In Workflow
+### Adding a Version to Multiple Documents
 
-#### Check Out
-When `CheckOutDocument()` is called:
+`AddMultiDocumentVersion()` delegates to `docdb.AddMultiDocumentVersionImpl`, which applies the same `CreateVersionFunc` across multiple document IDs.
 
-1. **Verify not checked out**: Check that no `checkout-status.json` exists
-2. **Get latest version**: Locate the latest committed version directory
-3. **Create workspace**: `workspace/{doc-uuid}/` is created
-4. **Copy files**: All files from the latest version are recursively copied to workspace
-5. **Write checkout status**: `documents/{doc-uuid-path}/checkout-status.json` is created
+### Deleting a Document or Version
 
-#### Check In
-When `CheckInDocument()` is called:
-
-1. **Verify checked out**: Read and validate `checkout-status.json`
-2. **Create new version**: Generate a new version timestamp
-3. **Copy workspace files**: All files from `workspace/{doc-uuid}/` are copied to the new version directory
-4. **Generate VersionInfo**: Compare with previous version (if any) to track changes
-5. **Write VersionInfo**: Save version metadata JSON
-6. **Clean up**: Remove `workspace/{doc-uuid}/` and `checkout-status.json`
-
-#### Cancel Check Out
-When `CancelCheckOutDocument()` is called:
-
-1. **Read checkout status**: Verify document is checked out
-2. **Delete workspace**: Remove `workspace/{doc-uuid}/` directory
-3. **Delete checkout status**: Remove `checkout-status.json`
-4. **For new documents**: Also delete the entire document directory from `documents/` since no version was ever committed
+- **`DeleteDocument()`**: Removes the document directory and the company mapping entry.
+- **`DeleteDocumentVersion()`**: Removes a single version directory and its `.json` info file. If no versions remain after deletion, the document directory and company mapping are also removed.
 
 ## Concurrency & Safety
 
 - **Per-document mutex**: All write operations acquire a per-document mutex via `docWriteMtx.Lock(docID)` to prevent concurrent modifications to the same document
 - **Atomic directory operations**: Directory existence is used as an atomic marker (e.g., for company-document mappings)
 - **Error cleanup**: Defer functions clean up partially created structures on error
-- **Version ordering**: Timestamps ensure strict version ordering
+- **Version ordering**: Timestamps ensure strict version ordering; `AddDocumentVersion` enforces that the new version is strictly after the previous one
 
 ## UUID Directory Structure
 
@@ -259,4 +211,3 @@ The implementation uses `github.com/ungerik/go-fs/uuiddir` for efficient UUID-ba
 - UUIDs are split into path segments to avoid excessive files in a single directory
 - Example: UUID `abcdef12-3456-7890-abcd-ef1234567890` becomes path `ab/cd/ef12/3456/7890/abcd/ef1234567890/`
 - Special functions (`uuiddir.Join`, `uuiddir.RemoveDir`, etc.) handle the hierarchical structure
-

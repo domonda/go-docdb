@@ -62,34 +62,6 @@ func (c errConn) ReadDocumentVersionFile(ctx context.Context, docID uu.ID, versi
 	return nil, c.err
 }
 
-func (c errConn) DocumentCheckOutStatus(context.Context, uu.ID) (*CheckOutStatus, error) {
-	return nil, c.err
-}
-
-func (c errConn) CheckedOutDocuments(context.Context) ([]*CheckOutStatus, error) {
-	return nil, c.err
-}
-
-func (c errConn) CheckOutNewDocument(context.Context, uu.ID, uu.ID, uu.ID, string) (*CheckOutStatus, error) {
-	return nil, c.err
-}
-
-func (c errConn) CheckOutDocument(context.Context, uu.ID, uu.ID, string) (*CheckOutStatus, error) {
-	return nil, c.err
-}
-
-func (c errConn) CancelCheckOutDocument(context.Context, uu.ID) (bool, VersionTime, error) {
-	return false, VersionTime{}, c.err
-}
-
-func (c errConn) CheckInDocument(context.Context, uu.ID) (*VersionInfo, error) {
-	return nil, c.err
-}
-
-func (c errConn) CheckedOutDocumentDir(uu.ID) fs.File {
-	return fs.InvalidFile
-}
-
 func (c errConn) DeleteDocument(context.Context, uu.ID) error {
 	return c.err
 }

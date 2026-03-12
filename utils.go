@@ -11,57 +11,6 @@ import (
 	"github.com/domonda/go-types/uu"
 )
 
-// func HasChangedCheckedOutFiles(docID uu.ID) (changed bool, err error) {
-// 	defer errs.WrapWithFuncParams(&err, docID)
-
-// 	status, err := DocumentCheckOutStatus(docID)
-// 	if err != nil {
-// 		return false, err
-// 	}
-// 	if status == nil {
-// 		return false, ErrDocumentNotCheckedOut(docID)
-// 	}
-// 	checkedOutDir := CheckedOutDocumentDir(docID)
-
-// 	version, err := LatestDocumentVersion(docID)
-// 	if err != nil {
-// 		return false, err
-// 	}
-// 	checkedInFiles, err := DocumentVersionInfo(docID, version)
-// 	if err != nil {
-// 		return false, err
-// 	}
-
-// 	checkedInFileNames := make(map[string]struct{}, len(checkedInFiles))
-
-// 	for _, checkedIn := range checkedInFiles {
-// 		checkedOut, err := checkedOutDir.Join(checkedIn.Name).StatWithContentHash()
-// 		if err != nil {
-// 			return false, err
-// 		}
-// 		if !checkedOut.Exists || checkedOut.IsDir || checkedOut.Size != checkedIn.Size || checkedOut.ContentHash != checkedIn.Hash {
-// 			return true, nil
-// 		}
-// 		checkedInFileNames[checkedIn.Name] = struct{}{}
-// 	}
-
-// 	errExtraFile := errors.New("errExtraFile")
-// 	err = checkedOutDir.ListDir(func(file fs.File) error {
-// 		if _, isCheckIn := checkedInFileNames[file.Name()]; !isCheckIn {
-// 			return errExtraFile
-// 		}
-// 		return nil
-// 	})
-// 	if err == errExtraFile {
-// 		return true, nil
-// 	}
-// 	if err != nil {
-// 		return false, err
-// 	}
-
-// 	return false, nil
-// }
-
 func IdenticalDocumentVersionsOfDrivers(ctx context.Context, docID uu.ID, driverA Conn, versionA VersionTime, driverB Conn, versionB VersionTime) (identical bool, err error) {
 	defer errs.WrapWithFuncParams(&err, docID, driverA, versionA, driverB, versionB)
 

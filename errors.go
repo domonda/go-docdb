@@ -2,7 +2,6 @@ package docdb
 
 import (
 	"database/sql"
-	"errors"
 	"fmt"
 	"os"
 
@@ -126,57 +125,6 @@ func NewErrDocumentHasNoCommitedVersion(docID uu.ID) ErrDocumentHasNoCommitedVer
 
 func (e ErrDocumentHasNoCommitedVersion) Error() string {
 	return fmt.Sprintf("document %s has no commited version yet", e.docID)
-}
-
-///////////////////////////////////////////////////////////////////////////////
-// ErrDocumentNotCheckedOut
-
-type ErrDocumentNotCheckedOut struct {
-	docID uu.ID
-}
-
-func NewErrDocumentNotCheckedOut(docID uu.ID) ErrDocumentNotCheckedOut {
-	return ErrDocumentNotCheckedOut{docID}
-}
-
-func (e ErrDocumentNotCheckedOut) Error() string {
-	return fmt.Sprintf("document %s not checked out", e.docID)
-}
-
-///////////////////////////////////////////////////////////////////////////////
-// ErrDocumentCheckedOut
-
-type ErrDocumentCheckedOut struct {
-	status *CheckOutStatus
-}
-
-func NewErrDocumentCheckedOut(status *CheckOutStatus) ErrDocumentCheckedOut {
-	if status == nil {
-		panic("nil CheckOutStatus")
-	}
-	return ErrDocumentCheckedOut{status}
-}
-
-func (e ErrDocumentCheckedOut) Error() string {
-	return fmt.Sprintf(
-		"document %s version %s already checked out by %s for %s at %s",
-		e.status.DocID,
-		e.status.Version,
-		e.status.UserID,
-		e.status.Reason,
-		e.status.Time,
-	)
-}
-
-func (e ErrDocumentCheckedOut) CheckOutUserID() uu.ID  { return e.status.UserID }
-func (e ErrDocumentCheckedOut) CheckOutReason() string { return e.status.Reason }
-
-func IsErrDocumentCheckedOutByUser(err error, userID uu.ID) bool {
-	var e ErrDocumentCheckedOut
-	if errors.As(err, &e) {
-		return e.status.UserID == userID
-	}
-	return false
 }
 
 ///////////////////////////////////////////////////////////////////////////////

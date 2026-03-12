@@ -8,7 +8,6 @@ import (
 	"slices"
 	"sort"
 	"testing"
-	"time"
 
 	"github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/uuiddir"
@@ -18,12 +17,11 @@ import (
 	"github.com/domonda/go-types/uu"
 )
 
-// Compiler check if *Conn implements docdb.DeprecatedConn
-var _ docdb.DeprecatedConn = new(Conn)
+// Compiler check if *Conn implements docdb.Conn
+var _ docdb.Conn = new(Conn)
 
 type Conn struct {
 	documentsDir fs.File
-	workspaceDir fs.File
 
 	// companiesDir containts directories named by the UUID of a company.
 	// Within each company directory, every document of that companty will be
@@ -33,18 +31,12 @@ type Conn struct {
 	companiesDir fs.File
 }
 
-func NewConn(documentsDir, workspaceDir, companiesDir fs.File) *Conn {
+func NewConn(documentsDir, companiesDir fs.File) *Conn {
 	if !documentsDir.IsDir() {
 		panic("documentsDir does not exist: '" + string(documentsDir) + "'")
 	}
 	if documentsDir.FileSystem() != fs.Local {
 		panic("documentsDir is not on local file-system: '" + string(documentsDir) + "'")
-	}
-	if !workspaceDir.IsDir() {
-		panic("workspaceDir does not exist: '" + string(workspaceDir) + "'")
-	}
-	if workspaceDir.FileSystem() != fs.Local {
-		panic("workspaceDir is not on local file-system: '" + string(workspaceDir) + "'")
 	}
 	if !companiesDir.IsDir() {
 		panic("companiesDir does not exist: '" + string(companiesDir) + "'")
@@ -54,7 +46,6 @@ func NewConn(documentsDir, workspaceDir, companiesDir fs.File) *Conn {
 	}
 	return &Conn{
 		documentsDir: documentsDir,
-		workspaceDir: workspaceDir,
 		companiesDir: companiesDir,
 	}
 }
@@ -77,14 +68,9 @@ func NewTestConn(t *testing.T) *Conn {
 	})
 
 	documentsDir := dir.Join("documents")
-	workspaceDir := dir.Join("workspace")
 	companiesDir := dir.Join("companies")
 
 	err = documentsDir.MakeDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = workspaceDir.MakeDir()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,16 +81,14 @@ func NewTestConn(t *testing.T) *Conn {
 
 	return NewConn(
 		documentsDir,
-		workspaceDir,
 		companiesDir,
 	)
 }
 
 func (c *Conn) String() string {
 	return fmt.Sprintf(
-		"localfsdb.Conn{Documents: %q, Workspace: %q}",
+		"localfsdb.Conn{Documents: %q}",
 		c.documentsDir.LocalPath(),
-		c.workspaceDir.LocalPath(),
 	)
 }
 
@@ -124,19 +108,11 @@ func (c *Conn) documentAndVersionDir(docID uu.ID, version docdb.VersionTime) (do
 	return docDir, versionDir, nil
 }
 
-func (c *Conn) documentCheckOutStatusFile(docID uu.ID) fs.File {
-	return c.documentDir(docID).Join("checkout-status.json")
-}
-
 // companyDocumentDir returns the marker directory for a document of a company
 // the existence of this directory acts as a threadsafe marker that a docID belongs to a companyID.
 func (c *Conn) companyDocumentDir(companyID, docID uu.ID) fs.File {
 	companyDir := c.companiesDir.Join(companyID.String())
 	return uuiddir.Join(companyDir, docID)
-}
-
-func (c *Conn) CheckedOutDocumentDir(docID uu.ID) fs.File {
-	return c.workspaceDir.Join(docID.String())
 }
 
 func (c *Conn) DocumentExists(ctx context.Context, docID uu.ID) (exists bool, err error) {
@@ -512,383 +488,6 @@ func (c *Conn) DocumentVersionFileProvider(ctx context.Context, docID uu.ID, ver
 	return docdb.DirFileProvider(versionDir), nil
 }
 
-func (c *Conn) DocumentCheckOutStatus(ctx context.Context, docID uu.ID) (status *docdb.CheckOutStatus, err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, docID)
-
-	if err = ctx.Err(); err != nil {
-		return nil, err
-	}
-
-	return c.documentCheckOutStatus(docID)
-}
-
-func (c *Conn) documentCheckOutStatus(docID uu.ID) (status *docdb.CheckOutStatus, err error) {
-	defer errs.WrapWithFuncParams(&err, docID)
-
-	statusFile := c.documentCheckOutStatusFile(docID)
-	if !statusFile.Exists() {
-		if !statusFile.Dir().Exists() {
-			return nil, docdb.NewErrDocumentNotFound(docID)
-		}
-		return nil, nil
-	}
-	err = statusFile.ReadJSON(context.Background(), &status)
-	if err != nil {
-		return nil, err
-	}
-	return status, nil
-}
-
-func (c *Conn) writeDocumentCheckOutStatusFile(companyID, docID uu.ID, version docdb.VersionTime, userID uu.ID, reason string, checkOutDir fs.File) (status *docdb.CheckOutStatus, err error) {
-	defer errs.WrapWithFuncParams(&err, companyID, docID, version, userID, reason, checkOutDir)
-
-	status = &docdb.CheckOutStatus{
-		CompanyID:   companyID,
-		DocID:       docID,
-		Version:     version,
-		UserID:      userID,
-		Reason:      reason,
-		Time:        time.Now().UTC(),
-		CheckOutDir: checkOutDir,
-	}
-	err = c.documentCheckOutStatusFile(docID).WriteJSON(context.Background(), status, "  ")
-	if err != nil {
-		return nil, err
-	}
-	return status, nil
-}
-
-func (c *Conn) CheckOutNewDocument(ctx context.Context, docID, companyID, userID uu.ID, reason string) (status *docdb.CheckOutStatus, err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, docID, companyID, userID, reason)
-
-	switch {
-	case ctx.Err() != nil:
-		return nil, ctx.Err()
-	case !docID.Valid():
-		return nil, errs.New("CheckOutNewDocument: invalid docID")
-	case !companyID.Valid():
-		return nil, errs.New("CheckOutNewDocument: invalid companyID")
-	case !userID.Valid():
-		return nil, errs.New("CheckOutNewDocument: invalid userID")
-	case reason == "":
-		return nil, errs.New("CheckOutNewDocument: reason must not be empty")
-	}
-	docWriteMtx.Lock(docID)
-	defer docWriteMtx.Unlock(docID)
-
-	if c.documentDir(docID).Exists() {
-		return nil, errs.Errorf("CheckOutNewDocument: document %s already exists", docID)
-	}
-
-	log.InfoCtx(ctx, "CheckOutNewDocument").
-		UUID("docID", docID).
-		UUID("companyID", companyID).
-		UUID("userID", userID).
-		Str("reason", reason).
-		Log()
-
-	docDir := c.documentDir(docID)
-	checkOutDir := c.CheckedOutDocumentDir(docID)
-	defer func() {
-		if err != nil {
-			if docDir.Exists() {
-				e := uuiddir.RemoveDir(c.documentsDir, docDir)
-				if e != nil {
-					log.ErrorCtx(ctx, "delete docDir").Err(e).Log()
-				}
-			}
-			if checkOutDir.Exists() {
-				e := checkOutDir.RemoveRecursive()
-				if e != nil {
-					log.ErrorCtx(ctx, "delete checkOutDir").Err(e).Log()
-				}
-			}
-			e := c.removeCompanyDocumentDirIfExists(companyID, docID)
-			if e != nil {
-				log.ErrorCtx(ctx, "removeCompanyDocumentDirIfExists").Err(e).Log()
-			}
-		}
-	}()
-
-	err = docDir.MakeAllDirs()
-	if err != nil {
-		return nil, err
-	}
-
-	err = docDir.Join("company.id").WriteAll(companyID.StringBytes())
-	if err != nil {
-		return nil, err
-	}
-
-	err = checkOutDir.MakeDir()
-	if err != nil {
-		return nil, err
-	}
-
-	err = c.makeCompanyDocumentDir(companyID, docID)
-	if err != nil {
-		return nil, err
-	}
-
-	status, err = c.writeDocumentCheckOutStatusFile(companyID, docID, docdb.VersionTime{}, userID, reason, checkOutDir)
-	if err != nil {
-		return nil, err
-	}
-
-	return status, nil
-}
-
-func (c *Conn) CheckedOutDocuments(ctx context.Context) (stati []*docdb.CheckOutStatus, err error) {
-	defer errs.WrapWithFuncParams(&err)
-
-	err = c.workspaceDir.ListDirInfoContext(ctx, func(file *fs.FileInfo) (err error) {
-		docID, err := uu.IDFromString(file.Name)
-		if err != nil {
-			return errs.Errorf("non UUID filename in workspace: %w", err)
-		}
-		if !file.Exists {
-			log.DebugCtx(ctx, "CheckedOutDocuments: document is not checked out anymore, checkout dir gone").
-				UUID("docID", docID).
-				Log()
-			return nil
-		}
-		if !file.IsDir {
-			return errs.Errorf("UUID named workspace %w", fs.NewErrIsNotDirectory(file.File))
-		}
-		status, err := c.documentCheckOutStatus(docID)
-		if err != nil {
-			return err
-		}
-		if !status.Valid() {
-			log.DebugCtx(ctx, "CheckedOutDocuments: document is not checked out anymore, missing checkout-status.json").
-				UUID("docID", docID).
-				Log()
-			return nil
-		}
-
-		stati = append(stati, status)
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return stati, nil
-}
-
-func (c *Conn) CheckOutDocument(ctx context.Context, docID, userID uu.ID, reason string) (checkOutStatus *docdb.CheckOutStatus, err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, docID, userID, reason)
-
-	switch {
-	case ctx.Err() != nil:
-		return nil, ctx.Err()
-	case !userID.Valid():
-		return nil, errs.New("CheckOutDocument: invalid userID")
-	case reason == "":
-		return nil, errs.New("CheckOutDocument: reason must not be empty")
-	}
-	docWriteMtx.Lock(docID)
-	defer docWriteMtx.Unlock(docID)
-
-	log, ctx = log.With().
-		UUID("docID", docID).
-		SubLoggerContext(ctx)
-
-	log.Info("CheckOutDocument").
-		UUID("userID", userID).
-		Str("reason", reason).
-		Log()
-
-	checkOutStatus, err = c.documentCheckOutStatus(docID)
-	if err != nil {
-		return nil, err
-	}
-	if checkOutStatus != nil {
-		return nil, docdb.NewErrDocumentCheckedOut(checkOutStatus)
-	}
-
-	versionInfo, versionDir, err := c.latestDocumentVersionInfo(ctx, docID)
-	if err != nil {
-		return nil, err
-	}
-
-	checkOutDir := c.CheckedOutDocumentDir(docID)
-	if checkOutDir.Exists() {
-		log.Debug("CheckOutDocument: workspace directory for document already exists, cleaning it up").Log()
-		err = checkOutDir.RemoveRecursive()
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	err = fs.CopyRecursive(ctx, versionDir, checkOutDir)
-	if err != nil {
-		if e := checkOutDir.RemoveRecursive(); e != nil {
-			err = errs.Errorf("error (%s) while cleaning up after error: %w", e, err)
-		}
-		return nil, errs.Errorf("CheckOutDocument: error while copying files to workspace directory: %w", err)
-	}
-
-	checkOutStatus, err = c.writeDocumentCheckOutStatusFile(versionInfo.CompanyID, docID, versionInfo.Version, userID, reason, checkOutDir)
-	if err != nil {
-		if e := checkOutDir.RemoveRecursive(); e != nil {
-			err = errs.Errorf("error (%s) while cleaning up after error: %w", e, err)
-		}
-		return nil, errs.Errorf("CheckOutDocument: error while writing check out status file: %w", err)
-	}
-
-	return checkOutStatus, nil
-}
-
-func (c *Conn) removeCheckOutFiles(docID uu.ID) (err error) {
-	defer errs.WrapWithFuncParams(&err, docID)
-
-	if dir := c.CheckedOutDocumentDir(docID); dir.Exists() {
-		err = dir.RemoveRecursive()
-		if err != nil {
-			return err
-		}
-	}
-	return c.documentCheckOutStatusFile(docID).Remove()
-}
-
-func (c *Conn) CancelCheckOutDocument(ctx context.Context, docID uu.ID) (wasCheckedOut bool, lastVersion docdb.VersionTime, err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, docID)
-
-	if ctx.Err() != nil {
-		return false, docdb.VersionTime{}, err
-	}
-	docWriteMtx.Lock(docID)
-	defer docWriteMtx.Unlock(docID)
-
-	log, ctx = log.With().
-		UUID("docID", docID).
-		SubLoggerContext(ctx)
-
-	log.Info("CancelCheckOutDocument").Log()
-
-	status, err := c.documentCheckOutStatus(docID)
-	wasCheckedOut = status.Valid()
-	if err != nil {
-		return false, docdb.VersionTime{}, err
-	}
-	if !wasCheckedOut {
-		if checkOutDir := c.CheckedOutDocumentDir(docID); checkOutDir.Exists() {
-			// Delete checked out workspace files if they exist even when
-			// the checkout-status.json file does not exist anymore
-			e := checkOutDir.RemoveRecursive()
-			if e != nil {
-				log.ErrorCtx(ctx, "Delete checked out workspace files that shouldn't be there").Err(e).Log()
-			}
-		}
-		return false, docdb.VersionTime{}, nil
-	}
-
-	if status.Version.IsNull() {
-		log.Debug("CancelCheckOutDocument ...removing new document").Log()
-		err = c.removeCheckOutFiles(docID)
-		if err != nil {
-			return true, status.Version, err
-		}
-
-		docDir := c.documentDir(docID)
-		return true, status.Version, uuiddir.RemoveDir(c.documentsDir, docDir)
-	}
-
-	return true, status.Version, c.removeCheckOutFiles(docID)
-}
-
-func (c *Conn) CheckInDocument(ctx context.Context, docID uu.ID) (versionInfo *docdb.VersionInfo, err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, docID)
-
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-	docWriteMtx.Lock(docID)
-	defer docWriteMtx.Unlock(docID)
-
-	log, ctx = log.With().
-		UUID("docID", docID).
-		SubLoggerContext(ctx)
-
-	var newVersionDir fs.File
-	defer func() {
-		if err != nil {
-			if newVersionDir.IsDir() {
-				e := newVersionDir.RemoveRecursive()
-				if e != nil {
-					err = errs.Errorf("error (%s) from cleaning up after CheckInDocument error: %w", e, err)
-				}
-			}
-
-			log.ErrorCtx(ctx, "CheckInDocument error").Err(err).Log()
-		}
-	}()
-
-	checkOutStatus, err := c.documentCheckOutStatus(docID)
-	if err != nil {
-		return nil, err
-	}
-	if !checkOutStatus.Valid() {
-		return nil, docdb.NewErrDocumentNotCheckedOut(docID)
-	}
-
-	docDir := c.documentDir(docID)
-	workDir := c.CheckedOutDocumentDir(docID)
-
-	newVersion := docdb.NewVersionTime()
-	newVersionDir = docDir.Join(newVersion.String())
-
-	err = fs.CopyRecursive(ctx, workDir, newVersionDir)
-	if err != nil {
-		return nil, err
-	}
-
-	var prevVersionDir fs.File
-	if checkOutStatus.Version.IsNotNull() {
-		prevVersionDir = docDir.Join(checkOutStatus.Version.String())
-	}
-
-	versionInfo, err = docdb.NewVersionInfo(
-		checkOutStatus.CompanyID,
-		docID,
-		newVersion,
-		checkOutStatus.Version,
-		checkOutStatus.UserID,
-		checkOutStatus.Reason,
-		newVersionDir,
-		prevVersionDir,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	err = versionInfo.WriteJSON(docDir.Joinf("%s.json", newVersion))
-	if err != nil {
-		return nil, err
-	}
-
-	// Clean up after error checks if newVersionDir is set
-	// to delete it after an error.
-	// Disable the cleanup after all files have been copied
-	// and before the checked out files get deleted,
-	// so we don't loose files in case removing
-	// the checked out files returns an error after
-	// already deleting some files
-	newVersionDir = ""
-
-	err = c.removeCheckOutFiles(docID)
-	if err != nil {
-		err = errs.Errorf("CheckInDocument created new document version %s but can't remove check-out files: %w", newVersion, err)
-	}
-
-	log.Info("CheckInDocument").
-		Stringer("version", newVersion).
-		Log()
-
-	return versionInfo, err
-}
-
 func (c *Conn) DeleteDocument(ctx context.Context, docID uu.ID) (err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
@@ -903,26 +502,16 @@ func (c *Conn) DeleteDocument(ctx context.Context, docID uu.ID) (err error) {
 		Log()
 
 	docDir := c.documentDir(docID)
-	if docDir.Exists() {
-		companyID, e := c.documentCompanyID(ctx, docID)
-		if e == nil {
-			e = uuiddir.Remove(c.companiesDir.Join(companyID.String()), docID)
-		}
-		err = errors.Join(err, e)
-
-		e = uuiddir.RemoveDir(c.documentsDir, docDir)
-		err = errors.Join(err, e)
-	} else {
-		err = docdb.NewErrDocumentNotFound(docID)
+	if !docDir.Exists() {
+		return docdb.NewErrDocumentNotFound(docID)
 	}
 
-	checkOutDir := c.CheckedOutDocumentDir(docID)
-	if checkOutDir.Exists() {
-		e := checkOutDir.RemoveRecursive()
-		err = errors.Join(err, e)
+	companyID, err := c.documentCompanyID(ctx, docID)
+	if err == nil {
+		err = uuiddir.Remove(c.companiesDir.Join(companyID.String()), docID)
 	}
 
-	return err
+	return errors.Join(err, uuiddir.RemoveDir(c.documentsDir, docDir))
 }
 
 func (c *Conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version docdb.VersionTime) (leftVersions []docdb.VersionTime, err error) {
@@ -970,33 +559,6 @@ func (c *Conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version d
 
 	return leftVersions, err
 }
-
-// func (c *Conn) InsertDocumentVersion(ctx context.Context, docID uu.ID, version docdb.VersionTime, userID uu.ID, reason string, files []fs.FileReader) (info *docdb.VersionInfo, err error) {
-// 	defer errs.WrapWithFuncParams(&err, ctx, docID, version, userID, reason, files)
-
-// 	switch {
-// 	case ctx.Err() != nil:
-// 		return nil, ctx.Err()
-// 	case !userID.Valid():
-// 		return nil, errs.New("InsertDocumentVersion: invalid userID")
-// 	case reason == "":
-// 		return nil, errs.New("InsertDocumentVersion: reason must not be empty")
-// 	}
-// 	docMtx.Lock(docID)
-// 	defer docMtx.Unlock(docID)
-
-// 	docDir, versionDir, err := c.documentAndVersionDir(docID, version)
-// 	switch {
-// 	case err != nil:
-// 		return nil, err
-// 	case !docDir.Exists():
-// 		return nil, docdb.NewErrDocumentNotFound(docID)
-// 	case versionDir.Exists():
-// 		return nil, docdb.NewErrDocumentVersionAlreadyExists(docID, version)
-// 	}
-
-// 	// TODO
-// }
 
 func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, newVersion docdb.VersionTime, files []fs.FileReader, onNewVersion docdb.OnNewVersionFunc) (err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, companyID, docID, userID, reason, newVersion, files, onNewVersion)
@@ -1249,5 +811,5 @@ func safelyCallOnNewVersionFunc(ctx context.Context, versionInfo *docdb.VersionI
 func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, merge bool) (err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, doc, merge)
 
-	panic("TODO")
+	return errs.Errorf("RestoreDocument is %w for localfsdb.Conn", docdb.ErrNotImplemented)
 }
