@@ -358,6 +358,32 @@ func TestAddDocumentVersion(t *testing.T) {
 			},
 		},
 		{
+			name:            "file in both WriteFiles and RemoveFiles",
+			createCompanyID: defaultCompanyID,
+			createDocID:     uu.IDFrom("d8c4e0a7-2f3b-4a91-b5d6-1e7f8c9a0b2d"),
+			createUserID:    defaultUserID,
+			createReason:    createReason,
+			createVersion:   versionTime0,
+			createFiles:     newTestMemFiles("a.txt"),
+			calls: []call{
+				{
+					args: args{
+						docID:  uu.IDFrom("d8c4e0a7-2f3b-4a91-b5d6-1e7f8c9a0b2d"),
+						userID: defaultUserID,
+						reason: "second version",
+						createVersion: func(ctx context.Context, docID uu.ID, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+							return &docdb.CreateVersionResult{
+								Version:     versionTime1,
+								WriteFiles:  []fs.FileReader{fs.NewMemFile("a.txt", []byte("CHANGED"))},
+								RemoveFiles: []string{"a.txt"},
+							}, nil
+						},
+					},
+				},
+			},
+			wantFinalErr: true,
+		},
+		{
 			name:            "onNewVersion returns error",
 			createCompanyID: defaultCompanyID,
 			createDocID:     uu.IDFrom("0a007614-c66c-4af5-97ba-337c32ae2bc2"),

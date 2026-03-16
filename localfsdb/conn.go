@@ -1138,13 +1138,8 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 	if err != nil {
 		return err
 	}
-	for _, f := range result.WriteFiles {
-		if !f.Exists() {
-			return errs.Errorf("file returned for new version of document %s does not exist: %#v", docID, f)
-		}
-	}
-	if result.Version.IsNull() {
-		return errs.New("version returned from CreateVersionFunc is null")
+	if err := result.Validate(); err != nil {
+		return err
 	}
 	if !result.Version.After(prevVersionInfo.Version) {
 		return errs.Errorf("version %s returned from CreateVersionFunc is not after previous version %s", result.Version, prevVersionInfo.Version)
