@@ -75,7 +75,7 @@ func TestConn(t *testing.T) {
 				documentVersionFile.DocumentVersion.Version,
 			)
 			require.NoError(t, err)
-			require.Equal(t, 1, res)
+			require.Equal(t, 2, res) // 1 unchanged file carried forward + 1 added file
 		})
 
 		t.Run("Adds modified files to the new version", func(t *testing.T) {
