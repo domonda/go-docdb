@@ -54,7 +54,7 @@ type VersionInfo struct {
     CompanyID    uu.ID
     DocID        uu.ID
     Version      VersionTime
-    PrevVersion  VersionTime   // zero if first version
+    PrevVersion  *VersionTime  // nil if first version
     CommitUserID uu.ID
     CommitReason string
 
