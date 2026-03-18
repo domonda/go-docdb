@@ -3,7 +3,6 @@ package docdb
 import (
 	"context"
 	"fmt"
-	"sort"
 
 	fs "github.com/ungerik/go-fs"
 
@@ -14,7 +13,7 @@ type VersionInfo struct {
 	CompanyID    uu.ID
 	DocID        uu.ID
 	Version      VersionTime
-	PrevVersion  VersionTime
+	PrevVersion  *VersionTime
 	CommitUserID uu.ID
 	CommitReason string
 
@@ -59,87 +58,6 @@ func ReadVersionInfoJSON(file fs.File, writeFixedVersion bool) (versionInfo *Ver
 	return &i.VersionInfo, nil
 }
 
-// NewVersionInfo uses the files from versionDir.
-// When prevVersionDir is "" then all files are added to the AddedFiles slice,
-// else the according diff slices RemovedFiles and ModidfiedFiles will also be filled.
-// Files in versionDir and prevVersionDir with names from ignoreFiles will be ignored.
-// The versionInfo file slices will be sorted.
-func NewVersionInfo(companyID, docID uu.ID, version, prevVersion VersionTime, commitUserID uu.ID, commitReason string, versionDir, prevVersionDir fs.File, ignoreFiles ...string) (versionInfo *VersionInfo, err error) {
-	versionInfo = &VersionInfo{
-		CompanyID:    companyID,
-		DocID:        docID,
-		Version:      version,
-		PrevVersion:  prevVersion,
-		CommitUserID: commitUserID,
-		CommitReason: commitReason,
-		Files:        make(map[string]FileInfo),
-	}
-
-	err = versionDir.ListDir(func(file fs.File) error {
-		filename := file.Name()
-		for _, ignoreFile := range ignoreFiles {
-			if filename == ignoreFile {
-				return nil
-			}
-		}
-		versionInfo.Files[filename], err = ReadFileInfo(context.Background(), file)
-		return err
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	if prevVersionDir == "" {
-		for filename := range versionInfo.Files {
-			versionInfo.AddedFiles = append(versionInfo.AddedFiles, filename)
-		}
-	} else {
-		prevVersionFiles := make(map[string]FileInfo)
-		err = prevVersionDir.ListDir(func(file fs.File) error {
-			filename := file.Name()
-			for _, ignoreFile := range ignoreFiles {
-				if filename == ignoreFile {
-					return nil
-				}
-			}
-			prevVersionFiles[filename], err = ReadFileInfo(context.Background(), file)
-			return err
-		})
-		if err != nil {
-			return nil, err
-		}
-
-		for filename, versionFileInfo := range versionInfo.Files {
-			prevVersionFile, prevVersionHasFile := prevVersionFiles[filename]
-			if prevVersionHasFile {
-				if versionFileInfo.Hash != prevVersionFile.Hash {
-					versionInfo.ModifiedFiles = append(versionInfo.ModifiedFiles, filename)
-				}
-			} else {
-				versionInfo.AddedFiles = append(versionInfo.AddedFiles, filename)
-			}
-		}
-		for filename := range prevVersionFiles {
-			_, versionHasFile := versionInfo.Files[filename]
-			if !versionHasFile {
-				versionInfo.RemovedFiles = append(versionInfo.RemovedFiles, filename)
-			}
-		}
-	}
-
-	if len(versionInfo.AddedFiles) > 0 {
-		sort.Strings(versionInfo.AddedFiles)
-	}
-	if len(versionInfo.RemovedFiles) > 0 {
-		sort.Strings(versionInfo.RemovedFiles)
-	}
-	if len(versionInfo.ModifiedFiles) > 0 {
-		sort.Strings(versionInfo.ModifiedFiles)
-	}
-
-	return versionInfo, nil
-}
-
 func (vi *VersionInfo) EqualFiles(other *VersionInfo) bool {
 	if vi == other {
 		return true
@@ -164,101 +82,3 @@ func (vi *VersionInfo) EqualFiles(other *VersionInfo) bool {
 	}
 	return true
 }
-
-// // NewVersionInfo uses the files from versionDir.
-// // If prevVersionDir is "", then all files are added to the AddedFiles slice,
-// // else the according diff slices RemovedFiles and ModidfiedFiles will also be filled.
-// // Files inversionDir and prevVersionDir with names from ignoreFiles will be ignored.
-// // The file slices are sorted.
-// func NewVersionInfo(companyID, docID uu.ID, version, prevVersion Version, commitUserID uu.ID, commitReason string, versionDir, prevVersionDir fs.File, ignoreFiles ...string) (versionInfo *VersionInfo, err error) {
-// 	version.TruncateTime()
-// 	prevVersion.TruncateTime()
-
-// 	versionInfo = &VersionInfo{
-// 		CompanyID:    companyID,
-// 		DocID:        docID,
-// 		Version:      version,
-// 		PrevVersion:  prevVersion,
-// 		CommitUserID: commitUserID,
-// 		CommitReason: commitReason,
-// 		Files:        make(map[string]FileInfo),
-// 	}
-
-// 	err = versionDir.ListDir(func(file fs.File) error {
-// 		info, err := file.StatWithContentHash()
-// 		if err != nil {
-// 			return err
-// 		}
-// 		for _, ignoreFile := range ignoreFiles {
-// 			if info.Name == ignoreFile {
-// 				return nil
-// 			}
-// 		}
-// 		versionInfo.Files[info.Name] = FileInfo{
-// 			Name: info.Name,
-// 			Size: info.Size,
-// 			Hash: info.ContentHash,
-// 		}
-// 		return nil
-// 	})
-// 	if err != nil {
-// 		return nil, err
-// 	}
-
-// 	if prevVersionDir == "" {
-// 		for filename := range versionInfo.Files {
-// 			versionInfo.AddedFiles = append(versionInfo.AddedFiles, filename)
-// 		}
-// 	} else {
-// 		prevVersionFiles := make(map[string]FileInfo)
-// 		err = prevVersionDir.ListDir(func(file fs.File) error {
-// 			info, err := file.StatWithContentHash()
-// 			if err != nil {
-// 				return err
-// 			}
-// 			for _, ignoreFile := range ignoreFiles {
-// 				if info.Name == ignoreFile {
-// 					return nil
-// 				}
-// 			}
-// 			prevVersionFiles[info.Name] = FileInfo{
-// 				Name: info.Name,
-// 				Size: info.Size,
-// 				Hash: info.ContentHash,
-// 			}
-// 			return nil
-// 		})
-// 		if err != nil {
-// 			return nil, err
-// 		}
-
-// 		for filename, versionFileInfo := range versionInfo.Files {
-// 			prevVersionFile, prevVersionHasFile := prevVersionFiles[filename]
-// 			if prevVersionHasFile {
-// 				if versionFileInfo.Hash != prevVersionFile.Hash {
-// 					versionInfo.ModifiedFiles = append(versionInfo.ModifiedFiles, filename)
-// 				}
-// 			} else {
-// 				versionInfo.AddedFiles = append(versionInfo.AddedFiles, filename)
-// 			}
-// 		}
-// 		for filename := range prevVersionFiles {
-// 			_, versionHasFile := versionInfo.Files[filename]
-// 			if !versionHasFile {
-// 				versionInfo.RemovedFiles = append(versionInfo.RemovedFiles, filename)
-// 			}
-// 		}
-// 	}
-
-// 	if len(versionInfo.AddedFiles) > 0 {
-// 		sort.Strings(versionInfo.AddedFiles)
-// 	}
-// 	if len(versionInfo.RemovedFiles) > 0 {
-// 		sort.Strings(versionInfo.RemovedFiles)
-// 	}
-// 	if len(versionInfo.ModifiedFiles) > 0 {
-// 		sort.Strings(versionInfo.ModifiedFiles)
-// 	}
-
-// 	return versionInfo, nil
-// }

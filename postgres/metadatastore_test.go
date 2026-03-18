@@ -54,7 +54,7 @@ func TestCreateDocument(t *testing.T) {
 		require.Equal(t, []string{memFiles[0].FileName, memFiles[1].FileName}, versionInfo.AddedFiles)
 		require.Nil(t, versionInfo.ModifiedFiles)
 		require.Nil(t, versionInfo.RemovedFiles)
-		require.Equal(t, docdb.VersionTime{}, versionInfo.PrevVersion)
+		require.Nil(t, versionInfo.PrevVersion)
 
 		savedFiles, err := db.QueryStructSlice[postgres.DocumentVersionFile](
 			ctx,
@@ -290,7 +290,7 @@ func TestEnumCompanyDocumentIDs(t *testing.T) {
 }
 
 func TestLatestDocumentVersion(t *testing.T) {
-	t.Run("Returns latest docuemnt version", func(t *testing.T) {
+	t.Run("Returns latest document version", func(t *testing.T) {
 		// given
 		t.Parallel()
 		populator := pgfixtures.FixturePopulator(t)
@@ -352,7 +352,7 @@ func TestDocumentVersionInfo(t *testing.T) {
 		require.Equal(t, docVersionFile1.DocumentVersion.DocumentID, versionInfo.DocID)
 		require.Equal(t, docVersionFile1.DocumentVersion.CompanyID, versionInfo.CompanyID)
 		require.Equal(t, docVersionFile1.DocumentVersion.Version, versionInfo.Version)
-		require.Equal(t, *docVersionFile1.DocumentVersion.PrevVersion, versionInfo.PrevVersion)
+		require.Equal(t, docVersionFile1.DocumentVersion.PrevVersion, versionInfo.PrevVersion)
 		require.Equal(t, docVersionFile1.DocumentVersion.AddedFiles, versionInfo.AddedFiles)
 		require.Equal(t, docVersionFile1.DocumentVersion.ModifiedFiles, versionInfo.ModifiedFiles)
 		require.Equal(t, docVersionFile1.DocumentVersion.RemovedFiles, versionInfo.RemovedFiles)
@@ -392,7 +392,7 @@ func TestDocumentVersionInfo(t *testing.T) {
 		require.Equal(t, docVersion.DocumentID, versionInfo.DocID)
 		require.Equal(t, docVersion.CompanyID, versionInfo.CompanyID)
 		require.Equal(t, docVersion.Version, versionInfo.Version)
-		require.Equal(t, *docVersion.PrevVersion, versionInfo.PrevVersion)
+		require.Equal(t, docVersion.PrevVersion, versionInfo.PrevVersion)
 		require.Equal(t, docVersion.AddedFiles, versionInfo.AddedFiles)
 		require.Equal(t, docVersion.ModifiedFiles, versionInfo.ModifiedFiles)
 		require.Equal(t, docVersion.RemovedFiles, versionInfo.RemovedFiles)
@@ -447,7 +447,7 @@ func TestLatestDocumentVersionInfo(t *testing.T) {
 		require.Equal(t, docVersion2.DocumentID, versionInfo.DocID)
 		require.Equal(t, docVersion2.CompanyID, versionInfo.CompanyID)
 		require.Equal(t, docVersion2.Version, versionInfo.Version)
-		require.Equal(t, *docVersion2.PrevVersion, versionInfo.PrevVersion)
+		require.Equal(t, docVersion2.PrevVersion, versionInfo.PrevVersion)
 		require.Equal(t, docVersion2.AddedFiles, versionInfo.AddedFiles)
 		require.Equal(t, docVersion2.ModifiedFiles, versionInfo.ModifiedFiles)
 		require.Equal(t, docVersion2.RemovedFiles, versionInfo.RemovedFiles)
@@ -486,7 +486,7 @@ func TestLatestDocumentVersionInfo(t *testing.T) {
 		require.Equal(t, docVersion.DocumentID, versionInfo.DocID)
 		require.Equal(t, docVersion.CompanyID, versionInfo.CompanyID)
 		require.Equal(t, docVersion.Version, versionInfo.Version)
-		require.Equal(t, *docVersion.PrevVersion, versionInfo.PrevVersion)
+		require.Equal(t, docVersion.PrevVersion, versionInfo.PrevVersion)
 		require.Equal(t, docVersion.AddedFiles, versionInfo.AddedFiles)
 		require.Equal(t, docVersion.ModifiedFiles, versionInfo.ModifiedFiles)
 		require.Equal(t, docVersion.RemovedFiles, versionInfo.RemovedFiles)

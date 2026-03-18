@@ -17,9 +17,10 @@ const (
 	sqlTimeFormat = "2006-01-02 15:04:05.999"
 )
 
-// VersionTime of a document.
-// VersionTime implements the database/sql.Scanner and database/sql/driver.Valuer interfaces
-// and will treat a zero VersionTime value as SQL NULL value.
+// VersionTime identifies a document version as a UTC timestamp
+// truncated to millisecond precision.
+// A zero value VersionTime is invalid and will be rejected by Validate.
+// VersionTime implements the database/sql.Scanner and database/sql/driver.Valuer interfaces.
 type VersionTime struct {
 	Time time.Time
 }
@@ -38,11 +39,7 @@ func VersionTimeFrom(t time.Time) VersionTime {
 }
 
 // VersionTimeFromString parses a string as VersionTime.
-// The strings "", "null", "NULL" will be parsed as null VersionTime.
 func VersionTimeFromString(str string) (VersionTime, error) {
-	if str == "" || str == "null" || str == "NULL" {
-		return VersionTime{}, nil
-	}
 	t, err := time.ParseInLocation(VersionTimeFormat, str, time.UTC)
 	if err != nil {
 		// Try again with SQL time format:
@@ -55,7 +52,6 @@ func VersionTimeFromString(str string) (VersionTime, error) {
 }
 
 // MustVersionTimeFromString parses a string as VersionTime.
-// The strings "", "null", "NULL" will be parsed as null VersionTime.
 // Any error causes a panic.
 func MustVersionTimeFromString(str string) VersionTime {
 	version, err := VersionTimeFromString(str)
@@ -65,11 +61,17 @@ func MustVersionTimeFromString(str string) VersionTime {
 	return version
 }
 
+// Validate returns an error if the VersionTime is zero (invalid).
+// Use Validate to check version arguments passed into functions.
+func (v VersionTime) Validate() error {
+	if v.Time.IsZero() {
+		return errs.New("invalid zero VersionTime")
+	}
+	return nil
+}
+
 // String implements the fmt.Stringer interface.
 func (v VersionTime) String() string {
-	if v.IsNull() {
-		return ""
-	}
 	return v.Time.Format(VersionTimeFormat)
 }
 
@@ -84,10 +86,7 @@ var _ pretty.Stringer = VersionTime{}
 // to provide a compact representation of the VersionTime
 // in error messages and pretty-printed output.
 func (v VersionTime) PrettyString() string {
-	if v.IsNull() {
-		return "NULL"
-	}
-	return v.Time.Format(VersionTimeFormat)
+	return v.String()
 }
 
 // MarshalText implements the encoding.TextMarshaler interface
@@ -126,25 +125,9 @@ func (v VersionTime) Compare(r VersionTime) int {
 	return v.Time.Truncate(time.Millisecond).Compare(r.Time.Truncate(time.Millisecond))
 }
 
-func (v VersionTime) IsNull() bool {
-	return v.Time.IsZero()
-}
-
-func (v VersionTime) IsNotNull() bool {
-	return !v.Time.IsZero()
-}
-
-func (v *VersionTime) SetNull() {
-	v.Time = time.Time{}
-}
-
 // Scan implements the database/sql.Scanner interface.
 func (v *VersionTime) Scan(value any) error {
 	switch t := value.(type) {
-	case nil:
-		*v = VersionTime{}
-		return nil
-
 	case time.Time:
 		*v = VersionTimeFrom(t)
 		return nil
@@ -166,14 +149,11 @@ func (v *VersionTime) Scan(value any) error {
 		return nil
 
 	default:
-		return errs.Errorf("can't scan %T as docdb.VersionTime", value)
+		return errs.Errorf("unable to scan %T as docdb.VersionTime", value)
 	}
 }
 
 // Value implements the driver database/sql/driver.Valuer interface.
 func (v VersionTime) Value() (sqldriver.Value, error) {
-	if v.IsNull() {
-		return nil, nil
-	}
-	return v.Time.Truncate(time.Millisecond), nil
+	return v.Time.Truncate(time.Millisecond), v.Validate()
 }

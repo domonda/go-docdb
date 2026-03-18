@@ -27,7 +27,7 @@ type (
 	// It contains the files to write in the new version,
 	// the filenames to remove from the previous version,
 	// and the optional new company ID to change which company the document belongs to.
-	// The new version timestamp must be after the previous version timestamp	.
+	// The new version timestamp must be after the previous version timestamp.
 	CreateVersionResult struct {
 		Version      VersionTime     // Timestamp of the new version which must be after previous version timestamp
 		WriteFiles   []fs.FileReader // Files to write in the new version
@@ -176,7 +176,7 @@ func CaptureNewVersionInfo(out **VersionInfo) OnNewVersionFunc {
 
 // Conn is an interface for a docdb connection.
 type Conn interface {
-	// DocumentExists returns true if a document with the passed docID exists in
+	// DocumentExists returns true if a document with the passed docID exists
 	DocumentExists(ctx context.Context, docID uu.ID) (exists bool, err error)
 
 	// EnumDocumentIDs calls the passed callback with the ID of every document in the database
@@ -195,7 +195,7 @@ type Conn interface {
 	// Returns nil and no error if the document does not exist or has no versions.
 	DocumentVersions(ctx context.Context, docID uu.ID) ([]VersionTime, error)
 
-	// LatestDocumentVersion returns the lates VersionTime of a document
+	// LatestDocumentVersion returns the latest VersionTime of a document
 	LatestDocumentVersion(ctx context.Context, docID uu.ID) (VersionTime, error)
 
 	// DocumentVersionInfo returns the VersionInfo for a VersionTime
@@ -212,15 +212,15 @@ type Conn interface {
 	// will be returned in case of such error conditions.
 	ReadDocumentVersionFile(ctx context.Context, docID uu.ID, version VersionTime, filename string) (data []byte, err error)
 
-	// DeleteDocument deletes all versions of a document
-	// including its workspace directory if checked out.
+	// DeleteDocument deletes all versions and stored files of a document.
+	// Returns wrapped ErrDocumentNotFound in case the document does not exist.
 	DeleteDocument(ctx context.Context, docID uu.ID) error
 
-	// DeleteDocumentVersion deletes a version of a document that must not be checked out
+	// DeleteDocumentVersion deletes a version of a document
 	// and returns the left over versions.
 	// If the version is the only version of the document,
 	// then the document will be deleted and no leftVersions are returned.
-	// Returns wrapped ErrDocumentNotFound, ErrDocumentVersionNotFound, ErrDocumentCheckedOut
+	// Returns wrapped ErrDocumentNotFound and ErrDocumentVersionNotFound
 	// in case of such error conditions.
 	// DeleteDocumentVersion should not be used for normal docdb operations,
 	// just to clean up mistakes or sync database states.
@@ -308,15 +308,12 @@ func (c *conn) ReadDocumentVersionFile(ctx context.Context, docID uu.ID, version
 		return nil, err
 	}
 
-	hash := ""
-	for _, item := range versionInfo.Files {
-		if item.Name == filename {
-			hash = item.Hash
-			break
-		}
+	fileInfo, ok := versionInfo.Files[filename]
+	if !ok {
+		return nil, NewErrDocumentFileNotFound(docID, filename)
 	}
 
-	return c.documentStore.ReadDocumentHashFile(ctx, docID, filename, hash)
+	return c.documentStore.ReadDocumentHashFile(ctx, docID, filename, fileInfo.Hash)
 }
 
 func (c *conn) DocumentCompanyID(ctx context.Context, docID uu.ID) (companyID uu.ID, err error) {
@@ -396,8 +393,8 @@ func (c *conn) createDocumentVersion(
 	files []fs.FileReader,
 	onNewVersion OnNewVersionFunc,
 ) (err error) {
-	if version.IsNull() {
-		return errs.New("null version passed to createDocumentVersion")
+	if err := version.Validate(); err != nil {
+		return err
 	}
 	if onNewVersion == nil {
 		return errs.New("nil onNewVersion func passed to createDocumentVersion")
@@ -413,7 +410,7 @@ func (c *conn) createDocumentVersion(
 				for _, item := range versionInfo.Files {
 					hashes = append(hashes, item.Hash)
 				}
-				err = errors.Join(c.documentStore.DeleteDocumentHashes(ctx, docID, hashes))
+				err = errors.Join(err, c.documentStore.DeleteDocumentHashes(ctx, docID, hashes))
 			}
 			err = errors.Join(err, c.metadataStore.DeleteDocument(ctx, docID))
 		}
@@ -479,8 +476,8 @@ func (c *conn) AddDocumentVersion(
 	if err != nil {
 		return err
 	}
-	if result.Version.IsNull() {
-		return errs.New("new version timestamp returned from CreateVersionFunc is null")
+	if err := result.Version.Validate(); err != nil {
+		return errs.Errorf("version returned from CreateVersionFunc: %w", err)
 	}
 	if !result.Version.After(latestVersionInfo.Version) {
 		return errs.Errorf("version %s returned from CreateVersionFunc is not after previous version %s", result.Version, latestVersionInfo.Version)

@@ -90,7 +90,7 @@ func (store *postgresMetadataStore) AddDocumentVersion(
 		DocID:         docID,
 		CompanyID:     companyID,
 		Version:       newVersion,
-		PrevVersion:   previousVersion,
+		PrevVersion:   &previousVersion,
 		CommitUserID:  userID,
 		CommitReason:  reason,
 		AddedFiles:    addedFilenames,
@@ -296,24 +296,18 @@ func (store *postgresMetadataStore) DocumentVersionInfo(ctx context.Context, doc
 	}
 
 	firstRec := records[0]
-	result := &docdb.VersionInfo{
+	return &docdb.VersionInfo{
 		CompanyID:     firstRec.CompanyID,
 		DocID:         firstRec.DocumentID,
 		Version:       firstRec.Version,
-		PrevVersion:   firstRec.Version,
+		PrevVersion:   firstRec.PrevVersion,
 		CommitUserID:  firstRec.CommitUserID,
 		CommitReason:  firstRec.CommitReason,
 		AddedFiles:    firstRec.AddedFiles,
 		ModifiedFiles: firstRec.ModifiedFiles,
 		RemovedFiles:  firstRec.RemovedFiles,
 		Files:         files,
-	}
-
-	if firstRec.PrevVersion != nil {
-		result.PrevVersion = *firstRec.PrevVersion
-	}
-
-	return result, nil
+	}, nil
 }
 
 func (store *postgresMetadataStore) LatestDocumentVersionInfo(ctx context.Context, docID uu.ID) (*docdb.VersionInfo, error) {
@@ -359,7 +353,7 @@ func (store *postgresMetadataStore) LatestDocumentVersionInfo(ctx context.Contex
 		CompanyID:     firstRec.CompanyID,
 		DocID:         firstRec.DocumentID,
 		Version:       firstRec.Version,
-		PrevVersion:   *firstRec.PrevVersion,
+		PrevVersion:   firstRec.PrevVersion,
 		CommitUserID:  firstRec.CommitUserID,
 		CommitReason:  firstRec.CommitReason,
 		AddedFiles:    firstRec.AddedFiles,
@@ -486,13 +480,13 @@ func namesFromFileInfos(files []*docdb.FileInfo) (names []string) {
 	return names
 }
 
-func fileInfosIntoDocumentVersionFiles(documentVersiononID uu.ID, batches ...[]*docdb.FileInfo) (versionFiles []*DocumentVersionFile) {
+func fileInfosIntoDocumentVersionFiles(documentVersionID uu.ID, batches ...[]*docdb.FileInfo) (versionFiles []*DocumentVersionFile) {
 	for _, items := range batches {
 		for _, item := range items {
 			versionFiles = append(
 				versionFiles,
 				&DocumentVersionFile{
-					DocumentVersionID: documentVersiononID,
+					DocumentVersionID: documentVersionID,
 					Name:              item.Name,
 					Hash:              item.Hash,
 					Size:              item.Size,

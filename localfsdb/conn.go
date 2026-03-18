@@ -23,8 +23,8 @@ var _ docdb.Conn = new(Conn)
 type Conn struct {
 	documentsDir fs.File
 
-	// companiesDir containts directories named by the UUID of a company.
-	// Within each company directory, every document of that companty will be
+	// companiesDir contains directories named by the UUID of a company.
+	// Within each company directory, every document of that company will be
 	// represented by a directory named by the UUID of the document.
 	// Directories are used as atomic, threadsafe filesystem level
 	// mapping mechanism between companyID and docID.
@@ -146,11 +146,7 @@ func (c *Conn) EnumCompanyDocumentIDs(ctx context.Context, companyID uu.ID, call
 }
 
 func (c *Conn) makeCompanyDocumentDir(companyID, docID uu.ID) error {
-	dir := c.companyDocumentDir(companyID, docID)
-	// if !dir.Exists() {
-	// 	log.Debugf("makeCompanyDocumentDir(%s, %s): %s", companyID, docID, dir.Path()).Log()
-	// }
-	return dir.MakeAllDirs()
+	return c.companyDocumentDir(companyID, docID).MakeAllDirs()
 }
 
 func (c *Conn) removeCompanyDocumentDirIfExists(companyID, docID uu.ID) error {
@@ -210,8 +206,8 @@ func (c *Conn) latestDocumentVersionInfo(ctx context.Context, docID uu.ID) (vers
 		return nil, "", err
 	}
 
-	if latestVersion.IsNull() {
-		return nil, "", docdb.NewErrDocumentHasNoCommitedVersion(docID)
+	if latestVersion.Time.IsZero() {
+		return nil, "", errs.Errorf("document %s directory exists but has no version subdirectories: %w", docID, docdb.NewErrDocumentNotFound(docID))
 	}
 
 	versionInfo, _, err = c.documentVersionInfo(docID, latestVersion)
@@ -252,12 +248,12 @@ func (c *Conn) documentCompanyID(ctx context.Context, docID uu.ID) (companyID uu
 	var doc struct {
 		CompanyID uu.ID `json:"companyId"`
 	}
-	err = versionDir.Join("doc.json").ReadJSON(context.Background(), &doc)
+	err = versionDir.Join("doc.json").ReadJSON(ctx, &doc)
 	if err != nil {
 		return uu.IDNil, err
 	}
 	if doc.CompanyID.IsNil() {
-		return uu.IDNil, errs.Errorf("document %s version %s/doc.json has no companyId", docID, version)
+		return uu.IDNil, errs.Errorf("document %s version %s/doc.json has no companyId", docID, version.Version)
 	}
 
 	return doc.CompanyID, nil
@@ -379,8 +375,8 @@ func (c *Conn) documentVersions(ctx context.Context, docID uu.ID) (versions []do
 func (c *Conn) documentVersionInfo(docID uu.ID, version docdb.VersionTime) (versionInfo *docdb.VersionInfo, docDir fs.File, err error) {
 	defer errs.WrapWithFuncParams(&err, docID, version)
 
-	if version.IsNull() {
-		return nil, "", docdb.NewErrDocumentHasNoCommitedVersion(docID)
+	if err := version.Validate(); err != nil {
+		return nil, "", err
 	}
 
 	docDir = c.documentDir(docID)
@@ -398,7 +394,7 @@ func (c *Conn) documentVersionInfo(docID uu.ID, version docdb.VersionTime) (vers
 				Stringer("version", version).
 				Str("filename", infoFile.Name()).
 				Log()
-			err = docdb.NewErrDocumentVersionNotFound(docID, version)
+			err = errs.Errorf("document %s version %s directory exists but version info JSON file is missing: %w", docID, version, docdb.NewErrDocumentVersionNotFound(docID, version))
 		}
 		return nil, docDir, err
 	}
@@ -540,10 +536,13 @@ func (c *Conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version d
 
 	versionInfoFile := docDir.Joinf("%s.json", version)
 	if versionInfoFile.Exists() {
-		err = versionInfoFile.Remove()
+		if removeErr := versionInfoFile.Remove(); removeErr != nil {
+			err = errors.Join(err, removeErr)
+		}
 	}
 
-	leftVersions, err = c.documentVersions(ctx, docID)
+	leftVersions, lErr := c.documentVersions(ctx, docID)
+	err = errors.Join(err, lErr)
 	if len(leftVersions) == 0 {
 		// If no versions left, delete the company document entry
 		// and the document directory
@@ -575,8 +574,8 @@ func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.I
 	if err = userID.Validate(); err != nil {
 		return err
 	}
-	if newVersion.IsNull() {
-		return errs.New("null newVersion passed to CreateDocument")
+	if err := newVersion.Validate(); err != nil {
+		return err
 	}
 	if onNewVersion == nil {
 		return errs.New("nil onNewVersion func passed to CreateDocument")
@@ -627,11 +626,11 @@ func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.I
 
 	// NewVersionInfo reads newVersionDir, this could be optimized
 	// by copying and content hashing the files in one loop
-	versionInfo, err := docdb.NewVersionInfo(
+	versionInfo, err := newVersionInfo(
 		companyID,
 		docID,
 		newVersion,
-		docdb.VersionTime{},
+		nil, // prevVersion
 		userID,
 		reason,
 		newVersionDir,
@@ -705,8 +704,8 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 			return errs.Errorf("file returned for new version of document %s does not exist: %#v", docID, f)
 		}
 	}
-	if result.Version.IsNull() {
-		return errs.New("version returned from CreateVersionFunc is null")
+	if err := result.Version.Validate(); err != nil {
+		return errs.Errorf("version returned from CreateVersionFunc: %w", err)
 	}
 	if !result.Version.After(prevVersionInfo.Version) {
 		return errs.Errorf("version %s returned from CreateVersionFunc is not after previous version %s", result.Version, prevVersionInfo.Version)
@@ -747,11 +746,11 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 
 	// NewVersionInfo reads newVersionDir and prevVersionDir, this could be optimized
 	// by copying and content hashing the files in one loop
-	versionInfo, err := docdb.NewVersionInfo(
+	versionInfo, err := newVersionInfo(
 		companyID,
 		docID,
 		result.Version,
-		prevVersionInfo.Version,
+		&prevVersionInfo.Version,
 		userID,
 		reason,
 		newVersionDir,
@@ -806,6 +805,73 @@ func safelyCallOnNewVersionFunc(ctx context.Context, versionInfo *docdb.VersionI
 	defer errs.RecoverPanicAsError(&err)
 
 	return onNewVersion(ctx, versionInfo)
+}
+
+// newVersionInfo builds a VersionInfo by reading file hashes from versionDir
+// and diffing against prevVersionDir (if not "").
+func newVersionInfo(companyID, docID uu.ID, version docdb.VersionTime, prevVersion *docdb.VersionTime, commitUserID uu.ID, commitReason string, versionDir, prevVersionDir fs.File) (versionInfo *docdb.VersionInfo, err error) {
+	defer errs.WrapWithFuncParams(&err, companyID, docID, version, prevVersion, commitUserID, commitReason, versionDir, prevVersionDir)
+
+	if (prevVersion == nil) != (prevVersionDir == "") {
+		return nil, errs.New("prevVersion and prevVersionDir must either both be set or both be empty")
+	}
+
+	versionInfo = &docdb.VersionInfo{
+		CompanyID:    companyID,
+		DocID:        docID,
+		Version:      version,
+		PrevVersion:  prevVersion,
+		CommitUserID: commitUserID,
+		CommitReason: commitReason,
+		Files:        make(map[string]docdb.FileInfo),
+	}
+
+	err = versionDir.ListDir(func(file fs.File) error {
+		filename := file.Name()
+		versionInfo.Files[filename], err = docdb.ReadFileInfo(context.Background(), file)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if prevVersionDir == "" {
+		for filename := range versionInfo.Files {
+			versionInfo.AddedFiles = append(versionInfo.AddedFiles, filename)
+		}
+	} else {
+		prevVersionFiles := make(map[string]docdb.FileInfo)
+		err = prevVersionDir.ListDir(func(file fs.File) error {
+			filename := file.Name()
+			prevVersionFiles[filename], err = docdb.ReadFileInfo(context.Background(), file)
+			return err
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		for filename, versionFileInfo := range versionInfo.Files {
+			prevVersionFile, prevVersionHasFile := prevVersionFiles[filename]
+			if prevVersionHasFile {
+				if versionFileInfo.Hash != prevVersionFile.Hash {
+					versionInfo.ModifiedFiles = append(versionInfo.ModifiedFiles, filename)
+				}
+			} else {
+				versionInfo.AddedFiles = append(versionInfo.AddedFiles, filename)
+			}
+		}
+		for filename := range prevVersionFiles {
+			if _, versionHasFile := versionInfo.Files[filename]; !versionHasFile {
+				versionInfo.RemovedFiles = append(versionInfo.RemovedFiles, filename)
+			}
+		}
+	}
+
+	sort.Strings(versionInfo.AddedFiles)
+	sort.Strings(versionInfo.RemovedFiles)
+	sort.Strings(versionInfo.ModifiedFiles)
+
+	return versionInfo, nil
 }
 
 func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, merge bool) (err error) {

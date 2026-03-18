@@ -39,7 +39,7 @@ A UTC timestamp truncated to millisecond precision, used to identify a document 
 ```go
 v := docdb.NewVersionTime()                          // current time
 v, err := docdb.VersionTimeFromString("2024-11-15_09-00-00.000")
-v.IsNull()    // true for zero value
+err = v.Validate()  // returns error for zero value
 v.After(other), v.Before(other), v.Equal(other)
 ```
 
@@ -197,7 +197,6 @@ Documents with no file changes are silently skipped. Returns `ErrNoChanges` only
 | `ErrDocumentVersionNotFound` | Version not found for the document |
 | `ErrDocumentAlreadyExists` | `CreateDocument` called for an existing document ID |
 | `ErrVersionAlreadyExists` | Version timestamp already in use |
-| `ErrDocumentHasNoCommitedVersion` | Document exists but has no committed version |
 | `ErrDocumentChanged` | Optimistic concurrency conflict |
 
 Use `errs.Has[ErrDocumentNotFound](err)` (from `github.com/domonda/go-errs`) to test for a specific error type.

@@ -78,7 +78,7 @@ func ReadHashedDocument(ctx context.Context, conn Conn, docID uu.ID) (doc *Hashe
 			if hash != versionInfo.Files[filename].Hash {
 				return nil, errs.Errorf("document %s version %s file %q has hash %s, but expected %s according to version info", docID, version, filename, hash, versionInfo.Files[filename].Hash)
 			}
-			doc.HashedFiles[filename] = data
+			doc.HashedFiles[hash] = data
 			v.FileHashes[filename] = hash
 		}
 		doc.Versions[version] = v
@@ -95,7 +95,7 @@ func (doc *HashedDocument) VersionTimes() []VersionTime {
 
 func (doc *HashedDocument) VersionInfo(versionTime VersionTime) *VersionInfo {
 	var (
-		prevVersionTime VersionTime
+		prevVersionTime *VersionTime
 		prevVersion     *HashedVersion
 		version         *HashedVersion
 	)
@@ -103,8 +103,8 @@ func (doc *HashedDocument) VersionInfo(versionTime VersionTime) *VersionInfo {
 	for i, v := range versions {
 		if v.Equal(versionTime) {
 			if i > 0 {
-				prevVersionTime = versions[i-1]
-				prevVersion = doc.Versions[prevVersionTime]
+				prevVersionTime = &versions[i-1]
+				prevVersion = doc.Versions[*prevVersionTime]
 			}
 			version = doc.Versions[versionTime]
 			break
@@ -145,7 +145,7 @@ func (doc *HashedDocument) VersionInfo(versionTime VersionTime) *VersionInfo {
 		}
 	}
 	if prevVersion != nil {
-		for _, prevFilename := range prevVersion.FileHashes {
+		for prevFilename := range prevVersion.FileHashes {
 			if _, ok := version.FileHashes[prevFilename]; !ok {
 				info.RemovedFiles = append(info.RemovedFiles, prevFilename)
 			}

@@ -252,7 +252,7 @@ func TestConn(t *testing.T) {
 			require.Equal(t, newVersion.CommitUserID, savedNewVersion.CommitUserID)
 			require.Equal(t, newVersion.CommitReason, savedNewVersion.CommitReason)
 			require.Equal(t, newVersion.CompanyID, savedNewVersion.CompanyID)
-			require.Equal(t, newVersion.PrevVersion, *savedNewVersion.PrevVersion)
+			require.Equal(t, newVersion.PrevVersion, savedNewVersion.PrevVersion)
 			require.Equal(t, newVersion.AddedFiles, savedNewVersion.AddedFiles)
 			require.Equal(t, newVersion.RemovedFiles, savedNewVersion.RemovedFiles)
 			require.Equal(t, newVersion.ModifiedFiles, savedNewVersion.ModifiedFiles)

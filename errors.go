@@ -113,21 +113,6 @@ func (e ErrVersionAlreadyExists) Error() string {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// ErrDocumentHasNoCommitedVersion
-
-type ErrDocumentHasNoCommitedVersion struct {
-	docID uu.ID
-}
-
-func NewErrDocumentHasNoCommitedVersion(docID uu.ID) ErrDocumentHasNoCommitedVersion {
-	return ErrDocumentHasNoCommitedVersion{docID}
-}
-
-func (e ErrDocumentHasNoCommitedVersion) Error() string {
-	return fmt.Sprintf("document %s has no commited version yet", e.docID)
-}
-
-///////////////////////////////////////////////////////////////////////////////
 // ErrDocumentChanged
 
 type ErrDocumentChanged struct {
@@ -140,5 +125,5 @@ func NewErrDocumentChanged(docID uu.ID, version VersionTime) ErrDocumentChanged 
 }
 
 func (e ErrDocumentChanged) Error() string {
-	return fmt.Sprintf("document %s version %s already exists", e.docID, e.baseVersion)
+	return fmt.Sprintf("document %s has changed since version %s", e.docID, e.baseVersion)
 }

@@ -12,7 +12,7 @@ import (
 )
 
 func IdenticalDocumentVersionsOfDrivers(ctx context.Context, docID uu.ID, driverA Conn, versionA VersionTime, driverB Conn, versionB VersionTime) (identical bool, err error) {
-	defer errs.WrapWithFuncParams(&err, docID, driverA, versionA, driverB, versionB)
+	defer errs.WrapWithFuncParams(&err, ctx, docID, driverA, versionA, driverB, versionB)
 
 	fileInfosA, err := driverA.DocumentVersionInfo(ctx, docID, versionA)
 	if err != nil {
@@ -46,7 +46,9 @@ func FirstDocumentVersionCommitUserID(ctx context.Context, docID uu.ID) (userID 
 		return uu.IDNil, err
 	}
 	if len(versions) == 0 {
-		return uu.IDNil, NewErrDocumentHasNoCommitedVersion(docID)
+		// Should not happend if globalConn is implemented correctly,
+		// but just in case, return a not found error instead of an index out of range panic.
+		return uu.IDNil, NewErrDocumentNotFound(docID)
 	}
 	versionInfo, err := globalConn.DocumentVersionInfo(ctx, docID, versions[0])
 	if err != nil {

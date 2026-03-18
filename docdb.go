@@ -53,7 +53,7 @@ func DocumentVersions(ctx context.Context, docID uu.ID) (versions []VersionTime,
 	return globalConn.DocumentVersions(ctx, docID)
 }
 
-// LatestDocumentVersion returns the lates VersionTime of a document
+// LatestDocumentVersion returns the latest VersionTime of a document
 func LatestDocumentVersion(ctx context.Context, docID uu.ID) (version VersionTime, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
@@ -96,10 +96,10 @@ func ReadDocumentFile(ctx context.Context, docID uu.ID, filename string) (data [
 	return data, versionInfo, nil
 }
 
-// SubstituteDeletedDocumentVersion will substitue the passed version with
-// the next existing version it does not exist anymore.
-// Will return ErrDocumentHasNoCommitedVersion if there is no
-// other commited version for the document.
+// SubstituteDeletedDocumentVersion will substitute the passed version with
+// the next existing version if it does not exist anymore.
+// Will return ErrDocumentNotFound if there is no
+// other version for the document.
 func SubstituteDeletedDocumentVersion(ctx context.Context, docID uu.ID, version VersionTime) (validVersion VersionTime, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, version)
 
@@ -117,7 +117,7 @@ func SubstituteDeletedDocumentVersion(ctx context.Context, docID uu.ID, version 
 		return VersionTime{}, err
 	}
 	if len(versions) == 0 {
-		return VersionTime{}, NewErrDocumentHasNoCommitedVersion(docID)
+		return VersionTime{}, NewErrDocumentNotFound(docID)
 	}
 
 	for i := range versions {
@@ -126,7 +126,7 @@ func SubstituteDeletedDocumentVersion(ctx context.Context, docID uu.ID, version 
 			return versions[i], nil
 		}
 	}
-	// Return latest vesion if none is after the deleted one
+	// Return latest version if none is after the deleted one
 	return versions[len(versions)-1], nil
 }
 
@@ -140,7 +140,7 @@ func ReadDocumentVersionFile(ctx context.Context, docID uu.ID, version VersionTi
 }
 
 func ReadLatestDocumentVersionFile(ctx context.Context, docID uu.ID, filename string) (data []byte, version VersionTime, err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, docID, version, filename)
+	defer errs.WrapWithFuncParams(&err, ctx, docID, filename)
 
 	version, err = globalConn.LatestDocumentVersion(ctx, docID)
 	if err != nil {
@@ -167,7 +167,7 @@ func DocumentVersionFileReader(ctx context.Context, docID uu.ID, version Version
 }
 
 // DocumentFileReader returns a fs.FileReader for a file of the latest document version.
-// Wrapped ErrDocumentNotFound, ErrDocumentHasNoCommitedVersion, ErrDocumentFileNotFound
+// Wrapped ErrDocumentNotFound, ErrDocumentFileNotFound
 // will be returned in case of such error conditions.
 func DocumentFileReader(ctx context.Context, docID uu.ID, filename string) (fileReader fs.FileReader, versionInfo *VersionInfo, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, filename)
@@ -270,7 +270,7 @@ func AddMultiDocumentVersion(ctx context.Context, docIDs uu.IDSlice, userID uu.I
 // will be created inside the backupDir and returned as docDir.
 //
 // If true is passed for overwrite then existing files will be overwritten
-// else an error is reeturned when docDir already exists.
+// else an error is returned when docDir already exists.
 //
 // In case of an error the already created directories and files will be removed.
 func CopyDocumentFiles(ctx context.Context, conn Conn, docID uu.ID, backupDir fs.File, overwrite bool) (destDocDir fs.File, err error) {
@@ -299,7 +299,7 @@ func CopyDocumentFiles(ctx context.Context, conn Conn, docID uu.ID, backupDir fs
 		return "", err
 	}
 	if len(versions) == 0 {
-		return "", NewErrDocumentHasNoCommitedVersion(docID)
+		return "", NewErrDocumentNotFound(docID)
 	}
 
 	if !destDocDir.Exists() {
@@ -372,7 +372,7 @@ func CopyDocumentFiles(ctx context.Context, conn Conn, docID uu.ID, backupDir fs
 // In case of an error the already backed up documents will be returned as docDirs.
 //
 // If true is passed for overwrite then existing files will be overwritten
-// else an error is reeturned when docDir already exists.
+// else an error is returned when docDir already exists.
 func CopyAllCompanyDocumentFiles(ctx context.Context, conn Conn, companyID uu.ID, backupDir fs.File, overwrite bool) (docDirs []fs.File, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, companyID, backupDir, overwrite)
 

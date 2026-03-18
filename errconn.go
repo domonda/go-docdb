@@ -70,18 +70,6 @@ func (c errConn) DeleteDocumentVersion(context.Context, uu.ID, VersionTime) ([]V
 	return nil, c.err
 }
 
-func (c errConn) InsertDocumentVersion(context.Context, uu.ID, VersionTime, uu.ID, string, []fs.FileReader) (*VersionInfo, error) {
-	return nil, c.err
-}
-
-// func (c errConn) DebugGetDocumentDir(uu.ID) fs.File {
-// 	return fs.InvalidFile
-// }
-
-// func (c errConn) DebugGetDocumentVersionFile(uu.ID, VersionTime, string) (fs.File, error) {
-// 	return fs.InvalidFile, c.err
-// }
-
 func (c errConn) CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, version VersionTime, files []fs.FileReader, onNewVersion OnNewVersionFunc) error {
 	return c.err
 }
