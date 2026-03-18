@@ -2,11 +2,11 @@ package proxyconn
 
 import (
 	"context"
-	"errors"
 
 	"github.com/ungerik/go-fs"
 
 	"github.com/domonda/go-docdb"
+	"github.com/domonda/go-errs"
 	"github.com/domonda/go-types/uu"
 )
 
@@ -61,7 +61,7 @@ func (conn *proxyConn) EnumDocumentIDs(
 	ctx context.Context,
 	callback func(context.Context, uu.ID) error,
 ) error {
-	return errors.New("not_implemented")
+	return errs.Errorf("EnumDocumentIDs is %w for proxyconn", docdb.ErrNotImplemented)
 }
 
 func (conn *proxyConn) EnumCompanyDocumentIDs(

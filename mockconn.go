@@ -8,6 +8,8 @@ import (
 	"github.com/domonda/go-types/uu"
 )
 
+// MockConn is a Conn implementation with function fields
+// for each method, intended for use in unit tests.
 type MockConn struct {
 	DocumentExistsMock              func(ctx context.Context, docID uu.ID) (exists bool, err error)
 	EnumDocumentIDsMock             func(ctx context.Context, callback func(context.Context, uu.ID) error) error

@@ -75,7 +75,7 @@ func TestConn(t *testing.T) {
 				documentVersionFile.DocumentVersion.Version,
 			)
 			require.NoError(t, err)
-			require.Equal(t, 1, res)
+			require.Equal(t, 2, res) // 1 unchanged file carried forward + 1 added file
 		})
 
 		t.Run("Adds modified files to the new version", func(t *testing.T) {
@@ -252,7 +252,7 @@ func TestConn(t *testing.T) {
 			require.Equal(t, newVersion.CommitUserID, savedNewVersion.CommitUserID)
 			require.Equal(t, newVersion.CommitReason, savedNewVersion.CommitReason)
 			require.Equal(t, newVersion.CompanyID, savedNewVersion.CompanyID)
-			require.Equal(t, newVersion.PrevVersion, *savedNewVersion.PrevVersion)
+			require.Equal(t, newVersion.PrevVersion, savedNewVersion.PrevVersion)
 			require.Equal(t, newVersion.AddedFiles, savedNewVersion.AddedFiles)
 			require.Equal(t, newVersion.RemovedFiles, savedNewVersion.RemovedFiles)
 			require.Equal(t, newVersion.ModifiedFiles, savedNewVersion.ModifiedFiles)

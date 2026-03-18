@@ -53,7 +53,7 @@ func DocumentVersions(ctx context.Context, docID uu.ID) (versions []VersionTime,
 	return globalConn.DocumentVersions(ctx, docID)
 }
 
-// LatestDocumentVersion returns the lates VersionTime of a document
+// LatestDocumentVersion returns the latest VersionTime of a document
 func LatestDocumentVersion(ctx context.Context, docID uu.ID) (version VersionTime, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
@@ -96,10 +96,10 @@ func ReadDocumentFile(ctx context.Context, docID uu.ID, filename string) (data [
 	return data, versionInfo, nil
 }
 
-// SubstituteDeletedDocumentVersion will substitue the passed version with
-// the next existing version it does not exist anymore.
-// Will return ErrDocumentHasNoCommitedVersion if there is no
-// other commited version for the document.
+// SubstituteDeletedDocumentVersion will substitute the passed version with
+// the next existing version if it does not exist anymore.
+// Will return ErrDocumentNotFound if there is no
+// other version for the document.
 func SubstituteDeletedDocumentVersion(ctx context.Context, docID uu.ID, version VersionTime) (validVersion VersionTime, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, version)
 
@@ -117,7 +117,7 @@ func SubstituteDeletedDocumentVersion(ctx context.Context, docID uu.ID, version 
 		return VersionTime{}, err
 	}
 	if len(versions) == 0 {
-		return VersionTime{}, NewErrDocumentHasNoCommitedVersion(docID)
+		return VersionTime{}, NewErrDocumentNotFound(docID)
 	}
 
 	for i := range versions {
@@ -126,7 +126,7 @@ func SubstituteDeletedDocumentVersion(ctx context.Context, docID uu.ID, version 
 			return versions[i], nil
 		}
 	}
-	// Return latest vesion if none is after the deleted one
+	// Return latest version if none is after the deleted one
 	return versions[len(versions)-1], nil
 }
 
@@ -139,8 +139,10 @@ func ReadDocumentVersionFile(ctx context.Context, docID uu.ID, version VersionTi
 	return globalConn.ReadDocumentVersionFile(ctx, docID, version, filename)
 }
 
+// ReadLatestDocumentVersionFile reads a file from the latest version of a document
+// and returns the file data along with the version timestamp.
 func ReadLatestDocumentVersionFile(ctx context.Context, docID uu.ID, filename string) (data []byte, version VersionTime, err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, docID, version, filename)
+	defer errs.WrapWithFuncParams(&err, ctx, docID, filename)
 
 	version, err = globalConn.LatestDocumentVersion(ctx, docID)
 	if err != nil {
@@ -167,7 +169,7 @@ func DocumentVersionFileReader(ctx context.Context, docID uu.ID, version Version
 }
 
 // DocumentFileReader returns a fs.FileReader for a file of the latest document version.
-// Wrapped ErrDocumentNotFound, ErrDocumentHasNoCommitedVersion, ErrDocumentFileNotFound
+// Wrapped ErrDocumentNotFound, ErrDocumentFileNotFound
 // will be returned in case of such error conditions.
 func DocumentFileReader(ctx context.Context, docID uu.ID, filename string) (fileReader fs.FileReader, versionInfo *VersionInfo, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, filename)
@@ -197,120 +199,19 @@ func DocumentFileExists(ctx context.Context, docID uu.ID, filename string) (exis
 	return file.Exists(), nil
 }
 
-// DocumentCheckOutStatus returns the CheckOutStatus of a document.
-// If the document is not checked out, then a nil CheckOutStatus will be returned.
-// The methods Valid() and String() can be called on a nil CheckOutStatus.
-// ErrDocumentNotFound is returned if the document does not exist.
-func DocumentCheckOutStatus(ctx context.Context, docID uu.ID) (status *CheckOutStatus, err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, docID)
-
-	conn, ok := globalConn.(DeprecatedConn)
-	if !ok {
-		return nil, errs.Errorf("conn does not implement DeprecatedConn")
-	}
-	return conn.DocumentCheckOutStatus(ctx, docID)
-}
-
-// CheckedOutDocumentDir returns a fs.File for the directory
-// where a document would be checked out.
-func CheckedOutDocumentDir(docID uu.ID) fs.File {
-	conn, ok := globalConn.(DeprecatedConn)
-	if !ok {
-		return ""
-	}
-	return conn.CheckedOutDocumentDir(docID)
-}
-
-// CheckedOutDocumentFileProvider returns a FileProvider for the directory
-// where a document would be checked out.
-func CheckedOutDocumentFileProvider(docID uu.ID) (p FileProvider, err error) {
-	defer errs.WrapWithFuncParams(&err, docID)
-
-	conn, ok := globalConn.(DeprecatedConn)
-	if !ok {
-		return nil, errs.Errorf("conn does not implement DeprecatedConn")
-	}
-	checkOutDir := conn.CheckedOutDocumentDir(docID)
-	if !checkOutDir.Exists() {
-		return nil, NewErrDocumentNotCheckedOut(docID)
-	}
-	return DirFileProvider(checkOutDir), nil
-}
-
-// CancelCheckOutDocument cancels a potential checkout.
-// No error is returned if the document was not checked out.
-// If the checkout was created by CheckOutNewDocument,
-// then the new document is deleted without leaving any history
-// and the returned lastVersion.IsNull() is true.
-func CancelCheckOutDocument(ctx context.Context, docID uu.ID) (wasCheckedOut bool, lastVersion VersionTime, err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, docID)
-
-	conn, ok := globalConn.(DeprecatedConn)
-	if !ok {
-		return false, VersionTime{}, errs.Errorf("conn does not implement DeprecatedConn")
-	}
-	return conn.CancelCheckOutDocument(ctx, docID)
-}
-
-// CheckInDocument checks in a checked out document
-// and returns the VersionInfo for the newly created version.
-func CheckInDocument(ctx context.Context, docID uu.ID) (v *VersionInfo, err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, docID)
-
-	conn, ok := globalConn.(DeprecatedConn)
-	if !ok {
-		return nil, errs.Errorf("conn does not implement DeprecatedConn")
-	}
-	return conn.CheckInDocument(ctx, docID)
-}
-
-// CheckedOutDocuments returns the CheckOutStatus of all checked out documents.
-func CheckedOutDocuments(ctx context.Context) (stati []*CheckOutStatus, err error) {
-	defer errs.WrapWithFuncParams(&err, ctx)
-
-	conn, ok := globalConn.(DeprecatedConn)
-	if !ok {
-		return nil, errs.Errorf("conn does not implement DeprecatedConn")
-	}
-	return conn.CheckedOutDocuments(ctx)
-}
-
-// CheckOutNewDocument creates a new document for a company in checked out state.
-func CheckOutNewDocument(ctx context.Context, docID, companyID, userID uu.ID, reason string) (status *CheckOutStatus, err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, docID, companyID, userID, reason)
-
-	conn, ok := globalConn.(DeprecatedConn)
-	if !ok {
-		return nil, errs.Errorf("conn does not implement DeprecatedConn")
-	}
-	return conn.CheckOutNewDocument(ctx, docID, companyID, userID, reason)
-}
-
-// CheckOutDocument checks out a document for a user with a stated reason.
-// Returns ErrDocumentCheckedOut if the document is already checked out.
-func CheckOutDocument(ctx context.Context, docID, userID uu.ID, reason string) (status *CheckOutStatus, err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, docID, userID, reason)
-
-	conn, ok := globalConn.(DeprecatedConn)
-	if !ok {
-		return nil, errs.Errorf("conn does not implement DeprecatedConn")
-	}
-	return conn.CheckOutDocument(ctx, docID, userID, reason)
-}
-
-// DeleteDocument deletes all versions of a document
-// including its workspace directory if checked out.
+// DeleteDocument deletes all versions and stored files of a document.
+// Returns wrapped ErrDocumentNotFound in case the document does not exist.
 func DeleteDocument(ctx context.Context, docID uu.ID) (err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
 	return globalConn.DeleteDocument(ctx, docID)
 }
 
-// DeleteDocumentVersion deletes a version of a document that must not be checked out
+// DeleteDocumentVersion deletes a version of a document
 // and returns the left over versions.
 // If the version is the only version of the document,
 // then the document will be deleted and no leftVersions are returned.
-// Returns wrapped ErrDocumentNotFound, ErrDocumentVersionNotFound, ErrDocumentCheckedOut
+// Returns wrapped ErrDocumentNotFound and ErrDocumentVersionNotFound
 // in case of such error conditions.
 // DeleteDocumentVersion should not be used for normal docdb operations,
 // just to clean up mistakes or sync database states.
@@ -371,7 +272,7 @@ func AddMultiDocumentVersion(ctx context.Context, docIDs uu.IDSlice, userID uu.I
 // will be created inside the backupDir and returned as docDir.
 //
 // If true is passed for overwrite then existing files will be overwritten
-// else an error is reeturned when docDir already exists.
+// else an error is returned when docDir already exists.
 //
 // In case of an error the already created directories and files will be removed.
 func CopyDocumentFiles(ctx context.Context, conn Conn, docID uu.ID, backupDir fs.File, overwrite bool) (destDocDir fs.File, err error) {
@@ -400,7 +301,7 @@ func CopyDocumentFiles(ctx context.Context, conn Conn, docID uu.ID, backupDir fs
 		return "", err
 	}
 	if len(versions) == 0 {
-		return "", NewErrDocumentHasNoCommitedVersion(docID)
+		return "", NewErrDocumentNotFound(docID)
 	}
 
 	if !destDocDir.Exists() {
@@ -473,7 +374,7 @@ func CopyDocumentFiles(ctx context.Context, conn Conn, docID uu.ID, backupDir fs
 // In case of an error the already backed up documents will be returned as docDirs.
 //
 // If true is passed for overwrite then existing files will be overwritten
-// else an error is reeturned when docDir already exists.
+// else an error is returned when docDir already exists.
 func CopyAllCompanyDocumentFiles(ctx context.Context, conn Conn, companyID uu.ID, backupDir fs.File, overwrite bool) (docDirs []fs.File, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, companyID, backupDir, overwrite)
 

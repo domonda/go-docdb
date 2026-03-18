@@ -2,6 +2,8 @@ package docdb
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"slices"
 
 	"github.com/domonda/go-errs"
@@ -54,22 +56,26 @@ type CreateVersionResult struct {
 // It checks that the version timestamp is not null,
 // that all WriteFiles exist,
 // and that no filename appears in both WriteFiles and RemoveFiles.
-func (r *CreateVersionResult) Validate() error {
-	if r.Version.IsNull() {
-		return errs.New("CreateVersionResult.Version is null")
+func (r *CreateVersionResult) Validate() (err error) {
+	if e := r.Version.Validate(); e != nil {
+		err = errors.Join(err, fmt.Errorf("CreateVersionResult.Version is invalid: %w", e))
 	}
 	for _, wf := range r.WriteFiles {
 		if wf == nil || !wf.Exists() {
-			return errs.Errorf("CreateVersionResult.WriteFiles entry does not exist: %#v", wf)
+			err = errors.Join(err, fmt.Errorf("CreateVersionResult.WriteFiles entry does not exist: %#v", wf))
+			continue
 		}
 		if slices.Contains(r.RemoveFiles, wf.Name()) {
-			return errs.Errorf(
+			err = errors.Join(err, fmt.Errorf(
 				"filename %q in both WriteFiles and RemoveFiles of CreateVersionResult",
 				wf.Name(),
-			)
+			))
 		}
 	}
-	return nil
+	if e := r.NewCompanyID.Validate(); e != nil {
+		err = errors.Join(err, fmt.Errorf("CreateVersionResult.NewCompanyID is invalid: %w", e))
+	}
+	return err
 }
 
 // CreateVersionWriteFiles returns a CreateVersionFunc callback that adds or

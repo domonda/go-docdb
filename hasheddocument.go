@@ -9,27 +9,27 @@ import (
 	"github.com/domonda/go-types/uu"
 )
 
+// HashedDocument is an in-memory representation of a complete document
+// with all versions and file content, keyed by content hash.
+// It is used for backup and restore operations via ReadHashedDocument
+// and Conn.RestoreDocument.
 type HashedDocument struct {
 	ID          uu.ID
 	CompanyID   uu.ID
-	HashedFiles map[string][]byte
-	Versions    map[VersionTime]*HashedVersion
+	HashedFiles map[string][]byte              // content hash -> file data
+	Versions    map[VersionTime]*HashedVersion // version timestamp -> version metadata
 }
 
+// HashedVersion holds the metadata for a single version within a HashedDocument.
 type HashedVersion struct {
 	CommitUserID uu.ID
 	CommitReason string
-	FileHashes   map[string]string // filename -> hash
+	FileHashes   map[string]string // filename -> content hash
 }
 
-// func (v *HashedVersion) HasFile(filename string) bool {
-// 	if v == nil {
-// 		return false
-// 	}
-// 	_, ok := v.FileHashes[filename]
-// 	return ok
-// }
-
+// ReadHashedDocument reads a complete document with all versions and file content
+// from a Conn into a HashedDocument. It validates file sizes and content hashes
+// against the VersionInfo metadata.
 func ReadHashedDocument(ctx context.Context, conn Conn, docID uu.ID) (doc *HashedDocument, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, conn, docID)
 
@@ -78,7 +78,7 @@ func ReadHashedDocument(ctx context.Context, conn Conn, docID uu.ID) (doc *Hashe
 			if hash != versionInfo.Files[filename].Hash {
 				return nil, errs.Errorf("document %s version %s file %q has hash %s, but expected %s according to version info", docID, version, filename, hash, versionInfo.Files[filename].Hash)
 			}
-			doc.HashedFiles[filename] = data
+			doc.HashedFiles[hash] = data
 			v.FileHashes[filename] = hash
 		}
 		doc.Versions[version] = v
@@ -87,15 +87,19 @@ func ReadHashedDocument(ctx context.Context, conn Conn, docID uu.ID) (doc *Hashe
 	return doc, nil
 }
 
+// VersionTimes returns the version timestamps of the document sorted in ascending order.
 func (doc *HashedDocument) VersionTimes() []VersionTime {
 	return slices.SortedFunc(maps.Keys(doc.Versions), func(a, b VersionTime) int {
 		return a.Compare(b)
 	})
 }
 
+// VersionInfo reconstructs a VersionInfo for the given version timestamp
+// by comparing against the previous version to compute added, modified,
+// and removed files. Returns nil if the version does not exist.
 func (doc *HashedDocument) VersionInfo(versionTime VersionTime) *VersionInfo {
 	var (
-		prevVersionTime VersionTime
+		prevVersionTime *VersionTime
 		prevVersion     *HashedVersion
 		version         *HashedVersion
 	)
@@ -103,8 +107,8 @@ func (doc *HashedDocument) VersionInfo(versionTime VersionTime) *VersionInfo {
 	for i, v := range versions {
 		if v.Equal(versionTime) {
 			if i > 0 {
-				prevVersionTime = versions[i-1]
-				prevVersion = doc.Versions[prevVersionTime]
+				prevVersionTime = &versions[i-1]
+				prevVersion = doc.Versions[*prevVersionTime]
 			}
 			version = doc.Versions[versionTime]
 			break
@@ -145,7 +149,7 @@ func (doc *HashedDocument) VersionInfo(versionTime VersionTime) *VersionInfo {
 		}
 	}
 	if prevVersion != nil {
-		for _, prevFilename := range prevVersion.FileHashes {
+		for prevFilename := range prevVersion.FileHashes {
 			if _, ok := version.FileHashes[prevFilename]; !ok {
 				info.RemovedFiles = append(info.RemovedFiles, prevFilename)
 			}

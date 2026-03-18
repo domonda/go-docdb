@@ -22,7 +22,7 @@ func NewConn(documentStore DocumentStore, metadataStore MetadataStore) Conn {
 
 // Conn is an interface for a docdb connection.
 type Conn interface {
-	// DocumentExists returns true if a document with the passed docID exists in
+	// DocumentExists returns true if a document with the passed docID exists
 	DocumentExists(ctx context.Context, docID uu.ID) (exists bool, err error)
 
 	// EnumDocumentIDs calls the passed callback with the ID of every document in the database
@@ -38,10 +38,10 @@ type Conn interface {
 	SetDocumentCompanyID(ctx context.Context, docID, companyID uu.ID) error
 
 	// DocumentVersions returns all version timestamps of a document in ascending order.
-	// Returns nil and no error if the document does not exist or has no versions.
+	// Returns ErrDocumentNotFound if the document does not exist.
 	DocumentVersions(ctx context.Context, docID uu.ID) ([]VersionTime, error)
 
-	// LatestDocumentVersion returns the lates VersionTime of a document
+	// LatestDocumentVersion returns the latest VersionTime of a document
 	LatestDocumentVersion(ctx context.Context, docID uu.ID) (VersionTime, error)
 
 	// DocumentVersionInfo returns the VersionInfo for a VersionTime
@@ -58,15 +58,15 @@ type Conn interface {
 	// will be returned in case of such error conditions.
 	ReadDocumentVersionFile(ctx context.Context, docID uu.ID, version VersionTime, filename string) (data []byte, err error)
 
-	// DeleteDocument deletes all versions of a document
-	// including its workspace directory if checked out.
+	// DeleteDocument deletes all versions and stored files of a document.
+	// Returns wrapped ErrDocumentNotFound in case the document does not exist.
 	DeleteDocument(ctx context.Context, docID uu.ID) error
 
-	// DeleteDocumentVersion deletes a version of a document that must not be checked out
+	// DeleteDocumentVersion deletes a version of a document
 	// and returns the left over versions.
 	// If the version is the only version of the document,
 	// then the document will be deleted and no leftVersions are returned.
-	// Returns wrapped ErrDocumentNotFound, ErrDocumentVersionNotFound, ErrDocumentCheckedOut
+	// Returns wrapped ErrDocumentNotFound and ErrDocumentVersionNotFound
 	// in case of such error conditions.
 	// DeleteDocumentVersion should not be used for normal docdb operations,
 	// just to clean up mistakes or sync database states.
@@ -110,54 +110,12 @@ type Conn interface {
 	// Returns wrapped ErrNoChanges only if no document was changed at all.
 	AddMultiDocumentVersion(ctx context.Context, docIDs uu.IDSlice, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error
 
-	// RestoreDocument
+	// RestoreDocument restores a document from a HashedDocument backup.
+	// If merge is true, existing versions are kept and new versions are added;
+	// if false, the document is replaced entirely.
+	// Returns wrapped ErrNotImplemented if the implementation does not support restoration.
 	RestoreDocument(ctx context.Context, doc *HashedDocument, merge bool) error
 }
-
-// DeprecatedConn has check-out, check-in and checkout directory methods.
-// It is deprecated and will be removed in the future.
-// Use the Conn interface instead.
-type DeprecatedConn interface {
-	Conn
-
-	// DocumentCheckOutStatus returns the CheckOutStatus of a document.
-	// If the document is not checked out, then a nil CheckOutStatus will be returned.
-	// The methods Valid() and String() can be called on a nil CheckOutStatus.
-	// ErrDocumentNotFound is returned if the document does not exist.
-	DocumentCheckOutStatus(ctx context.Context, docID uu.ID) (*CheckOutStatus, error)
-
-	// CheckedOutDocuments returns the CheckOutStatus of all checked out documents.
-	CheckedOutDocuments(ctx context.Context) ([]*CheckOutStatus, error)
-
-	// CheckOutNewDocument creates a new document for a company in checked out state.
-	CheckOutNewDocument(ctx context.Context, docID, companyID, userID uu.ID, reason string) (status *CheckOutStatus, err error)
-
-	// CheckOutDocument checks out a document for a user with a stated reason.
-	// Returns ErrDocumentCheckedOut if the document is already checked out.
-	CheckOutDocument(ctx context.Context, docID, userID uu.ID, reason string) (*CheckOutStatus, error)
-
-	// CancelCheckOutDocument cancels a potential checkout.
-	// No error is returned if the document was not checked out.
-	// If the checkout was created by CheckOutNewDocument,
-	// then the new document is deleted without leaving any history
-	// and the returned lastVersion.IsNull() is true.
-	CancelCheckOutDocument(ctx context.Context, docID uu.ID) (wasCheckedOut bool, lastVersion VersionTime, err error)
-
-	// CheckInDocument checks in a checked out document
-	// and returns the VersionInfo for the newly created version.
-	CheckInDocument(ctx context.Context, docID uu.ID) (*VersionInfo, error)
-
-	// CheckedOutDocumentDir returns a fs.File for the directory
-	// where a document would be checked out.
-	CheckedOutDocumentDir(docID uu.ID) fs.File
-}
-
-// type DebugFileAccessConn interface {
-// 	Conn
-
-// 	DebugGetDocumentDir(docID uu.ID) fs.File
-// 	DebugGetDocumentVersionFile(docID uu.ID, version VersionTime, filename string) (fs.File, error)
-// }
 
 type conn struct {
 	documentStore DocumentStore
@@ -192,15 +150,12 @@ func (c *conn) ReadDocumentVersionFile(ctx context.Context, docID uu.ID, version
 		return nil, err
 	}
 
-	hash := ""
-	for _, item := range versionInfo.Files {
-		if item.Name == filename {
-			hash = item.Hash
-			break
-		}
+	fileInfo, ok := versionInfo.Files[filename]
+	if !ok {
+		return nil, NewErrDocumentFileNotFound(docID, filename)
 	}
 
-	return c.documentStore.ReadDocumentHashFile(ctx, docID, filename, hash)
+	return c.documentStore.ReadDocumentHashFile(ctx, docID, filename, fileInfo.Hash)
 }
 
 func (c *conn) DocumentCompanyID(ctx context.Context, docID uu.ID) (companyID uu.ID, err error) {
@@ -280,8 +235,8 @@ func (c *conn) createDocumentVersion(
 	files []fs.FileReader,
 	onNewVersion OnNewVersionFunc,
 ) (err error) {
-	if version.IsNull() {
-		return errs.New("null version passed to createDocumentVersion")
+	if err := version.Validate(); err != nil {
+		return err
 	}
 	if onNewVersion == nil {
 		return errs.New("nil onNewVersion func passed to createDocumentVersion")
@@ -297,7 +252,7 @@ func (c *conn) createDocumentVersion(
 				for _, item := range versionInfo.Files {
 					hashes = append(hashes, item.Hash)
 				}
-				err = errors.Join(c.documentStore.DeleteDocumentHashes(ctx, docID, hashes))
+				err = errors.Join(err, c.documentStore.DeleteDocumentHashes(ctx, docID, hashes))
 			}
 			err = errors.Join(err, c.metadataStore.DeleteDocument(ctx, docID))
 		}
@@ -446,7 +401,7 @@ func (c *conn) AddMultiDocumentVersion(ctx context.Context, docIDs uu.IDSlice, u
 }
 
 func (c *conn) RestoreDocument(ctx context.Context, doc *HashedDocument, merge bool) error {
-	return ErrNotImplemented
+	return errs.Errorf("RestoreDocument is %w for docdb.conn (DocumentStore+MetadataStore)", ErrNotImplemented)
 }
 
 func safelyCallCreateVersionFunc(

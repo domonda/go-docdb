@@ -35,54 +35,83 @@ func (store *postgresMetadataStore) AddDocumentVersion(
 	addedFilenames := namesFromFileInfos(addedFiles)
 	modifiedFilenames := namesFromFileInfos(modifiedFiles)
 
-	err := db.Exec(
+	// Query the previous version's files so we can build the full file set
+	prevFileRows, err := db.QueryStructSlice[DocumentVersionFile](
 		ctx,
-		/* sql */ `
-		insert into docdb.document_version (
-			id,
-			document_id,
-			company_id,
-			version,
-			prev_version,
-			commit_user_id,
-			commit_reason,
-			added_files,
-			removed_files,
-			modified_files
-		) values (
-			$1,
-			$2,
-			$3,
-			$4,
-			$5,
-			$6,
-			$7,
-			$8,
-			$9,
-			$10
-		)`,
-		id,
+		/*sql*/ `
+		SELECT dvf.*
+		FROM docdb.document_version_file dvf
+		JOIN docdb.document_version dv ON dv.id = dvf.document_version_id
+		WHERE dv.document_id = $1 AND dv.version = $2`,
 		docID,
-		companyID,
-		newVersion,
 		previousVersion,
-		userID,
-		reason,
-		addedFilenames,
-		removedFiles,
-		modifiedFilenames,
 	)
-
 	if err != nil {
 		return nil, err
 	}
 
-	versionFiles := fileInfosIntoDocumentVersionFiles(id, addedFiles, modifiedFiles)
-	if err := db.InsertStructs(
-		ctx,
-		"docdb.document_version_file",
-		versionFiles,
-	); err != nil {
+	// Build full file map: previous files - removed + added/modified
+	files := make(map[string]docdb.FileInfo, len(prevFileRows))
+	for _, pf := range prevFileRows {
+		files[pf.Name] = docdb.FileInfo{Name: pf.Name, Size: pf.Size, Hash: pf.Hash}
+	}
+	for _, name := range removedFiles {
+		delete(files, name)
+	}
+	for _, fi := range addedFiles {
+		files[fi.Name] = *fi
+	}
+	for _, fi := range modifiedFiles {
+		files[fi.Name] = *fi
+	}
+
+	// Build full document_version_file rows for insertion
+	versionFiles := make([]*DocumentVersionFile, 0, len(files))
+	for _, fi := range files {
+		versionFiles = append(versionFiles, &DocumentVersionFile{
+			DocumentVersionID: id,
+			Name:              fi.Name,
+			Size:              fi.Size,
+			Hash:              fi.Hash,
+		})
+	}
+
+	// Insert version and file rows in a single transaction
+	err = db.Transaction(ctx, func(ctx context.Context) error {
+		err := db.Exec(
+			ctx,
+			/*sql*/ `
+			INSERT INTO docdb.document_version (
+				id,
+				document_id,
+				company_id,
+				version,
+				prev_version,
+				commit_user_id,
+				commit_reason,
+				added_files,
+				removed_files,
+				modified_files
+			) VALUES (
+				$1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+			)`,
+			id,
+			docID,
+			companyID,
+			newVersion,
+			previousVersion,
+			userID,
+			reason,
+			addedFilenames,
+			removedFiles,
+			modifiedFilenames,
+		)
+		if err != nil {
+			return err
+		}
+		return db.InsertStructs(ctx, "docdb.document_version_file", versionFiles)
+	})
+	if err != nil {
 		return nil, err
 	}
 
@@ -90,14 +119,14 @@ func (store *postgresMetadataStore) AddDocumentVersion(
 		DocID:         docID,
 		CompanyID:     companyID,
 		Version:       newVersion,
-		PrevVersion:   previousVersion,
+		PrevVersion:   &previousVersion,
 		CommitUserID:  userID,
 		CommitReason:  reason,
 		AddedFiles:    addedFilenames,
 		RemovedFiles:  removedFiles,
 		ModifiedFiles: modifiedFilenames,
+		Files:         files,
 	}, nil
-
 }
 
 func (store *postgresMetadataStore) CreateDocument(
@@ -110,16 +139,21 @@ func (store *postgresMetadataStore) CreateDocument(
 	files []fs.FileReader,
 ) (*docdb.VersionInfo, error) {
 	versionInfo := &docdb.VersionInfo{
-		Version:   version,
-		DocID:     docID,
-		CompanyID: companyID,
+		Version:      version,
+		DocID:        docID,
+		CompanyID:    companyID,
+		CommitUserID: userID,
+		CommitReason: reason,
+		Files:        make(map[string]docdb.FileInfo),
 	}
 
 	docVersion := DocumentVersion{
-		ID:         uu.IDv7(),
-		DocumentID: docID,
-		CompanyID:  companyID,
-		Version:    versionInfo.Version,
+		ID:           uu.IDv7(),
+		DocumentID:   docID,
+		CompanyID:    companyID,
+		Version:      version,
+		CommitUserID: userID,
+		CommitReason: reason,
 	}
 
 	err := db.Transaction(ctx, func(ctx context.Context) error {
@@ -134,17 +168,24 @@ func (store *postgresMetadataStore) CreateDocument(
 		versionFiles := []DocumentVersionFile{}
 
 		for _, file := range files {
-			versionInfo.AddedFiles = append(versionInfo.AddedFiles, file.Name())
 			data, err := file.ReadAll()
 			if err != nil {
 				return err
 			}
 
+			fileInfo := docdb.FileInfo{
+				Name: file.Name(),
+				Size: file.Size(),
+				Hash: docdb.ContentHash(data),
+			}
+			versionInfo.AddedFiles = append(versionInfo.AddedFiles, file.Name())
+			versionInfo.Files[file.Name()] = fileInfo
+
 			versionFiles = append(versionFiles, DocumentVersionFile{
 				DocumentVersionID: docVersion.ID,
-				Name:              file.Name(),
-				Size:              file.Size(),
-				Hash:              docdb.ContentHash(data),
+				Name:              fileInfo.Name,
+				Size:              fileInfo.Size,
+				Hash:              fileInfo.Hash,
 			})
 		}
 
@@ -296,24 +337,18 @@ func (store *postgresMetadataStore) DocumentVersionInfo(ctx context.Context, doc
 	}
 
 	firstRec := records[0]
-	result := &docdb.VersionInfo{
+	return &docdb.VersionInfo{
 		CompanyID:     firstRec.CompanyID,
 		DocID:         firstRec.DocumentID,
 		Version:       firstRec.Version,
-		PrevVersion:   firstRec.Version,
+		PrevVersion:   firstRec.PrevVersion,
 		CommitUserID:  firstRec.CommitUserID,
 		CommitReason:  firstRec.CommitReason,
 		AddedFiles:    firstRec.AddedFiles,
 		ModifiedFiles: firstRec.ModifiedFiles,
 		RemovedFiles:  firstRec.RemovedFiles,
 		Files:         files,
-	}
-
-	if firstRec.PrevVersion != nil {
-		result.PrevVersion = *firstRec.PrevVersion
-	}
-
-	return result, nil
+	}, nil
 }
 
 func (store *postgresMetadataStore) LatestDocumentVersionInfo(ctx context.Context, docID uu.ID) (*docdb.VersionInfo, error) {
@@ -359,7 +394,7 @@ func (store *postgresMetadataStore) LatestDocumentVersionInfo(ctx context.Contex
 		CompanyID:     firstRec.CompanyID,
 		DocID:         firstRec.DocumentID,
 		Version:       firstRec.Version,
-		PrevVersion:   *firstRec.PrevVersion,
+		PrevVersion:   firstRec.PrevVersion,
 		CommitUserID:  firstRec.CommitUserID,
 		CommitReason:  firstRec.CommitReason,
 		AddedFiles:    firstRec.AddedFiles,
@@ -486,20 +521,3 @@ func namesFromFileInfos(files []*docdb.FileInfo) (names []string) {
 	return names
 }
 
-func fileInfosIntoDocumentVersionFiles(documentVersiononID uu.ID, batches ...[]*docdb.FileInfo) (versionFiles []*DocumentVersionFile) {
-	for _, items := range batches {
-		for _, item := range items {
-			versionFiles = append(
-				versionFiles,
-				&DocumentVersionFile{
-					DocumentVersionID: documentVersiononID,
-					Name:              item.Name,
-					Hash:              item.Hash,
-					Size:              item.Size,
-				},
-			)
-		}
-	}
-
-	return versionFiles
-}
