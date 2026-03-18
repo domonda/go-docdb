@@ -301,7 +301,7 @@ func (c *Conn) documentVersions(ctx context.Context, docID uu.ID) (versions []do
 
 	docDir := c.documentDir(docID)
 	if !docDir.IsDir() {
-		return nil, nil
+		return nil, docdb.NewErrDocumentNotFound(docID)
 	}
 	err = enumVersionDirs(ctx, docDir, docID, func(version docdb.VersionTime, dir fs.File) {
 		versions = append(versions, version)

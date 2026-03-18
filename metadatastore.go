@@ -36,7 +36,7 @@ type MetadataStore interface {
 	SetDocumentCompanyID(ctx context.Context, docID, companyID uu.ID) error
 
 	// DocumentVersions returns all version timestamps of a document in ascending order.
-	// Returns nil and no error if the document does not exist or has no versions.
+	// Returns ErrDocumentNotFound if the document does not exist.
 	DocumentVersions(ctx context.Context, docID uu.ID) ([]VersionTime, error)
 
 	// LatestDocumentVersion returns the latest VersionTime of a document.
