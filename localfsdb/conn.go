@@ -783,8 +783,8 @@ func safelyCallOnNewVersionFunc(ctx context.Context, versionInfo *docdb.VersionI
 
 // newVersionInfo builds a VersionInfo by reading file hashes from versionDir
 // and diffing against prevVersionDir (if not "").
-func newVersionInfo(companyID, docID uu.ID, version docdb.VersionTime, prevVersion *docdb.VersionTime, commitUserID uu.ID, commitReason string, versionDir, prevVersionDir fs.File) (versionInfo *docdb.VersionInfo, err error) {
-	defer errs.WrapWithFuncParams(&err, companyID, docID, version, prevVersion, commitUserID, commitReason, versionDir, prevVersionDir)
+func newVersionInfo(ctx context.Context, companyID, docID uu.ID, version docdb.VersionTime, prevVersion *docdb.VersionTime, commitUserID uu.ID, commitReason string, versionDir, prevVersionDir fs.File) (versionInfo *docdb.VersionInfo, err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, companyID, docID, version, prevVersion, commitUserID, commitReason, versionDir, prevVersionDir)
 
 	if (prevVersion == nil) != (prevVersionDir == "") {
 		return nil, errs.New("prevVersion and prevVersionDir must either both be set or both be empty")
@@ -802,7 +802,7 @@ func newVersionInfo(companyID, docID uu.ID, version docdb.VersionTime, prevVersi
 
 	err = versionDir.ListDir(func(file fs.File) error {
 		filename := file.Name()
-		versionInfo.Files[filename], err = docdb.ReadFileInfo(context.Background(), file)
+		versionInfo.Files[filename], err = docdb.ReadFileInfo(ctx, file)
 		return err
 	})
 	if err != nil {
@@ -817,7 +817,7 @@ func newVersionInfo(companyID, docID uu.ID, version docdb.VersionTime, prevVersi
 		prevVersionFiles := make(map[string]docdb.FileInfo)
 		err = prevVersionDir.ListDir(func(file fs.File) error {
 			filename := file.Name()
-			prevVersionFiles[filename], err = docdb.ReadFileInfo(context.Background(), file)
+			prevVersionFiles[filename], err = docdb.ReadFileInfo(ctx, file)
 			return err
 		})
 		if err != nil {
