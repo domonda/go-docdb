@@ -20,7 +20,7 @@ The documents directory uses a UUID-based hierarchical structure (via `uuiddir`)
 documents/
 └── {doc-uuid-path}/              # e.g., ab/cd/ef12/3456/...
     ├── company.id                # Plain text file containing company UUID
-    ├── {version-timestamp}/      # e.g., 2024-01-15T10:30:45.123456Z/
+    ├── {version-timestamp}/      # e.g., 2024-01-15_10-30-45.123/
     │   ├── doc.json              # Document metadata
     │   ├── source.pdf            # Original source file(s)
     │   └── ...                   # Any additional version files
@@ -38,35 +38,35 @@ documents/
     │
     ├── company.id                              # Contains: a1b2c3d4-e5f6-7890-abcd-ef1234567890
     │
-    ├── 2024-11-15T09:00:00.123456789Z/         # Version 1 (initial upload)
+    ├── 2024-11-15_09-00-00.123/                # Version 1 (initial upload)
     │   ├── doc.json
     │   ├── doc.pdf                             # Original invoice
     │   └── extractiondata.json
     │
-    ├── 2024-11-15T09:00:00.123456789Z.json     # VersionInfo for version 1
+    ├── 2024-11-15_09-00-00.123.json            # VersionInfo for version 1
     │                                           # { "AddedFiles": ["doc.json", "doc.pdf", "extractiondata.json"],
     │                                           #   "PrevVersion": null, ... }
     │
-    ├── 2024-11-15T14:30:15.987654321Z/         # Version 2 (OCR data added)
+    ├── 2024-11-15_14-30-15.987/                # Version 2 (OCR data added)
     │   ├── doc.json                            # Updated with OCR results
     │   ├── doc.pdf                             # Unchanged from v1
     │   ├── extractiondata.json                 # Unchanged from v1
     │   └── ocr-data.json                       # New file
     │
-    ├── 2024-11-15T14:30:15.987654321Z.json     # VersionInfo for version 2
+    ├── 2024-11-15_14-30-15.987.json            # VersionInfo for version 2
     │                                           # { "AddedFiles": ["ocr-data.json"],
     │                                           #   "ModifiedFiles": ["doc.json"],
-    │                                           #   "PrevVersion": "2024-11-15T09:00:00.123456789Z", ... }
+    │                                           #   "PrevVersion": "2024-11-15_09-00-00.123", ... }
     │
-    ├── 2024-11-16T11:20:30.555666777Z/         # Version 3 (attachment removed)
+    ├── 2024-11-16_11-20-30.555/                # Version 3 (attachment removed)
     │   ├── doc.json                            # Updated
     │   ├── doc.pdf                             # Unchanged from v2
     │   └── ocr-data.json                       # Unchanged from v2
     │
-    └── 2024-11-16T11:20:30.555666777Z.json     # VersionInfo for version 3
+    └── 2024-11-16_11-20-30.555.json            # VersionInfo for version 3
                                                 # { "RemovedFiles": ["extractiondata.json"],
                                                 #   "ModifiedFiles": ["doc.json"],
-                                                #   "PrevVersion": "2024-11-15T14:30:15.987654321Z", ... }
+                                                #   "PrevVersion": "2024-11-15_14-30-15.987", ... }
 ```
 
 **Version Timeline:**
