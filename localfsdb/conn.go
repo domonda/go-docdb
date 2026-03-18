@@ -858,12 +858,12 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, m
 // It handles a legacy format where ModifiedFiles was misspelled as "ModidfiedFiles".
 // If writeFixedVersion is true and the legacy field is found, the file is rewritten
 // with the corrected field name.
-func readAndFixVersionInfoJSON(file fs.File, writeFixedVersion bool) (versionInfo *docdb.VersionInfo, err error) {
+func readAndFixVersionInfoJSON(ctx context.Context, file fs.File, writeFixedVersion bool) (versionInfo *docdb.VersionInfo, err error) {
 	var i struct {
 		docdb.VersionInfo
 		ModidfiedFiles []string // with typo
 	}
-	err = file.ReadJSON(context.Background(), &i)
+	err = file.ReadJSON(ctx, &i)
 	if err != nil {
 		return nil, err
 	}
