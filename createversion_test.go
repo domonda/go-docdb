@@ -87,6 +87,54 @@ func TestCreateVersionResult_Validate(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "null version and nil WriteFiles entry reports multiple errors",
+			result: &CreateVersionResult{
+				WriteFiles: []fs.FileReader{nil},
+			},
+			wantErr: true,
+		},
+		{
+			name: "valid with multiple WriteFiles",
+			result: &CreateVersionResult{
+				Version: validVersion,
+				WriteFiles: []fs.FileReader{
+					fs.NewMemFile("a.txt", []byte("hello")),
+					fs.NewMemFile("b.txt", []byte("world")),
+					fs.NewMemFile("c.txt", []byte("!")),
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid with empty WriteFiles and RemoveFiles slices",
+			result: &CreateVersionResult{
+				Version:     validVersion,
+				WriteFiles:  []fs.FileReader{},
+				RemoveFiles: []string{},
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid with empty file content",
+			result: &CreateVersionResult{
+				Version:    validVersion,
+				WriteFiles: []fs.FileReader{fs.NewMemFile("empty.txt", nil)},
+			},
+			wantErr: false,
+		},
+		{
+			name: "all WriteFiles overlap with RemoveFiles",
+			result: &CreateVersionResult{
+				Version: validVersion,
+				WriteFiles: []fs.FileReader{
+					fs.NewMemFile("x.txt", []byte("x")),
+					fs.NewMemFile("y.txt", []byte("y")),
+				},
+				RemoveFiles: []string{"x.txt", "y.txt"},
+			},
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
