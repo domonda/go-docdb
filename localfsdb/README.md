@@ -80,7 +80,7 @@ Each version directory contains a complete snapshot of the document at that poin
 
 - **`company.id`**: Contains the UUID of the company that owns this document as plain text. Written when a document is created or when the company is changed via `SetDocumentCompanyID()`.
 
-- **`{version-timestamp}/`**: Directory containing all files for a specific document version. The directory name is a UTC timestamp in RFC3339Nano format (e.g., `2024-01-15T10:30:45.123456789Z`).
+- **`{version-timestamp}/`**: Directory containing all files for a specific document version. The directory name is a UTC timestamp using `docdb.VersionTime` formatted with `VersionTimeFormat` (`2006-01-02_15-04-05.000`), e.g., `2024-01-15_10-30-45.123`.
 
 - **`{version-timestamp}.json`**: VersionInfo metadata file containing:
   - `CompanyID`: Company UUID
@@ -94,35 +94,35 @@ Each version directory contains a complete snapshot of the document at that poin
   - `RemovedFiles`: List of files removed in this version
   - `ModifiedFiles`: List of files modified in this version
 
-  **Example VersionInfo JSON** (`2024-11-15T14:30:15.987654321Z.json`):
+  **Example VersionInfo JSON** (`2024-11-15_14-30-15.987.json`):
   ```json
   {
     "CompanyID": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
     "DocID": "12345678-90ab-cdef-0123-456789abcdef",
-    "Version": "2024-11-15T14:30:15.987654321Z",
-    "PrevVersion": "2024-11-15T09:00:00.123456789Z",
+    "Version": "2024-11-15_14-30-15.987",
+    "PrevVersion": "2024-11-15_09-00-00.123",
     "CommitUserID": "user9876-5432-1098-7654-321098765432",
     "CommitReason": "OCR processing completed",
     "Files": {
       "doc.json": {
         "Name": "doc.json",
         "Size": 2048,
-        "Hash": "sha256:a3f5e8c9d1b2e4f6a7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0"
+        "Hash": "a3f5e8c9d1b2e4f6a7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9"
       },
       "doc.pdf": {
         "Name": "doc.pdf",
         "Size": 524288,
-        "Hash": "sha256:b4a6f9d0e2c3f5a7b8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1"
+        "Hash": "b4a6f9d0e2c3f5a7b8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0"
       },
       "extractiondata.json": {
         "Name": "extractiondata.json",
         "Size": 512,
-        "Hash": "sha256:c5b7a0e1f3d4a6b8c9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2"
+        "Hash": "c5b7a0e1f3d4a6b8c9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1"
       },
       "ocr-data.json": {
         "Name": "ocr-data.json",
         "Size": 4096,
-        "Hash": "sha256:d6c8b1f2a4e5b7c9d0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3"
+        "Hash": "d6c8b1f2a4e5b7c9d0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2"
       }
     },
     "AddedFiles": [
