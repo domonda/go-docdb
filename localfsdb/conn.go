@@ -180,7 +180,7 @@ func (c *Conn) latestDocumentVersionInfo(ctx context.Context, docID uu.ID) (vers
 		return nil, "", errs.Errorf("document %s directory exists but has no version subdirectories: %w", docID, docdb.NewErrDocumentNotFound(docID))
 	}
 
-	versionInfo, _, err = c.documentVersionInfo(docID, latestVersion)
+	versionInfo, _, err = c.documentVersionInfo(ctx, docID, latestVersion)
 	if err != nil {
 		return nil, "", err
 	}
@@ -351,8 +351,8 @@ func enumVersionDirs(ctx context.Context, docDir fs.File, docID uu.ID, callback 
 	})
 }
 
-func (c *Conn) documentVersionInfo(docID uu.ID, version docdb.VersionTime) (versionInfo *docdb.VersionInfo, docDir fs.File, err error) {
-	defer errs.WrapWithFuncParams(&err, docID, version)
+func (c *Conn) documentVersionInfo(ctx context.Context, docID uu.ID, version docdb.VersionTime) (versionInfo *docdb.VersionInfo, docDir fs.File, err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, docID, version)
 
 	if err := version.Validate(); err != nil {
 		return nil, "", err
@@ -364,7 +364,7 @@ func (c *Conn) documentVersionInfo(docID uu.ID, version docdb.VersionTime) (vers
 	}
 
 	infoFile := docDir.Join(version.String() + ".json")
-	versionInfo, err = readAndFixVersionInfoJSON(infoFile, true)
+	versionInfo, err = readAndFixVersionInfoJSON(ctx, infoFile, true)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			log.Warn("Document version JSON file not found").
@@ -402,7 +402,7 @@ func (c *Conn) DocumentVersionInfo(ctx context.Context, docID uu.ID, version doc
 		return nil, err
 	}
 
-	versionInfo, _, err = c.documentVersionInfo(docID, version)
+	versionInfo, _, err = c.documentVersionInfo(ctx, docID, version)
 	if err != nil {
 		return nil, err
 	}
@@ -606,6 +606,7 @@ func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.I
 	// NewVersionInfo reads newVersionDir, this could be optimized
 	// by copying and content hashing the files in one loop
 	versionInfo, err := newVersionInfo(
+		ctx,
 		companyID,
 		docID,
 		newVersion,
@@ -721,6 +722,7 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 	// NewVersionInfo reads newVersionDir and prevVersionDir, this could be optimized
 	// by copying and content hashing the files in one loop
 	versionInfo, err := newVersionInfo(
+		ctx,
 		companyID,
 		docID,
 		result.Version,
