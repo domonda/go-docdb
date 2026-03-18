@@ -10,10 +10,12 @@ import (
 	"github.com/domonda/go-errs"
 )
 
+// FileInfo holds the name, size, and content hash of a single file
+// within a document version.
 type FileInfo struct {
 	Name string
 	Size int64
-	Hash string
+	Hash string // Dropbox-compatible content hash (64 hex characters)
 }
 
 // ContentHash returns a Dropbox compatible 64 hex character

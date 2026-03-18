@@ -11,6 +11,8 @@ import (
 	"github.com/domonda/go-types/uu"
 )
 
+// IdenticalDocumentVersionsOfDrivers returns true if the specified versions
+// of a document have identical VersionInfo across two different Conn implementations.
 func IdenticalDocumentVersionsOfDrivers(ctx context.Context, docID uu.ID, driverA Conn, versionA VersionTime, driverB Conn, versionB VersionTime) (identical bool, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, driverA, versionA, driverB, versionB)
 
@@ -27,6 +29,8 @@ func IdenticalDocumentVersionsOfDrivers(ctx context.Context, docID uu.ID, driver
 	return reflect.DeepEqual(fileInfosA, fileInfosB), nil
 }
 
+// LatestDocumentVersionFileProvider returns a FileProvider for the files
+// of the latest version of a document using the global connection.
 func LatestDocumentVersionFileProvider(ctx context.Context, docID uu.ID) (p FileProvider, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
@@ -38,6 +42,8 @@ func LatestDocumentVersionFileProvider(ctx context.Context, docID uu.ID) (p File
 	return globalConn.DocumentVersionFileProvider(ctx, docID, version)
 }
 
+// FirstDocumentVersionCommitUserID returns the user ID that committed
+// the first version of a document using the global connection.
 func FirstDocumentVersionCommitUserID(ctx context.Context, docID uu.ID) (userID uu.ID, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
@@ -46,7 +52,7 @@ func FirstDocumentVersionCommitUserID(ctx context.Context, docID uu.ID) (userID 
 		return uu.IDNil, err
 	}
 	if len(versions) == 0 {
-		// Should not happend if globalConn is implemented correctly,
+		// Should not happen if globalConn is implemented correctly,
 		// but just in case, return a not found error instead of an index out of range panic.
 		return uu.IDNil, NewErrDocumentNotFound(docID)
 	}
@@ -57,6 +63,8 @@ func FirstDocumentVersionCommitUserID(ctx context.Context, docID uu.ID) (userID 
 	return versionInfo.CommitUserID, nil
 }
 
+// CheckConnDocumentVersionFiles verifies that a document version in conn
+// has exactly the expected files with matching content.
 func CheckConnDocumentVersionFiles(ctx context.Context, conn Conn, docID uu.ID, version VersionTime, expectedFiles []fs.FileReader) (err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, conn, docID, version, expectedFiles)
 

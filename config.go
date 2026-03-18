@@ -12,15 +12,11 @@ var (
 	globalConn = NewConnWithError(errors.New("docdb connection not configured"))
 )
 
-// Configure the database connection
+// Configure sets the global Conn used by all package-level functions.
+// It must be called once at startup before using any document operations.
 func Configure(db Conn) {
 	globalConn = db
 }
 
-// GetConn returns the configured database connection
+// GetConn returns the global Conn set by Configure.
 func GetConn() Conn { return globalConn }
-
-// func GetDebugFileAccessConnOrNil() DebugFileAccessConn {
-// 	d, _ := conn.(DebugFileAccessConn)
-// 	return d
-// }

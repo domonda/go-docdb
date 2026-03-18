@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"slices"
-	"sort"
 	"testing"
 
 	"github.com/ungerik/go-fs"
@@ -167,40 +166,11 @@ func (c *Conn) latestDocumentVersionInfo(ctx context.Context, docID uu.ID) (vers
 	}
 
 	var latestVersion docdb.VersionTime
-	err = docDir.ListDirInfo(func(dirInfo *fs.FileInfo) error {
-		if !dirInfo.IsDir || dirInfo.IsHidden {
-			return nil
-		}
-		version, err := docdb.VersionTimeFromString(dirInfo.Name)
-		if err != nil {
-			log.ErrorCtx(ctx, "Can't parse document sub-directory name as version, skipping version and continuing...").
-				UUID("docID", docID).
-				Str("dirName", dirInfo.Name).
-				Str("dirPath", dirInfo.File.Path()).
-				Err(err).
-				Log()
-			return nil
-		}
-		infoFile := docDir.Join(version.String() + ".json")
-		if !infoFile.Exists() {
-			versionFiles, err := dirInfo.File.ListDirMax(20)
-			if err != nil {
-				log.ErrorCtx(ctx, "Error listing document version directory").Err(err).Log()
-			}
-			log.ErrorCtx(ctx, "Document version directory has no corresponding version info JSON file, skipping version and continuing...").
-				UUID("docID", docID).
-				Str("jsonFile", infoFile.Name()).
-				Str("versionDir", dirInfo.Name).
-				Strs("versionFiles", fs.FileNames(versionFiles)).
-				Str("docDir", docDir.Path()).
-				Log()
-			return nil
-		}
+	err = enumVersionDirs(ctx, docDir, docID, func(version docdb.VersionTime, dir fs.File) {
 		if version.Time.After(latestVersion.Time) {
 			latestVersion = version
-			versionDir = dirInfo.File
+			versionDir = dir
 		}
-		return nil
 	})
 	if err != nil {
 		return nil, "", err
@@ -333,7 +303,21 @@ func (c *Conn) documentVersions(ctx context.Context, docID uu.ID) (versions []do
 	if !docDir.IsDir() {
 		return nil, nil
 	}
-	err = docDir.ListDirInfo(func(dirInfo *fs.FileInfo) error {
+	err = enumVersionDirs(ctx, docDir, docID, func(version docdb.VersionTime, dir fs.File) {
+		versions = append(versions, version)
+	})
+	if err != nil {
+		return nil, err
+	}
+	slices.SortFunc(versions, func(a, b docdb.VersionTime) int { return a.Compare(b) })
+	return versions, nil
+}
+
+// enumVersionDirs lists version subdirectories of docDir that have
+// a corresponding .json info file. It skips directories that can't be
+// parsed as a VersionTime or are missing the info JSON file.
+func enumVersionDirs(ctx context.Context, docDir fs.File, docID uu.ID, callback func(version docdb.VersionTime, dir fs.File)) error {
+	return docDir.ListDirInfo(func(dirInfo *fs.FileInfo) error {
 		if !dirInfo.IsDir || dirInfo.IsHidden {
 			return nil
 		}
@@ -362,14 +346,9 @@ func (c *Conn) documentVersions(ctx context.Context, docID uu.ID) (versions []do
 				Log()
 			return nil
 		}
-		versions = append(versions, version)
+		callback(version, dirInfo.File)
 		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	sort.Slice(versions, func(a, b int) bool { return versions[a].Before(versions[b]) })
-	return versions, nil
 }
 
 func (c *Conn) documentVersionInfo(docID uu.ID, version docdb.VersionTime) (versionInfo *docdb.VersionInfo, docDir fs.File, err error) {
@@ -867,9 +846,9 @@ func newVersionInfo(companyID, docID uu.ID, version docdb.VersionTime, prevVersi
 		}
 	}
 
-	sort.Strings(versionInfo.AddedFiles)
-	sort.Strings(versionInfo.RemovedFiles)
-	sort.Strings(versionInfo.ModifiedFiles)
+	slices.Sort(versionInfo.AddedFiles)
+	slices.Sort(versionInfo.RemovedFiles)
+	slices.Sort(versionInfo.ModifiedFiles)
 
 	return versionInfo, nil
 }

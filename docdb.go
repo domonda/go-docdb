@@ -139,6 +139,8 @@ func ReadDocumentVersionFile(ctx context.Context, docID uu.ID, version VersionTi
 	return globalConn.ReadDocumentVersionFile(ctx, docID, version, filename)
 }
 
+// ReadLatestDocumentVersionFile reads a file from the latest version of a document
+// and returns the file data along with the version timestamp.
 func ReadLatestDocumentVersionFile(ctx context.Context, docID uu.ID, filename string) (data []byte, version VersionTime, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, filename)
 

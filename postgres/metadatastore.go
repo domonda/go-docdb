@@ -86,6 +86,14 @@ func (store *postgresMetadataStore) AddDocumentVersion(
 		return nil, err
 	}
 
+	files := make(map[string]docdb.FileInfo)
+	for _, fi := range addedFiles {
+		files[fi.Name] = *fi
+	}
+	for _, fi := range modifiedFiles {
+		files[fi.Name] = *fi
+	}
+
 	return &docdb.VersionInfo{
 		DocID:         docID,
 		CompanyID:     companyID,
@@ -96,6 +104,7 @@ func (store *postgresMetadataStore) AddDocumentVersion(
 		AddedFiles:    addedFilenames,
 		RemovedFiles:  removedFiles,
 		ModifiedFiles: modifiedFilenames,
+		Files:         files,
 	}, nil
 
 }
@@ -110,16 +119,21 @@ func (store *postgresMetadataStore) CreateDocument(
 	files []fs.FileReader,
 ) (*docdb.VersionInfo, error) {
 	versionInfo := &docdb.VersionInfo{
-		Version:   version,
-		DocID:     docID,
-		CompanyID: companyID,
+		Version:      version,
+		DocID:        docID,
+		CompanyID:    companyID,
+		CommitUserID: userID,
+		CommitReason: reason,
+		Files:        make(map[string]docdb.FileInfo),
 	}
 
 	docVersion := DocumentVersion{
-		ID:         uu.IDv7(),
-		DocumentID: docID,
-		CompanyID:  companyID,
-		Version:    versionInfo.Version,
+		ID:           uu.IDv7(),
+		DocumentID:   docID,
+		CompanyID:    companyID,
+		Version:      version,
+		CommitUserID: userID,
+		CommitReason: reason,
 	}
 
 	err := db.Transaction(ctx, func(ctx context.Context) error {
@@ -134,17 +148,24 @@ func (store *postgresMetadataStore) CreateDocument(
 		versionFiles := []DocumentVersionFile{}
 
 		for _, file := range files {
-			versionInfo.AddedFiles = append(versionInfo.AddedFiles, file.Name())
 			data, err := file.ReadAll()
 			if err != nil {
 				return err
 			}
 
+			fileInfo := docdb.FileInfo{
+				Name: file.Name(),
+				Size: file.Size(),
+				Hash: docdb.ContentHash(data),
+			}
+			versionInfo.AddedFiles = append(versionInfo.AddedFiles, file.Name())
+			versionInfo.Files[file.Name()] = fileInfo
+
 			versionFiles = append(versionFiles, DocumentVersionFile{
 				DocumentVersionID: docVersion.ID,
-				Name:              file.Name(),
-				Size:              file.Size(),
-				Hash:              docdb.ContentHash(data),
+				Name:              fileInfo.Name,
+				Size:              fileInfo.Size,
+				Hash:              fileInfo.Hash,
 			})
 		}
 

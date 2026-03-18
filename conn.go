@@ -264,16 +264,12 @@ type Conn interface {
 	// Returns wrapped ErrNoChanges only if no document was changed at all.
 	AddMultiDocumentVersion(ctx context.Context, docIDs uu.IDSlice, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error
 
-	// RestoreDocument
+	// RestoreDocument restores a document from a HashedDocument backup.
+	// If merge is true, existing versions are kept and new versions are added;
+	// if false, the document is replaced entirely.
+	// Returns wrapped ErrNotImplemented if the implementation does not support restoration.
 	RestoreDocument(ctx context.Context, doc *HashedDocument, merge bool) error
 }
-
-// type DebugFileAccessConn interface {
-// 	Conn
-
-// 	DebugGetDocumentDir(docID uu.ID) fs.File
-// 	DebugGetDocumentVersionFile(docID uu.ID, version VersionTime, filename string) (fs.File, error)
-// }
 
 type conn struct {
 	documentStore DocumentStore
@@ -559,7 +555,7 @@ func (c *conn) AddMultiDocumentVersion(ctx context.Context, docIDs uu.IDSlice, u
 }
 
 func (c *conn) RestoreDocument(ctx context.Context, doc *HashedDocument, merge bool) error {
-	return ErrNotImplemented
+	return errs.Errorf("RestoreDocument is %w for docdb.conn (DocumentStore+MetadataStore)", ErrNotImplemented)
 }
 
 func safelyCallCreateVersionFunc(

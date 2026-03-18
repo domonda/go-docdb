@@ -61,15 +61,9 @@ func (vi *VersionInfo) EqualFiles(other *VersionInfo) bool {
 	if len(vi.Files) != len(other.Files) {
 		return false
 	}
-	for i := range vi.Files {
-		found := false
-		for j := range other.Files {
-			if other.Files[j] == vi.Files[i] {
-				found = true
-				break
-			}
-		}
-		if !found {
+	for name, info := range vi.Files {
+		otherInfo, ok := other.Files[name]
+		if !ok || otherInfo != info {
 			return false
 		}
 	}
