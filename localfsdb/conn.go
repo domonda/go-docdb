@@ -385,7 +385,7 @@ func (c *Conn) documentVersionInfo(docID uu.ID, version docdb.VersionTime) (vers
 	}
 
 	infoFile := docDir.Join(version.String() + ".json")
-	versionInfo, err = docdb.ReadVersionInfoJSON(infoFile, true)
+	versionInfo, err = readAndFixVersionInfoJSON(infoFile, true)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			log.Warn("Document version JSON file not found").
@@ -878,4 +878,32 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, m
 	defer errs.WrapWithFuncParams(&err, ctx, doc, merge)
 
 	return errs.Errorf("RestoreDocument is %w for localfsdb.Conn", docdb.ErrNotImplemented)
+}
+
+// readAndFixVersionInfoJSON reads a VersionInfo from a JSON file.
+// It handles a legacy format where ModifiedFiles was misspelled as "ModidfiedFiles".
+// If writeFixedVersion is true and the legacy field is found, the file is rewritten
+// with the corrected field name.
+func readAndFixVersionInfoJSON(file fs.File, writeFixedVersion bool) (versionInfo *docdb.VersionInfo, err error) {
+	var i struct {
+		docdb.VersionInfo
+		ModidfiedFiles []string // with typo
+	}
+	err = file.ReadJSON(context.Background(), &i)
+	if err != nil {
+		return nil, err
+	}
+	if len(i.ModidfiedFiles) > 0 && len(i.ModifiedFiles) == 0 {
+		i.ModifiedFiles = i.ModidfiedFiles
+		if writeFixedVersion {
+			log.Info("Fixing old VersionInfo format").Str("file", string(file)).Log()
+			err = i.VersionInfo.WriteJSON(file)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			log.Info("Loading old VersionInfo format").Str("file", string(file)).Log()
+		}
+	}
+	return &i.VersionInfo, nil
 }
