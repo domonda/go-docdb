@@ -197,19 +197,19 @@ func DocumentFileExists(ctx context.Context, docID uu.ID, filename string) (exis
 	return file.Exists(), nil
 }
 
-// DeleteDocument deletes all versions of a document
-// including its workspace directory if checked out.
+// DeleteDocument deletes all versions and stored files of a document.
+// Returns wrapped ErrDocumentNotFound in case the document does not exist.
 func DeleteDocument(ctx context.Context, docID uu.ID) (err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
 	return globalConn.DeleteDocument(ctx, docID)
 }
 
-// DeleteDocumentVersion deletes a version of a document that must not be checked out
+// DeleteDocumentVersion deletes a version of a document
 // and returns the left over versions.
 // If the version is the only version of the document,
 // then the document will be deleted and no leftVersions are returned.
-// Returns wrapped ErrDocumentNotFound, ErrDocumentVersionNotFound, ErrDocumentCheckedOut
+// Returns wrapped ErrDocumentNotFound and ErrDocumentVersionNotFound
 // in case of such error conditions.
 // DeleteDocumentVersion should not be used for normal docdb operations,
 // just to clean up mistakes or sync database states.
