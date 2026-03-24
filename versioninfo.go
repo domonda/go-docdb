@@ -2,6 +2,7 @@ package docdb
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	fs "github.com/ungerik/go-fs"
@@ -19,7 +20,7 @@ type VersionInfo struct {
 	// Version is the timestamp identifying this version.
 	Version VersionTime
 	// PrevVersion is the timestamp of the previous version, or nil for the first version.
-	PrevVersion *VersionTime
+	PrevVersion *VersionTime `json:",omitempty"`
 	// CommitUserID is the UUID of the user who committed this version.
 	CommitUserID uu.ID
 	// CommitReason describes why this version was created.
@@ -33,6 +34,34 @@ type VersionInfo struct {
 	RemovedFiles []string
 	// ModifiedFiles lists filenames present in both versions whose content hash differs.
 	ModifiedFiles []string
+}
+
+// UnmarshalJSON implements the json.Unmarshaler interface.
+// It handles historic JSON files where PrevVersion may be
+// an empty string instead of null for the first version.
+func (vi *VersionInfo) UnmarshalJSON(data []byte) error {
+	// Use type alias to get default unmarshaling without infinite recursion
+	type Alias VersionInfo
+	aux := &struct {
+		PrevVersion *string `json:"PrevVersion,omitempty"`
+		*Alias
+	}{
+		Alias: (*Alias)(vi),
+	}
+	err := json.Unmarshal(data, aux)
+	if err != nil {
+		return err
+	}
+	if aux.PrevVersion == nil || *aux.PrevVersion == "" {
+		vi.PrevVersion = nil
+	} else {
+		vt, err := VersionTimeFromString(*aux.PrevVersion)
+		if err != nil {
+			return err
+		}
+		vi.PrevVersion = &vt
+	}
+	return nil
 }
 
 // String returns a short human-readable representation of the VersionInfo.
