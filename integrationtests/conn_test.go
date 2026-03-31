@@ -60,7 +60,7 @@ func TestConn(t *testing.T) {
 			objectExists := s3fixtures.FixtureObjectExists(t)
 			require.True(t, objectExists(newVersion.DocID, newVersion.AddedFiles[0], docdb.ContentHash(newFile.FileData)))
 
-			res, err := db.QueryValue[int](
+			res, err := db.QueryRowAs[int](
 				ctx,
 				/* sql */ `
 				select count(*) from docdb.document_version_file dvf
@@ -126,7 +126,7 @@ func TestConn(t *testing.T) {
 			objectExists := s3fixtures.FixtureObjectExists(t)
 			require.True(t, objectExists(newVersion.DocID, newVersion.ModifiedFiles[0], docdb.ContentHash(modifiedFile.FileData)))
 
-			res, err := db.QueryValue[int](
+			res, err := db.QueryRowAs[int](
 				ctx,
 				/* sql */ `
 				select count(*) from docdb.document_version_file dvf
@@ -189,7 +189,7 @@ func TestConn(t *testing.T) {
 			objectExists := s3fixtures.FixtureObjectExists(t)
 			require.True(t, objectExists(newVersion.DocID, newVersion.RemovedFiles[0], documentVersionFile.Hash))
 
-			res, err := db.QueryValue[int](
+			res, err := db.QueryRowAs[int](
 				ctx,
 				/* sql */ `
 				select count(*) from docdb.document_version_file dvf
@@ -239,7 +239,7 @@ func TestConn(t *testing.T) {
 			require.NoError(t, err)
 
 			// then
-			savedNewVersion, err := db.QueryRowStruct[postgres.DocumentVersion](
+			savedNewVersion, err := db.QueryRowAs[postgres.DocumentVersion](
 				ctx,
 				/* sql */ `
 				select * from docdb.document_version
@@ -294,7 +294,7 @@ func TestConn(t *testing.T) {
 
 			// then
 			require.ErrorContains(t, err, "bug")
-			versions, err := db.QueryValue[int](
+			versions, err := db.QueryRowAs[int](
 				ctx,
 				/* sql */ `
 				select count(*) from docdb.document_version where document_id = $1`,

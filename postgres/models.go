@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/domonda/go-docdb"
+	"github.com/domonda/go-sqldb"
 	"github.com/domonda/go-types/uu"
 )
 
@@ -18,6 +19,8 @@ type Lock struct {
 // DocumentVersionFile represents a single file within a document version
 // as stored in the docdb.document_version_file table.
 type DocumentVersionFile struct {
+	sqldb.TableName `db:"docdb.document_version_file"`
+
 	DocumentVersionID uu.ID  `db:"document_version_id"`
 	Name              string `db:"name"`
 	Size              int64  `db:"size"`
@@ -29,6 +32,8 @@ type DocumentVersionFile struct {
 // DocumentVersion represents a document version row
 // in the docdb.document_version table.
 type DocumentVersion struct {
+	sqldb.TableName `db:"docdb.document_version"`
+
 	ID            uu.ID              `db:"id"`
 	DocumentID    uu.ID              `db:"document_id"`
 	CompanyID     uu.ID              `db:"company_id"`

@@ -56,7 +56,7 @@ func TestCreateDocument(t *testing.T) {
 		require.Nil(t, versionInfo.RemovedFiles)
 		require.Nil(t, versionInfo.PrevVersion)
 
-		savedFiles, err := db.QueryStructSlice[postgres.DocumentVersionFile](
+		savedFiles, err := db.QueryRowsAsSlice[postgres.DocumentVersionFile](
 			ctx,
 			/* sql */ `
 			select dvf.* from docdb.document_version_file dvf
@@ -151,7 +151,7 @@ func TestSetDocumentCompanyID(t *testing.T) {
 		// then
 		require.NoError(t, err)
 
-		savedDocumentVersions, err := db.QueryStructSlice[postgres.DocumentVersion](
+		savedDocumentVersions, err := db.QueryRowsAsSlice[postgres.DocumentVersion](
 			ctx,
 			/* sql */ `select * from docdb.document_version where document_id = $1`,
 			docVersion1.DocumentID,
@@ -524,7 +524,7 @@ func TestDeleteDocument(t *testing.T) {
 
 		// then
 		require.NoError(t, err)
-		count, err := db.QueryValue[int](
+		count, err := db.QueryRowAs[int](
 			ctx,
 			/* sql */ `select count(*) from docdb.document_version where document_id = $1`,
 			doc1Version1.DocumentID,
@@ -532,7 +532,7 @@ func TestDeleteDocument(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 0, count)
 
-		count, err = db.QueryValue[int](
+		count, err = db.QueryRowAs[int](
 			ctx,
 			/* sql */ `select count(*) from docdb.document_version where document_id = $1`,
 			doc2Version.DocumentID,

@@ -37,12 +37,12 @@ var FixtureGlobalConn = fix.New(func(t *testing.T) sqldb.Connection {
 		return conn
 	}
 
-	conn = newConnFromEnv()
+	conn = newConnFromEnv(t.Context())
 	return conn
 })
 
 var FixtureCtxWithTestTx = fix.New(func(t *testing.T) context.Context {
-	tx, err := FixtureGlobalConn(t).Begin(nil, 0)
+	tx, err := FixtureGlobalConn(t).Begin(t.Context(), sqldb.NextTransactionID(), nil)
 	if err != nil {
 		t.Fatalf("Failed to begin the transaction, %v", err)
 		return nil
@@ -78,7 +78,7 @@ func (populator *Populator) DocumentVersion(data ...map[string]any) *postgres.Do
 			AddedFiles:    []string{randomDocName(), randomDocName()},
 			ModifiedFiles: []string{randomDocName(), randomDocName()},
 			RemovedFiles:  []string{randomDocName(), randomDocName()},
-		}, populator, "docdb.document_version", data...)
+		}, populator, data...)
 }
 
 func (populator *Populator) DocumentVersionFile(data ...map[string]any) *postgres.DocumentVersionFile {
@@ -91,7 +91,7 @@ func (populator *Populator) DocumentVersionFile(data ...map[string]any) *postgre
 			Size:              rand.Int63n(10000), //#nosec G404
 			Hash:              docdb.ContentHash(uu.IDv7().Bytes()),
 			DocumentVersion:   docVersion,
-		}, populator, "docdb.document_version_file", data...)
+		}, populator, data...)
 }
 
 func createRecordIfNeeded[T any](
@@ -111,22 +111,16 @@ func createRecordIfNeeded[T any](
 	return createRecord(data...)
 }
 
-func insertRecordWithExtraData[T any](
+func insertRecordWithExtraData[T sqldb.StructWithTableName](
 	baseRecord T,
 	populator *Populator,
-	table string,
 	data ...map[string]any,
 ) *T {
 	record := fillDataIntoStruct(baseRecord, data...)
 
-	err := db.InsertStruct(
-		populator.ctx,
-		table,
-		record,
-	)
-
+	err := db.InsertRowStruct(populator.ctx, *record)
 	if err != nil {
-		populator.t.Fatalf("Failed to insert into table '%s', %v", table, err)
+		populator.t.Fatalf("Failed to insert record: %v", err)
 	}
 
 	return record
@@ -156,7 +150,7 @@ func randomDocName() string {
 
 func p[T any](v T) *T { return &v }
 
-func newConnFromEnv() sqldb.Connection {
+func newConnFromEnv(ctx context.Context) sqldb.Connection {
 	portStr := cmp.Or(os.Getenv("POSTGRES_PORT"), "5432")
 
 	port, err := strconv.ParseUint(portStr, 10, 16)
@@ -174,7 +168,7 @@ func newConnFromEnv() sqldb.Connection {
 		Extra:    map[string]string{"sslmode": "disable"},
 	}
 
-	conn, err := pqconn.New(context.Background(), config)
+	conn, err := pqconn.Connect(ctx, config)
 	if err != nil {
 		panic(err)
 	}

@@ -36,7 +36,7 @@ func (store *postgresMetadataStore) AddDocumentVersion(
 	modifiedFilenames := namesFromFileInfos(modifiedFiles)
 
 	// Query the previous version's files so we can build the full file set
-	prevFileRows, err := db.QueryStructSlice[DocumentVersionFile](
+	prevFileRows, err := db.QueryRowsAsSlice[DocumentVersionFile](
 		ctx,
 		/*sql*/ `
 		SELECT dvf.*
@@ -109,7 +109,7 @@ func (store *postgresMetadataStore) AddDocumentVersion(
 		if err != nil {
 			return err
 		}
-		return db.InsertStructs(ctx, "docdb.document_version_file", versionFiles)
+		return db.InsertRowStructs(ctx, versionFiles)
 	})
 	if err != nil {
 		return nil, err
@@ -157,11 +157,7 @@ func (store *postgresMetadataStore) CreateDocument(
 	}
 
 	err := db.Transaction(ctx, func(ctx context.Context) error {
-		if err := db.InsertStruct(
-			ctx,
-			"docdb.document_version",
-			docVersion,
-		); err != nil {
+		if err := db.InsertRowStruct(ctx, docVersion); err != nil {
 			return err
 		}
 
@@ -189,11 +185,7 @@ func (store *postgresMetadataStore) CreateDocument(
 			})
 		}
 
-		if err := db.InsertStructs(
-			ctx,
-			"docdb.document_version_file",
-			versionFiles,
-		); err != nil {
+		if err := db.InsertRowStructs(ctx, versionFiles); err != nil {
 			return err
 		}
 		return nil
@@ -203,7 +195,7 @@ func (store *postgresMetadataStore) CreateDocument(
 }
 
 func (store *postgresMetadataStore) DocumentCompanyID(ctx context.Context, docID uu.ID) (companyID uu.ID, err error) {
-	return db.QueryValue[uu.ID](
+	return db.QueryRowAs[uu.ID](
 		ctx,
 		/* sql */ `
 		select company_id from docdb.document_version
@@ -216,8 +208,7 @@ func (store *postgresMetadataStore) DocumentCompanyID(ctx context.Context, docID
 }
 
 func (store *postgresMetadataStore) SetDocumentCompanyID(ctx context.Context, docID, companyID uu.ID) error {
-	ids := []uu.ID{}
-	err := db.QueryRows(
+	ids, err := db.QueryRowsAsSlice[uu.ID](
 		ctx,
 		/* sql */ `update docdb.document_version
 		set company_id = $1
@@ -225,8 +216,7 @@ func (store *postgresMetadataStore) SetDocumentCompanyID(ctx context.Context, do
 		returning docdb.document_version.id`,
 		companyID,
 		docID,
-	).ScanSlice(&ids)
-
+	)
 	if err != nil {
 		return err
 	}
@@ -239,9 +229,7 @@ func (store *postgresMetadataStore) SetDocumentCompanyID(ctx context.Context, do
 }
 
 func (store *postgresMetadataStore) DocumentVersions(ctx context.Context, docID uu.ID) ([]docdb.VersionTime, error) {
-	versions := []docdb.VersionTime{}
-
-	err := db.QueryRows(
+	versions, err := db.QueryRowsAsSlice[docdb.VersionTime](
 		ctx,
 		/* sql */ `
 		select version
@@ -250,8 +238,7 @@ func (store *postgresMetadataStore) DocumentVersions(ctx context.Context, docID 
 		order by version desc
 		`,
 		docID,
-	).ScanSlice(&versions)
-
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -264,7 +251,7 @@ func (store *postgresMetadataStore) DocumentVersions(ctx context.Context, docID 
 }
 
 func (store *postgresMetadataStore) LatestDocumentVersion(ctx context.Context, docID uu.ID) (docdb.VersionTime, error) {
-	return db.QueryValue[docdb.VersionTime](
+	return db.QueryRowAs[docdb.VersionTime](
 		ctx,
 		/* sql */ `
 		select version
@@ -278,9 +265,7 @@ func (store *postgresMetadataStore) LatestDocumentVersion(ctx context.Context, d
 }
 
 func (store *postgresMetadataStore) EnumCompanyDocumentIDs(ctx context.Context, companyID uu.ID, callback func(context.Context, uu.ID) error) error {
-	ids := []uu.ID{}
-
-	err := db.QueryRows(
+	ids, err := db.QueryRowsAsSlice[uu.ID](
 		ctx,
 		/* sql */ `
 		select distinct document_id
@@ -288,8 +273,7 @@ func (store *postgresMetadataStore) EnumCompanyDocumentIDs(ctx context.Context, 
 		where company_id = $1
 		`,
 		companyID,
-	).ScanSlice(&ids)
-
+	)
 	if err != nil {
 		return err
 	}
@@ -304,7 +288,7 @@ func (store *postgresMetadataStore) EnumCompanyDocumentIDs(ctx context.Context, 
 }
 
 func (store *postgresMetadataStore) DocumentVersionInfo(ctx context.Context, docID uu.ID, version docdb.VersionTime) (*docdb.VersionInfo, error) {
-	records, err := db.QueryStructSlice[docVersionQueryResult](
+	records, err := db.QueryRowsAsSlice[docVersionQueryResult](
 		ctx,
 		/* sql */ `
 		select *
@@ -352,7 +336,7 @@ func (store *postgresMetadataStore) DocumentVersionInfo(ctx context.Context, doc
 }
 
 func (store *postgresMetadataStore) LatestDocumentVersionInfo(ctx context.Context, docID uu.ID) (*docdb.VersionInfo, error) {
-	records, err := db.QueryStructSlice[docVersionQueryResult](
+	records, err := db.QueryRowsAsSlice[docVersionQueryResult](
 		ctx,
 		/* sql */ `
 		select *
@@ -416,7 +400,7 @@ type docVersionQueryResult struct {
 }
 
 func (store *postgresMetadataStore) DeleteDocument(ctx context.Context, docID uu.ID) error {
-	deleted, err := db.QueryValue[bool](
+	deleted, err := db.QueryRowAs[bool](
 		ctx,
 		/* sql */ `
 		delete from docdb.document_version
@@ -447,7 +431,7 @@ func (store *postgresMetadataStore) DeleteDocumentVersion(
 	err error,
 ) {
 
-	res, err := db.QueryRowStruct[struct {
+	res, err := db.QueryRowAs[struct {
 		DeletedIDs     int      `db:"deleted_ids"`
 		LeftVersions   []string `db:"left_versions"`
 		HashesToDelete []string `db:"hashes_to_delete"`
@@ -520,4 +504,3 @@ func namesFromFileInfos(files []*docdb.FileInfo) (names []string) {
 	}
 	return names
 }
-
