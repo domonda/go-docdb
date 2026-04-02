@@ -164,7 +164,7 @@ func newConnFromEnv(ctx context.Context) sqldb.Connection {
 		Port:     uint16(port),
 		User:     os.Getenv("POSTGRES_USER"),
 		Database: os.Getenv("POSTGRES_DB"),
-		Password: os.Getenv("POSTGRES_PASSWORD"),
+		Password: cmp.Or(os.Getenv("POSTGRES_PASSWORD"), os.Getenv("PGPASSWORD")),
 		Extra:    map[string]string{"sslmode": "disable"},
 	}
 
