@@ -1,18 +1,19 @@
 services:
-  localstack:
-    image: localstack/localstack:s3-latest
+  minio:
+    image: minio/minio:latest
+    command: server /data
     ports:
-      - "127.0.0.1:${LOCALSTACK_PORT-4566}:4566"
+      - "127.0.0.1:${LOCALSTACK_PORT-4566}:9000"
     environment:
-      - DEFAULT_REGION=${AWS_DEFAULT_REGION}
-      - AWS_ACCESS_KEY_ID
-      - AWS_SECRET_ACCESS_KEY
-      - DEBUG=1
+      - MINIO_ROOT_USER=${AWS_ACCESS_KEY_ID}
+      - MINIO_ROOT_PASSWORD=${AWS_SECRET_ACCESS_KEY}
+      - MINIO_REGION=${AWS_DEFAULT_REGION}
     healthcheck:
-      test: [ "CMD-SHELL", "curl http://localhost:4566/_localstack/health" ]
-      timeout: 1s
-      interval: 1s
-      retries: 5
+      test: ["CMD-SHELL", "mc ready local"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 5s
 
   postgres:
     image: postgres:17
@@ -28,4 +29,3 @@ services:
       retries: 5
     ports:
       - "127.0.0.1:${POSTGRES_PORT-5432}:5432"
-  

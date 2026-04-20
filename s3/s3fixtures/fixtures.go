@@ -134,6 +134,7 @@ var FixtureGlobalS3Client = fix.New(func(t *testing.T) *awss3.Client {
 
 	s3Client = awss3.NewFromConfig(cfg, func(o *awss3.Options) {
 		o.BaseEndpoint = p(os.Getenv("AWS_ENDPOINT_URL"))
+		o.UsePathStyle = true
 	})
 
 	return s3Client
