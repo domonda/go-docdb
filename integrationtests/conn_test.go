@@ -22,7 +22,7 @@ func TestConn(t *testing.T) {
 		t.Run("Adds new files to the new version", func(t *testing.T) {
 			// given
 			bucketName := s3fixtures.FixtureCleanBucket(t)
-			documentStore := s3.NewS3DocumentStore(bucketName, s3fixtures.FixtureGlobalS3Client(t))
+			documentStore := s3.NewDocumentStore(bucketName, s3fixtures.FixtureGlobalS3Client(t))
 			conn := docdb.NewConn(
 				documentStore,
 				postgres.NewMetadataStore(),

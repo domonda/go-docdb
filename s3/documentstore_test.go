@@ -64,8 +64,8 @@ func TestDocumentExists(t *testing.T) {
 				_, err := s3fixtures.FixtureGlobalS3Client(t).PutObject(
 					t.Context(),
 					&awss3.PutObjectInput{
-						Bucket: p(bucketName),
-						Key:    p(s3.Key(docID, filename, hash)),
+						Bucket: new(bucketName),
+						Key:    new(s3.Key(docID, filename, hash)),
 						Body:   bytes.NewReader(content),
 					},
 				)
@@ -253,15 +253,16 @@ func TestDocumentHashFileProvider(t *testing.T) {
 		require.Equal(t, content2, savedContent2)
 
 		_, err = fileProvider.ReadFile(t.Context(), "imaginary file")
-		require.ErrorIs(t, err, s3.ErrNoSuchFile)
+		require.ErrorIs(t, err, docdb.NewErrDocumentFileNotFound(docID1, "imaginary file"))
 	})
 
 	t.Run("Empty provider when no hashes", func(t *testing.T) {
 		// given
 		documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
+		docID := uu.IDv7()
 
 		// when
-		fileProvider, err := documentStore.DocumentHashFileProvider(t.Context(), uu.IDv7(), nil)
+		fileProvider, err := documentStore.DocumentHashFileProvider(t.Context(), docID, nil)
 
 		// then
 		require.NoError(t, err)
@@ -275,7 +276,7 @@ func TestDocumentHashFileProvider(t *testing.T) {
 		require.Nil(t, filenames)
 
 		_, err = fileProvider.ReadFile(t.Context(), "b")
-		require.ErrorIs(t, err, s3.ErrNoSuchFile)
+		require.ErrorIs(t, err, docdb.NewErrDocumentFileNotFound(docID, "b"))
 	})
 }
 
@@ -298,8 +299,9 @@ func TestReadDocumentHashFile(t *testing.T) {
 		require.Equal(t, content, result)
 	})
 
-	t.Run("Returns error if file does not exists", func(t *testing.T) {
+	t.Run("Returns ErrDocumentFileNotFound if file does not exist", func(t *testing.T) {
 		// given
+		s3fixtures.FixtureCleanBucket(t)
 		documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
 		docID := uu.IDv7()
 		filename := "doc1.pdf"
@@ -308,7 +310,7 @@ func TestReadDocumentHashFile(t *testing.T) {
 		_, err := documentStore.ReadDocumentHashFile(t.Context(), docID, filename, "hash")
 
 		// then
-		require.Error(t, err)
+		require.ErrorIs(t, err, docdb.NewErrDocumentFileNotFound(docID, filename))
 	})
 }
 
@@ -336,6 +338,19 @@ func TestDeleteDocument(t *testing.T) {
 		require.False(t, exists(docID1, filename1, hash))
 		require.False(t, exists(docID1, filename2, hash))
 		require.True(t, exists(docID2, filename1, hash))
+	})
+
+	t.Run("Returns ErrDocumentNotFound if document does not exist", func(t *testing.T) {
+		// given
+		s3fixtures.FixtureCleanBucket(t)
+		documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
+		docID := uu.IDv7()
+
+		// when
+		err := documentStore.DeleteDocument(t.Context(), docID)
+
+		// then
+		require.ErrorIs(t, err, docdb.NewErrDocumentNotFound(docID))
 	})
 
 	t.Run("Returns error if bucket does not exist", func(t *testing.T) {
@@ -382,6 +397,19 @@ func TestDeleteDocumentVersion(t *testing.T) {
 		require.True(t, exists(docID2, filename1, hash4))
 	})
 
+	t.Run("Returns ErrDocumentNotFound if document does not exist", func(t *testing.T) {
+		// given
+		s3fixtures.FixtureCleanBucket(t)
+		documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
+		docID := uu.IDv7()
+
+		// when
+		err := documentStore.DeleteDocumentHashes(t.Context(), docID, []string{"asd"})
+
+		// then
+		require.ErrorIs(t, err, docdb.NewErrDocumentNotFound(docID))
+	})
+
 	t.Run("Returns error if bucket does not exist", func(t *testing.T) {
 		// when
 		documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
@@ -395,5 +423,3 @@ func TestDeleteDocumentVersion(t *testing.T) {
 		require.Error(t, err)
 	})
 }
-
-func p[T any](v T) *T { return &v }
