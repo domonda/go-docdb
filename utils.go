@@ -34,12 +34,12 @@ func IdenticalDocumentVersionsOfDrivers(ctx context.Context, docID uu.ID, driver
 func LatestDocumentVersionFileProvider(ctx context.Context, docID uu.ID) (p FileProvider, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
-	version, err := globalConn.LatestDocumentVersion(ctx, docID)
+	version, err := GetConn().LatestDocumentVersion(ctx, docID)
 	if err != nil {
 		return nil, err
 	}
 
-	return globalConn.DocumentVersionFileProvider(ctx, docID, version)
+	return GetConn().DocumentVersionFileProvider(ctx, docID, version)
 }
 
 // FirstDocumentVersionCommitUserID returns the user ID that committed
@@ -47,7 +47,7 @@ func LatestDocumentVersionFileProvider(ctx context.Context, docID uu.ID) (p File
 func FirstDocumentVersionCommitUserID(ctx context.Context, docID uu.ID) (userID uu.ID, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
-	versions, err := globalConn.DocumentVersions(ctx, docID)
+	versions, err := GetConn().DocumentVersions(ctx, docID)
 	if err != nil {
 		return uu.IDNil, err
 	}
@@ -56,7 +56,7 @@ func FirstDocumentVersionCommitUserID(ctx context.Context, docID uu.ID) (userID 
 		// but just in case, return a not found error instead of an index out of range panic.
 		return uu.IDNil, NewErrDocumentNotFound(docID)
 	}
-	versionInfo, err := globalConn.DocumentVersionInfo(ctx, docID, versions[0])
+	versionInfo, err := GetConn().DocumentVersionInfo(ctx, docID, versions[0])
 	if err != nil {
 		return uu.IDNil, err
 	}
