@@ -67,19 +67,28 @@ func ReadHashedDocument(ctx context.Context, conn Conn, docID uu.ID) (doc *Hashe
 			return nil, err
 		}
 		for _, filename := range filenames {
+			fileInfo, ok := versionInfo.Files[filename]
+			if !ok {
+				return nil, errs.Errorf("document %s version %s file %q exists in storage but is not tracked in version info", docID, version, filename)
+			}
 			data, err := versionFileProvider.ReadFile(ctx, filename)
 			if err != nil {
 				return nil, err
 			}
-			if int64(len(data)) != versionInfo.Files[filename].Size {
-				return nil, errs.Errorf("document %s version %s file %q has %d bytes, but expected %d bytes according to version info", docID, version, filename, len(data), versionInfo.Files[filename].Size)
+			if int64(len(data)) != fileInfo.Size {
+				return nil, errs.Errorf("document %s version %s file %q has %d bytes, but expected %d bytes according to version info", docID, version, filename, len(data), fileInfo.Size)
 			}
 			hash := ContentHash(data)
-			if hash != versionInfo.Files[filename].Hash {
-				return nil, errs.Errorf("document %s version %s file %q has hash %s, but expected %s according to version info", docID, version, filename, hash, versionInfo.Files[filename].Hash)
+			if hash != fileInfo.Hash {
+				return nil, errs.Errorf("document %s version %s file %q has hash %s, but expected %s according to version info", docID, version, filename, hash, fileInfo.Hash)
 			}
 			doc.HashedFiles[hash] = data
 			v.FileHashes[filename] = hash
+		}
+		for filename := range versionInfo.Files {
+			if _, ok := v.FileHashes[filename]; !ok {
+				return nil, errs.Errorf("document %s version %s file %q is tracked in version info but missing from storage", docID, version, filename)
+			}
 		}
 		doc.Versions[version] = v
 	}
