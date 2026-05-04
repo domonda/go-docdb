@@ -247,13 +247,13 @@ func (conn *proxyConn) AddMultiDocumentVersion(
 func (conn *proxyConn) RestoreDocument(
 	ctx context.Context,
 	doc *docdb.HashedDocument,
-	merge bool,
+	recreate bool,
 ) error {
 	config, err := conn.loadConfig()
 	if err != nil {
 		return err
 	}
-	return conn.getConn(config, doc.CompanyID).RestoreDocument(ctx, doc, merge)
+	return conn.getConn(config, doc.CompanyID).RestoreDocument(ctx, doc, recreate)
 }
 
 func (conn *proxyConn) getConn(config ConfigMap, companyID uu.ID) docdb.Conn {

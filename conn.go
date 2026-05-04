@@ -99,8 +99,30 @@ type Conn interface {
 	AddMultiDocumentVersion(ctx context.Context, docIDs uu.IDSlice, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error
 
 	// RestoreDocument restores a document from a HashedDocument backup.
-	// If merge is true, existing versions are kept and new versions are added;
-	// if false, the document is replaced entirely.
-	// Returns wrapped ErrNotImplemented if the implementation does not support restoration.
-	RestoreDocument(ctx context.Context, doc *HashedDocument, merge bool) error
+	//
+	// The doc is first validated via doc.Validate(); any error is returned
+	// before any state is touched.
+	//
+	// If recreate is true (replace): an existing document with the same ID is
+	// deleted first (including its company-document marker), then recreated
+	// from doc. The on-disk CompanyID after the call equals doc.CompanyID.
+	//
+	// If recreate is false (additive merge):
+	//   - If the document does not exist on disk, it is created from doc —
+	//     identical effect to recreate=true on a non-existing document.
+	//   - If the document exists, its on-disk CompanyID must equal
+	//     doc.CompanyID. On mismatch the call returns an error and changes
+	//     nothing.
+	//   - For every version v in doc.Versions: if v already exists on disk
+	//     it is kept as-is (no overwrite, no error); otherwise it is added.
+	//   - Versions on disk that are not in doc.Versions are kept as-is.
+	//
+	// Each version is written as a single unit (file content + per-version
+	// metadata + company marker). On error mid-restore, partial state created
+	// during the call is rolled back; versions successfully written before
+	// the failing one stay written.
+	//
+	// Returns wrapped ErrNotImplemented if the implementation does not
+	// support restoration.
+	RestoreDocument(ctx context.Context, doc *HashedDocument, recreate bool) error
 }

@@ -27,7 +27,7 @@ type MockConn struct {
 	CreateDocumentMock              func(ctx context.Context, companyID, docID, userID uu.ID, reason string, version VersionTime, files []fs.FileReader, onNewVersion OnNewVersionFunc) error
 	AddDocumentVersionMock          func(ctx context.Context, docID, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error
 	AddMultiDocumentVersionMock     func(ctx context.Context, docIDs uu.IDSlice, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error
-	RestoreDocumentMock             func(ctx context.Context, doc *HashedDocument, merge bool) error
+	RestoreDocumentMock             func(ctx context.Context, doc *HashedDocument, recreate bool) error
 }
 
 func (mock *MockConn) DocumentExists(ctx context.Context, docID uu.ID) (exists bool, err error) {
@@ -93,8 +93,8 @@ func (mock *MockConn) AddMultiDocumentVersion(ctx context.Context, docIDs uu.IDS
 	return mock.AddMultiDocumentVersionMock(ctx, docIDs, userID, reason, createVersion, onNewVersion)
 }
 
-func (mock *MockConn) RestoreDocument(ctx context.Context, doc *HashedDocument, merge bool) error {
-	return mock.RestoreDocumentMock(ctx, doc, merge)
+func (mock *MockConn) RestoreDocument(ctx context.Context, doc *HashedDocument, recreate bool) error {
+	return mock.RestoreDocumentMock(ctx, doc, recreate)
 }
 
 var _ Conn = &MockConn{}

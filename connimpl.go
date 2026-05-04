@@ -302,8 +302,107 @@ func (c *conn) AddMultiDocumentVersion(ctx context.Context, docIDs uu.IDSlice, u
 	return AddMultiDocumentVersionImpl(ctx, c, docIDs, userID, reason, createVersion, onNewVersion)
 }
 
-func (c *conn) RestoreDocument(ctx context.Context, doc *HashedDocument, merge bool) error {
-	return errs.Errorf("RestoreDocument is %w for docdb.conn (DocumentStore+MetadataStore)", ErrNotImplemented)
+func (c *conn) RestoreDocument(ctx context.Context, doc *HashedDocument, recreate bool) (err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, doc, recreate)
+
+	if err = ctx.Err(); err != nil {
+		return err
+	}
+	if err = doc.Validate(); err != nil {
+		return err
+	}
+
+	docExists, err := c.DocumentExists(ctx, doc.ID)
+	if err != nil {
+		return err
+	}
+
+	if recreate && docExists {
+		if err = c.DeleteDocument(ctx, doc.ID); err != nil {
+			return err
+		}
+		docExists = false
+	}
+
+	var existingVersions []VersionTime
+	if !recreate && docExists {
+		currCompanyID, err := c.DocumentCompanyID(ctx, doc.ID)
+		if err != nil {
+			return err
+		}
+		if currCompanyID != doc.CompanyID {
+			return errs.Errorf(
+				"cannot restore document %s into existing document with different companyID: backup %s != on-disk %s",
+				doc.ID, doc.CompanyID, currCompanyID,
+			)
+		}
+		existingVersions, err = c.DocumentVersions(ctx, doc.ID)
+		if err != nil {
+			return err
+		}
+	}
+
+	noopOnNew := func(context.Context, *VersionInfo) error { return nil }
+
+	for _, v := range doc.VersionTimes() {
+		if !recreate && versionTimeIn(existingVersions, v) {
+			continue
+		}
+		hv := doc.Versions[v]
+		files := hashedVersionFiles(doc, hv)
+
+		if !docExists {
+			if err = c.CreateDocument(ctx, doc.CompanyID, doc.ID, hv.CommitUserID, hv.CommitReason, v, files, noopOnNew); err != nil {
+				return err
+			}
+			docExists = true
+			continue
+		}
+
+		// AddDocumentVersion computes its own diff against the latest on-disk
+		// version: pass all backup files as WriteFiles plus an explicit
+		// RemoveFiles list of names absent from the backup.
+		createVersion := func(ctx context.Context, _ uu.ID, _ VersionTime, prevFiles FileProvider) (*CreateVersionResult, error) {
+			prevFilenames, err := prevFiles.ListFiles(ctx)
+			if err != nil {
+				return nil, err
+			}
+			var removeFiles []string
+			for _, name := range prevFilenames {
+				if _, keep := hv.FileHashes[name]; !keep {
+					removeFiles = append(removeFiles, name)
+				}
+			}
+			return &CreateVersionResult{
+				Version:     v,
+				WriteFiles:  files,
+				RemoveFiles: removeFiles,
+			}, nil
+		}
+		if err = c.AddDocumentVersion(ctx, doc.ID, hv.CommitUserID, hv.CommitReason, createVersion, noopOnNew); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// hashedVersionFiles materializes the files of a HashedVersion as in-memory
+// fs.FileReaders backed by the corresponding HashedFiles entries.
+func hashedVersionFiles(doc *HashedDocument, hv *HashedVersion) []fs.FileReader {
+	files := make([]fs.FileReader, 0, len(hv.FileHashes))
+	for filename, hash := range hv.FileHashes {
+		files = append(files, fs.NewMemFile(filename, doc.HashedFiles[hash]))
+	}
+	return files
+}
+
+func versionTimeIn(versions []VersionTime, v VersionTime) bool {
+	for _, e := range versions {
+		if e.Equal(v) {
+			return true
+		}
+	}
+	return false
 }
 
 func safelyCallCreateVersionFunc(

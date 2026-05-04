@@ -319,6 +319,124 @@ func TestConn(t *testing.T) {
 
 		})
 	})
+
+	t.Run("Test RestoreDocument with postgres and S3", func(t *testing.T) {
+		t.Run("recreate=true on a fresh docID restores all versions", func(t *testing.T) {
+			// given: create a document with two versions to back up
+			s3fixtures.FixtureCleanBucket(t)
+			documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
+			conn := docdb.NewConn(documentStore, postgres.NewMetadataStore())
+
+			ctx := pgfixtures.FixtureCtxWithTestTx(t)
+
+			companyID := uu.IDv7()
+			srcDocID := uu.IDv7()
+			userID := uu.IDv7()
+
+			require.NoError(t, conn.CreateDocument(
+				ctx, companyID, srcDocID, userID, "v0",
+				docdb.NewVersionTime(),
+				[]fs.FileReader{fs.NewMemFile("a.txt", []byte("a"))},
+				func(context.Context, *docdb.VersionInfo) error { return nil },
+			))
+			require.NoError(t, conn.AddDocumentVersion(
+				ctx, srcDocID, userID, "v1",
+				func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+					return &docdb.CreateVersionResult{
+						Version:    docdb.NewVersionTime(),
+						WriteFiles: []fs.FileReader{fs.NewMemFile("b.txt", []byte("b"))},
+					}, nil
+				},
+				func(context.Context, *docdb.VersionInfo) error { return nil },
+			))
+
+			backup, err := docdb.ReadHashedDocument(ctx, conn, srcDocID)
+			require.NoError(t, err)
+
+			// when: rewrite the backup to a fresh docID and restore it
+			restoredDocID := uu.IDv7()
+			backup.ID = restoredDocID
+
+			require.NoError(t, conn.RestoreDocument(ctx, backup, true))
+
+			// then: re-reading the restored doc must yield the same backup contents
+			restored, err := docdb.ReadHashedDocument(ctx, conn, restoredDocID)
+			require.NoError(t, err)
+			require.Equal(t, backup.ID, restored.ID)
+			require.Equal(t, backup.CompanyID, restored.CompanyID)
+			require.Equal(t, backup.HashedFiles, restored.HashedFiles)
+			require.Equal(t, len(backup.Versions), len(restored.Versions))
+			for v, hv := range backup.Versions {
+				gotHV, ok := restored.Versions[v]
+				require.True(t, ok, "version %s missing", v)
+				require.Equal(t, hv.CommitReason, gotHV.CommitReason)
+				require.Equal(t, hv.FileHashes, gotHV.FileHashes)
+			}
+		})
+
+		t.Run("recreate=false fills in a deleted version on existing doc", func(t *testing.T) {
+			// given: create a doc with three versions, snapshot the backup, then drop the middle version
+			s3fixtures.FixtureCleanBucket(t)
+			documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
+			conn := docdb.NewConn(documentStore, postgres.NewMetadataStore())
+
+			ctx := pgfixtures.FixtureCtxWithTestTx(t)
+
+			companyID := uu.IDv7()
+			docID := uu.IDv7()
+			userID := uu.IDv7()
+
+			require.NoError(t, conn.CreateDocument(
+				ctx, companyID, docID, userID, "v0",
+				docdb.NewVersionTime(),
+				[]fs.FileReader{fs.NewMemFile("a.txt", []byte("a"))},
+				func(context.Context, *docdb.VersionInfo) error { return nil },
+			))
+			require.NoError(t, conn.AddDocumentVersion(
+				ctx, docID, userID, "v1",
+				func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+					return &docdb.CreateVersionResult{
+						Version:    docdb.NewVersionTime(),
+						WriteFiles: []fs.FileReader{fs.NewMemFile("b.txt", []byte("b"))},
+					}, nil
+				},
+				func(context.Context, *docdb.VersionInfo) error { return nil },
+			))
+			require.NoError(t, conn.AddDocumentVersion(
+				ctx, docID, userID, "v2",
+				func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+					return &docdb.CreateVersionResult{
+						Version:     docdb.NewVersionTime(),
+						RemoveFiles: []string{"a.txt"},
+					}, nil
+				},
+				func(context.Context, *docdb.VersionInfo) error { return nil },
+			))
+
+			backup, err := docdb.ReadHashedDocument(ctx, conn, docID)
+			require.NoError(t, err)
+			require.Equal(t, 3, len(backup.Versions))
+
+			versions, err := conn.DocumentVersions(ctx, docID)
+			require.NoError(t, err)
+			require.Equal(t, 3, len(versions))
+			middleVersion := versions[1]
+			_, err = conn.DeleteDocumentVersion(ctx, docID, middleVersion)
+			require.NoError(t, err)
+
+			// when: merge-restore the original backup
+			require.NoError(t, conn.RestoreDocument(ctx, backup, false))
+
+			// then: the dropped version is back; all three versions are present
+			restored, err := docdb.ReadHashedDocument(ctx, conn, docID)
+			require.NoError(t, err)
+			require.Equal(t, 3, len(restored.Versions))
+			for v := range backup.Versions {
+				_, ok := restored.Versions[v]
+				require.True(t, ok, "version %s missing after merge restore", v)
+			}
+		})
+	})
 }
 
 func p[T any](v T) *T { return &v }

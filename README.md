@@ -123,7 +123,7 @@ type Conn interface {
     DeleteDocument(ctx, docID) error
     DeleteDocumentVersion(ctx, docID, version) (leftVersions []VersionTime, error)
 
-    RestoreDocument(ctx, doc, merge) error
+    RestoreDocument(ctx, doc, recreate) error
 }
 ```
 
@@ -213,6 +213,28 @@ docDirs, err := docdb.CopyAllCompanyDocumentFiles(ctx, conn, companyID, backupDi
 // Resolve a deleted version to the next available version
 validVersion, err := docdb.SubstituteDeletedDocumentVersion(ctx, docID, deletedVersion)
 ```
+
+## Backup & Restore
+
+`HashedDocument` is an in-memory snapshot of a complete document — every version, with file content keyed by content hash:
+
+```go
+// Snapshot a document (verifies every file's size and content hash against VersionInfo)
+backup, err := docdb.ReadHashedDocument(ctx, conn, docID)
+
+// Validate a HashedDocument before passing it on
+err = backup.Validate()
+
+// Restore a document from a HashedDocument backup
+err = conn.RestoreDocument(ctx, backup, recreate)
+```
+
+`recreate` controls how an existing document on the target conn is handled:
+
+- `recreate=true` — replace: if the document already exists it is deleted first, then recreated entirely from the backup. The on-disk `CompanyID` after the call equals `backup.CompanyID`.
+- `recreate=false` — additive merge: the document is created if missing, otherwise existing versions are kept and only the backup versions whose `VersionTime` is not already on disk are added. The on-disk `CompanyID` must equal `backup.CompanyID`, otherwise the call fails without changing anything.
+
+Backends without restore support return wrapped `ErrNotImplemented`.
 
 ## Testing Helpers
 

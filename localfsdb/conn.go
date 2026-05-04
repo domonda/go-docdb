@@ -850,10 +850,156 @@ func newVersionInfo(ctx context.Context, companyID, docID uu.ID, version docdb.V
 	return versionInfo, nil
 }
 
-func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, merge bool) (err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, doc, merge)
+func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, recreate bool) (err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, doc, recreate)
 
-	return errs.Errorf("RestoreDocument is %w for localfsdb.Conn", docdb.ErrNotImplemented)
+	if err = ctx.Err(); err != nil {
+		return err
+	}
+	if err = doc.Validate(); err != nil {
+		return err
+	}
+
+	docWriteMtx.Lock(doc.ID)
+	defer docWriteMtx.Unlock(doc.ID)
+
+	docDir := c.documentDir(doc.ID)
+
+	if recreate && docDir.Exists() {
+		if currCompanyID, e := c.documentCompanyID(ctx, doc.ID); e == nil {
+			if e := uuiddir.Remove(c.companiesDir.Join(currCompanyID.String()), doc.ID); e != nil {
+				return e
+			}
+		}
+		if e := uuiddir.RemoveDir(c.documentsDir, docDir); e != nil {
+			return e
+		}
+	}
+
+	docExisted := docDir.Exists()
+
+	var (
+		existingVersions []docdb.VersionTime
+		prevVersion      *docdb.VersionTime
+		prevVersionDir   fs.File
+	)
+
+	if docExisted {
+		currCompanyID, err := c.documentCompanyID(ctx, doc.ID)
+		if err != nil {
+			return err
+		}
+		if currCompanyID != doc.CompanyID {
+			return errs.Errorf(
+				"cannot restore document %s into existing document with different companyID: backup %s != on-disk %s",
+				doc.ID, doc.CompanyID, currCompanyID,
+			)
+		}
+		existingVersions, err = c.documentVersions(ctx, doc.ID)
+		if err != nil {
+			return err
+		}
+		if len(existingVersions) > 0 {
+			latest := existingVersions[len(existingVersions)-1]
+			prevVersion = &latest
+			prevVersionDir = docDir.Join(latest.String())
+		}
+	} else {
+		if err = docDir.MakeAllDirs(); err != nil {
+			return err
+		}
+		if err = docDir.Join("company.id").WriteAll(doc.CompanyID.StringBytes()); err != nil {
+			return err
+		}
+		if err = c.makeCompanyDocumentDir(doc.CompanyID, doc.ID); err != nil {
+			return err
+		}
+	}
+
+	var (
+		createdVersionDirs []fs.File
+		createdInfoFiles   []fs.File
+	)
+	defer func() {
+		if err == nil {
+			return
+		}
+		for _, d := range createdVersionDirs {
+			if rmErr := d.RemoveRecursive(); rmErr != nil {
+				err = errors.Join(err, rmErr)
+			}
+		}
+		for _, f := range createdInfoFiles {
+			if f.Exists() {
+				if rmErr := f.Remove(); rmErr != nil {
+					err = errors.Join(err, rmErr)
+				}
+			}
+		}
+		if !docExisted {
+			err = errors.Join(err, c.removeCompanyDocumentDirIfExists(doc.CompanyID, doc.ID))
+			if docDir.Exists() {
+				err = errors.Join(err, uuiddir.RemoveDir(c.documentsDir, docDir))
+			}
+		}
+	}()
+
+	for _, v := range doc.VersionTimes() {
+		if !recreate && versionTimeIn(existingVersions, v) {
+			cur := v
+			prevVersion = &cur
+			prevVersionDir = docDir.Join(v.String())
+			continue
+		}
+
+		versionDir := docDir.Join(v.String())
+		if err = versionDir.MakeDir(); err != nil {
+			return err
+		}
+		createdVersionDirs = append(createdVersionDirs, versionDir)
+
+		hv := doc.Versions[v]
+		for filename, hash := range hv.FileHashes {
+			if err = versionDir.Join(filename).WriteAllContext(ctx, doc.HashedFiles[hash]); err != nil {
+				return err
+			}
+		}
+
+		versionInfo, viErr := newVersionInfo(
+			ctx,
+			doc.CompanyID,
+			doc.ID,
+			v,
+			prevVersion,
+			hv.CommitUserID,
+			hv.CommitReason,
+			versionDir,
+			prevVersionDir,
+		)
+		if viErr != nil {
+			return viErr
+		}
+
+		infoFile := docDir.Joinf("%s.json", v)
+		if err = versionInfo.WriteJSON(infoFile); err != nil {
+			return err
+		}
+		createdInfoFiles = append(createdInfoFiles, infoFile)
+
+		cur := v
+		prevVersion = &cur
+		prevVersionDir = versionDir
+	}
+	return nil
+}
+
+func versionTimeIn(versions []docdb.VersionTime, v docdb.VersionTime) bool {
+	for _, e := range versions {
+		if e.Equal(v) {
+			return true
+		}
+	}
+	return false
 }
 
 // readAndFixVersionInfoJSON reads a VersionInfo from a JSON file.

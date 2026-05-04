@@ -475,6 +475,120 @@ func TestAddDocumentVersion(t *testing.T) {
 	}
 }
 
+func TestRestoreDocument(t *testing.T) {
+	var (
+		ctx          = t.Context()
+		companyID    = uu.IDFrom("3a4f1c2e-7b8d-4e9a-b1c2-d3e4f5a6b7c8")
+		otherCompID  = uu.IDFrom("9f8e7d6c-5b4a-4210-bedc-ba9876543210")
+		docID        = uu.IDFrom("11111111-2222-4333-8444-555555555555")
+		userID       = uu.IDFrom("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
+		version0     = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+		version1     = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.001")
+		version2     = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.002")
+		noopOnNew    = func(context.Context, *docdb.VersionInfo) error { return nil }
+	)
+
+	setup := func(t *testing.T) (*localfsdb.Conn, *docdb.HashedDocument) {
+		t.Helper()
+		conn := localfsdb.NewTestConn(t)
+		require.NoError(t, conn.CreateDocument(
+			ctx, companyID, docID, userID, "v0",
+			version0, newTestMemFiles("a.txt"),
+			noopOnNew,
+		))
+		require.NoError(t, conn.AddDocumentVersion(
+			ctx, docID, userID, "v1",
+			func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+				return &docdb.CreateVersionResult{
+					Version:    version1,
+					WriteFiles: newTestMemFiles("b.txt"),
+				}, nil
+			},
+			noopOnNew,
+		))
+		require.NoError(t, conn.AddDocumentVersion(
+			ctx, docID, userID, "v2",
+			func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+				return &docdb.CreateVersionResult{
+					Version:     version2,
+					RemoveFiles: []string{"a.txt"},
+				}, nil
+			},
+			noopOnNew,
+		))
+		backup, err := docdb.ReadHashedDocument(ctx, conn, docID)
+		require.NoError(t, err)
+		return conn, backup
+	}
+
+	assertMatches := func(t *testing.T, target docdb.Conn, backup *docdb.HashedDocument) {
+		t.Helper()
+		got, err := docdb.ReadHashedDocument(ctx, target, backup.ID)
+		require.NoError(t, err)
+		require.Equal(t, backup.ID, got.ID)
+		require.Equal(t, backup.CompanyID, got.CompanyID)
+		require.Equal(t, backup.HashedFiles, got.HashedFiles)
+		require.Equal(t, len(backup.Versions), len(got.Versions))
+		for v, hv := range backup.Versions {
+			gotHV, ok := got.Versions[v]
+			require.True(t, ok, "version %s missing", v)
+			require.Equal(t, hv.CommitUserID, gotHV.CommitUserID)
+			require.Equal(t, hv.CommitReason, gotHV.CommitReason)
+			require.Equal(t, hv.FileHashes, gotHV.FileHashes)
+		}
+	}
+
+	t.Run("recreate=true on fresh conn", func(t *testing.T) {
+		_, backup := setup(t)
+		target := localfsdb.NewTestConn(t)
+		require.NoError(t, target.RestoreDocument(ctx, backup, true))
+		assertMatches(t, target, backup)
+	})
+
+	t.Run("recreate=false on fresh conn", func(t *testing.T) {
+		_, backup := setup(t)
+		target := localfsdb.NewTestConn(t)
+		require.NoError(t, target.RestoreDocument(ctx, backup, false))
+		assertMatches(t, target, backup)
+	})
+
+	t.Run("recreate=true replaces modified existing", func(t *testing.T) {
+		target, backup := setup(t)
+		_, err := target.DeleteDocumentVersion(ctx, docID, version1)
+		require.NoError(t, err)
+		require.NoError(t, target.RestoreDocument(ctx, backup, true))
+		assertMatches(t, target, backup)
+	})
+
+	t.Run("recreate=false fills in missing version, keeps existing", func(t *testing.T) {
+		target, backup := setup(t)
+		_, err := target.DeleteDocumentVersion(ctx, docID, version1)
+		require.NoError(t, err)
+		require.NoError(t, target.RestoreDocument(ctx, backup, false))
+		assertMatches(t, target, backup)
+	})
+
+	t.Run("recreate=false skips already-present versions", func(t *testing.T) {
+		target, backup := setup(t)
+		// All versions present — restore should be a no-op.
+		require.NoError(t, target.RestoreDocument(ctx, backup, false))
+		assertMatches(t, target, backup)
+	})
+
+	t.Run("recreate=false errors on companyID mismatch", func(t *testing.T) {
+		target, backup := setup(t)
+		backup.CompanyID = otherCompID
+		err := target.RestoreDocument(ctx, backup, false)
+		require.Error(t, err)
+	})
+
+	t.Run("rejects invalid HashedDocument", func(t *testing.T) {
+		target := localfsdb.NewTestConn(t)
+		err := target.RestoreDocument(ctx, &docdb.HashedDocument{}, true)
+		require.Error(t, err)
+	})
+}
+
 func newTestMemFiles(filenames ...string) []fs.FileReader {
 	files := make([]fs.FileReader, len(filenames))
 	for i, filename := range filenames {

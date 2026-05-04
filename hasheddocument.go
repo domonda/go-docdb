@@ -2,6 +2,8 @@ package docdb
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"maps"
 	"slices"
 
@@ -25,6 +27,44 @@ type HashedVersion struct {
 	CommitUserID uu.ID
 	CommitReason string
 	FileHashes   map[string]string // filename -> content hash
+}
+
+// Validate returns an error if the HashedDocument is structurally invalid.
+// It checks for nil receiver, invalid IDs, empty Versions, invalid VersionTime,
+// nil HashedVersion entries, and FileHashes references that have no corresponding
+// entry in HashedFiles. All encountered problems are joined with errors.Join.
+func (doc *HashedDocument) Validate() error {
+	if doc == nil {
+		return errs.New("nil HashedDocument")
+	}
+	var err error
+	if e := doc.ID.Validate(); e != nil {
+		err = errors.Join(err, fmt.Errorf("HashedDocument.ID is invalid: %w", e))
+	}
+	if e := doc.CompanyID.Validate(); e != nil {
+		err = errors.Join(err, fmt.Errorf("HashedDocument.CompanyID is invalid: %w", e))
+	}
+	if len(doc.Versions) == 0 {
+		err = errors.Join(err, errs.New("HashedDocument has no versions"))
+	}
+	for v, hv := range doc.Versions {
+		if e := v.Validate(); e != nil {
+			err = errors.Join(err, fmt.Errorf("HashedDocument version %s is invalid: %w", v, e))
+		}
+		if hv == nil {
+			err = errors.Join(err, fmt.Errorf("HashedDocument version %s has nil HashedVersion", v))
+			continue
+		}
+		for filename, hash := range hv.FileHashes {
+			if _, ok := doc.HashedFiles[hash]; !ok {
+				err = errors.Join(err, fmt.Errorf(
+					"HashedDocument version %s file %q references missing hash %s",
+					v, filename, hash,
+				))
+			}
+		}
+	}
+	return err
 }
 
 // ReadHashedDocument reads a complete document with all versions and file content

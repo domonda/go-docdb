@@ -82,6 +82,6 @@ func (c errConn) AddMultiDocumentVersion(ctx context.Context, docIDs uu.IDSlice,
 	return c.err
 }
 
-func (c errConn) RestoreDocument(ctx context.Context, doc *HashedDocument, merge bool) error {
+func (c errConn) RestoreDocument(ctx context.Context, doc *HashedDocument, recreate bool) error {
 	return c.err
 }
