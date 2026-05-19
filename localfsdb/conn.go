@@ -538,6 +538,68 @@ func (c *Conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version d
 	return leftVersions, err
 }
 
+// diagnosePathConflict walks targetPath from the leaf toward basePath looking
+// for the first non-directory entry. If found, returns an [docdb.ErrPathConflict]
+// describing the offending on-disk entry; otherwise returns nil. basePath is
+// the inclusive lower bound of the walk and is never inspected itself.
+//
+// Used to enrich [os.ErrExist] errors from MakeAllDirs so operators can see
+// which exact path component is occupied by a regular file, symlink, or other
+// non-directory entry.
+func diagnosePathConflict(companyID, docID uu.ID, basePath, targetPath fs.File) error {
+	cur := targetPath
+	for cur.Path() != basePath.Path() {
+		info := cur.Info()
+		if info.Exists {
+			if info.IsDir {
+				return nil
+			}
+			entryType := "irregular entry"
+			switch {
+			case info.IsRegular:
+				entryType = "regular file"
+			case fs.Local.IsSymbolicLink(cur.LocalPath()):
+				entryType = "symbolic link"
+			}
+			return docdb.NewErrPathConflict(
+				docID, companyID,
+				string(targetPath),
+				string(cur),
+				entryType,
+				info.Size,
+				info.Modified,
+			)
+		}
+		parent := cur.Dir()
+		if parent.Path() == cur.Path() {
+			return nil
+		}
+		cur = parent
+	}
+	return nil
+}
+
+// wrapMakeAllDirsErr returns origErr enriched with a [docdb.ErrPathConflict]
+// when a non-directory entry can be located along targetPath. The original
+// error is preserved via [errors.Join] so log searches for the underlying
+// "file already exists" / "file is not a directory" / "not a directory"
+// messages still match.
+//
+// Runs unconditionally on any non-nil origErr because the underlying failure
+// can surface as [os.ErrExist] (ErrAlreadyExists wrap), [syscall.ENOTDIR]
+// (raw os.MkdirAll), or [fs.ErrIsNotDirectory] (go-fs Stat path) depending
+// on which code path triggered it. The diagnose walk does its own Stat per
+// component, so a no-op (no non-dir found) leaves origErr untouched.
+func wrapMakeAllDirsErr(companyID, docID uu.ID, basePath, targetPath fs.File, origErr error) error {
+	if origErr == nil {
+		return nil
+	}
+	if conflict := diagnosePathConflict(companyID, docID, basePath, targetPath); conflict != nil {
+		return errors.Join(origErr, conflict)
+	}
+	return origErr
+}
+
 func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, newVersion docdb.VersionTime, files []fs.FileReader, onNewVersion docdb.OnNewVersionFunc) (err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, companyID, docID, userID, reason, newVersion, files, onNewVersion)
 
@@ -583,7 +645,7 @@ func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.I
 
 	err = newVersionDir.MakeAllDirs()
 	if err != nil {
-		return err
+		return wrapMakeAllDirsErr(companyID, docID, c.documentsDir, newVersionDir, err)
 	}
 
 	err = docDir.Join("company.id").WriteAll(companyID.StringBytes())
@@ -593,7 +655,7 @@ func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.I
 
 	err = c.makeCompanyDocumentDir(companyID, docID)
 	if err != nil {
-		return err
+		return wrapMakeAllDirsErr(companyID, docID, c.companiesDir.Join(companyID.String()), c.companyDocumentDir(companyID, docID), err)
 	}
 
 	for _, file := range files {

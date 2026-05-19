@@ -3,6 +3,9 @@ package localfsdb_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -477,15 +480,15 @@ func TestAddDocumentVersion(t *testing.T) {
 
 func TestRestoreDocument(t *testing.T) {
 	var (
-		ctx          = t.Context()
-		companyID    = uu.IDFrom("3a4f1c2e-7b8d-4e9a-b1c2-d3e4f5a6b7c8")
-		otherCompID  = uu.IDFrom("9f8e7d6c-5b4a-4210-bedc-ba9876543210")
-		docID        = uu.IDFrom("11111111-2222-4333-8444-555555555555")
-		userID       = uu.IDFrom("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
-		version0     = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
-		version1     = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.001")
-		version2     = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.002")
-		noopOnNew    = func(context.Context, *docdb.VersionInfo) error { return nil }
+		ctx         = t.Context()
+		companyID   = uu.IDFrom("3a4f1c2e-7b8d-4e9a-b1c2-d3e4f5a6b7c8")
+		otherCompID = uu.IDFrom("9f8e7d6c-5b4a-4210-bedc-ba9876543210")
+		docID       = uu.IDFrom("11111111-2222-4333-8444-555555555555")
+		userID      = uu.IDFrom("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
+		version0    = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+		version1    = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.001")
+		version2    = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.002")
+		noopOnNew   = func(context.Context, *docdb.VersionInfo) error { return nil }
 	)
 
 	setup := func(t *testing.T) (*localfsdb.Conn, *docdb.HashedDocument) {
@@ -633,3 +636,145 @@ func newFileInfo(filename string, data []byte) docdb.FileInfo {
 // 		slices.Equal(a.RemovedFiles, b.RemovedFiles) &&
 // 		slices.Equal(a.ModifiedFiles, b.ModifiedFiles)
 // }
+
+func TestCreateDocument_PathConflict(t *testing.T) {
+	// given a fresh localfsdb conn and an orphan regular file planted at one
+	// of the UUID-split path components under companies/{companyID}/
+	tmp := fs.File(t.TempDir())
+	documentsDir := tmp.Join("documents")
+	companiesDir := tmp.Join("companies")
+	require.NoError(t, documentsDir.MakeDir())
+	require.NoError(t, companiesDir.MakeDir())
+
+	conn := localfsdb.NewConn(documentsDir, companiesDir)
+
+	var (
+		companyID = uu.IDFrom("6f296458-24cd-4146-ac3a-33ca885a993e")
+		docID     = uu.IDFrom("c538ac93-2cf0-49a9-8378-22cd48b5ab84")
+		userID    = uu.IDFrom("ce6f0867-0172-4ffc-a0c0-c5878b921171")
+		version   = docdb.MustVersionTimeFromString("2023-01-01_00-00-00.000")
+	)
+
+	// Plant a regular file at companies/{companyID}/c5/38a/c93/2cf049a9
+	// (the 4th UUID-split level of docID c538ac93-2cf0-49a9-8378-22cd48b5ab84,
+	// which would normally be a directory). This mirrors the on-disk state
+	// that produces "file already exists" errors in production.
+	orphanParent := companiesDir.Join(companyID.String(), "c5", "38a", "c93")
+	require.NoError(t, orphanParent.MakeAllDirs())
+	orphanContent := []byte("orphan regular file")
+	require.NoError(t, orphanParent.Join("2cf049a9").WriteAll(orphanContent))
+
+	// when CreateDocument runs against that state
+	err := conn.CreateDocument(
+		t.Context(),
+		companyID,
+		docID,
+		userID,
+		"TestCreateDocument_PathConflict",
+		version,
+		nil,
+		func(ctx context.Context, vi *docdb.VersionInfo) error { return nil },
+	)
+
+	// then the returned error matches os.ErrExist and is unwrappable as
+	// docdb.ErrPathConflict carrying the offending path's details
+	require.Error(t, err)
+	require.ErrorIs(t, err, os.ErrExist)
+
+	var conflict docdb.ErrPathConflict
+	require.ErrorAs(t, err, &conflict)
+	require.Equal(t, docID, conflict.DocID())
+	require.Equal(t, companyID, conflict.CompanyID())
+	require.Equal(t, "regular file", conflict.EntryType())
+	require.Equal(t, int64(len(orphanContent)), conflict.Size())
+	require.Contains(t, conflict.ConflictPath(), "/c5/38a/c93/2cf049a9")
+}
+
+// TestCreateDocument_ConcurrentSharedPathPrefix exercises the TOCTOU race
+// inside [fs.File.MakeAllDirs] that surfaces in production as a "file
+// already exists" error on what's actually a valid (empty) directory.
+//
+// Scenario: many email-import attachments processed in parallel against
+// the same company. Each gets a fresh UUIDv7 docID, but adjacent IDs
+// share the time-prefix bits, so their uuiddir paths overlap at multiple
+// upper levels. Two goroutines concurrently calling MakeAllDirs on
+// sibling leaf paths race on creating the shared intermediate
+// directories; the loser sees os.Mkdir EEXIST and (pre-fix) returns
+// [fs.ErrAlreadyExists] even though the path is now a valid directory.
+//
+// The fix in [fs.File.MakeDir] re-stats the path on EEXIST and treats
+// "exists as a directory" as success (compatible with os.MkdirAll). This
+// test runs N concurrent CreateDocument calls with manually-constructed
+// docIDs that share the first 16 hex chars (= the first 4 uuiddir levels)
+// and asserts that all succeed.
+func TestCreateDocument_ConcurrentSharedPathPrefix(t *testing.T) {
+	const (
+		concurrency = 32
+		// All docIDs share these first 16 hex chars (the 4-level uuiddir
+		// prefix); the last 16 hex chars vary per goroutine.
+		sharedPrefix = "c538ac932cf049a9"
+	)
+
+	conn := localfsdb.NewTestConn(t)
+	companyID := uu.IDFrom("6f296458-24cd-4146-ac3a-33ca885a993e")
+	userID := uu.IDFrom("ce6f0867-0172-4ffc-a0c0-c5878b921171")
+	version := docdb.MustVersionTimeFromString("2023-01-01_00-00-00.000")
+
+	// given a set of docIDs sharing the first 4 uuiddir levels
+	docIDs := make([]uu.ID, concurrency)
+	for i := range docIDs {
+		suffix := fmt.Sprintf("%016x", uint64(i+1)<<48|0xab)
+		raw := sharedPrefix + suffix
+		var b [16]byte
+		for j := range b {
+			_, err := fmt.Sscanf(raw[2*j:2*j+2], "%x", &b[j])
+			require.NoError(t, err)
+		}
+		id, err := uu.IDFromBytes(b[:])
+		require.NoError(t, err)
+		docIDs[i] = id
+	}
+
+	// when each docID is created concurrently for the same company
+	var (
+		wg    sync.WaitGroup
+		mu    sync.Mutex
+		errs  []error
+		ready = make(chan struct{})
+	)
+	wg.Add(concurrency)
+	for _, id := range docIDs {
+		go func(docID uu.ID) {
+			defer wg.Done()
+			<-ready
+			err := conn.CreateDocument(
+				t.Context(),
+				companyID,
+				docID,
+				userID,
+				"TestCreateDocument_ConcurrentSharedPathPrefix",
+				version,
+				nil,
+				func(ctx context.Context, vi *docdb.VersionInfo) error { return nil },
+			)
+			if err != nil {
+				mu.Lock()
+				errs = append(errs, fmt.Errorf("docID %s: %w", docID, err))
+				mu.Unlock()
+			}
+		}(id)
+	}
+	close(ready)
+	wg.Wait()
+
+	// then every CreateDocument call must succeed; without the race fix,
+	// some goroutines hit "file already exists" on a shared intermediate dir
+	require.Empty(t, errs, "concurrent CreateDocument with shared path prefix produced errors")
+
+	// and every doc must be readable back through the conn
+	for _, id := range docIDs {
+		gotCompanyID, err := conn.DocumentCompanyID(t.Context(), id)
+		require.NoError(t, err, "doc %s not readable after create", id)
+		require.Equal(t, companyID, gotCompanyID, "doc %s mapped to wrong company", id)
+	}
+}

@@ -12,7 +12,7 @@ require (
 	github.com/domonda/go-types v0.0.0-20260407122242-520e92819b01
 	github.com/domonda/golog v1.0.7
 	github.com/stretchr/testify v1.11.1
-	github.com/ungerik/go-fs v0.0.0-20260408084638-5d85cd7ab9af
+	github.com/ungerik/go-fs v0.0.0-20260519122754-65e3c83e7b40
 )
 
 require (
@@ -40,7 +40,7 @@ require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/domonda/go-encjson v1.0.0 // indirect
 	github.com/domonda/go-sqldb v1.1.0
-	github.com/fsnotify/fsnotify v1.9.0 // indirect
+	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/invopop/jsonschema v0.13.0 // indirect
 	github.com/lib/pq v1.12.3 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
@@ -51,7 +51,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
-	golang.org/x/sys v0.43.0 // indirect
+	golang.org/x/sys v0.44.0 // indirect
 	golang.org/x/term v0.42.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
