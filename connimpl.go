@@ -343,8 +343,9 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *HashedDocument, recreat
 	}
 
 	noopOnNew := func(context.Context, *VersionInfo) error { return nil }
+	versionTimes := doc.VersionTimes()
 
-	for _, v := range doc.VersionTimes() {
+	for i, v := range versionTimes {
 		if !recreate && versionTimeIn(existingVersions, v) {
 			continue
 		}
@@ -359,27 +360,45 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *HashedDocument, recreat
 			continue
 		}
 
-		// AddDocumentVersion computes its own diff against the latest on-disk
-		// version: pass all backup files as WriteFiles plus an explicit
-		// RemoveFiles list of names absent from the backup.
-		createVersion := func(ctx context.Context, _ uu.ID, _ VersionTime, prevFiles FileProvider) (*CreateVersionResult, error) {
-			prevFilenames, err := prevFiles.ListFiles(ctx)
-			if err != nil {
-				return nil, err
-			}
-			var removeFiles []string
-			for _, name := range prevFilenames {
-				if _, keep := hv.FileHashes[name]; !keep {
-					removeFiles = append(removeFiles, name)
-				}
-			}
-			return &CreateVersionResult{
-				Version:     v,
-				WriteFiles:  files,
-				RemoveFiles: removeFiles,
-			}, nil
+		// Merge-restore: diff against the backup's predecessor rather than
+		// the DB's latest, so middle versions don't trip AddDocumentVersion's
+		// strictly-after ordering check. Call metadataStore directly because
+		// (*conn).AddDocumentVersion enforces newVersion > latestOnDisk.
+		var (
+			prevVersion VersionTime
+			prevHashes  map[string]string
+		)
+		if i > 0 {
+			prevVersion = versionTimes[i-1]
+			prevHashes = doc.Versions[prevVersion].FileHashes
 		}
-		if err = c.AddDocumentVersion(ctx, doc.ID, hv.CommitUserID, hv.CommitReason, createVersion, noopOnNew); err != nil {
+
+		var (
+			addedFiles    []*FileInfo
+			modifiedFiles []*FileInfo
+			removedFiles  []string
+		)
+		for filename, hash := range hv.FileHashes {
+			fi := &FileInfo{Name: filename, Size: int64(len(doc.HashedFiles[hash])), Hash: hash}
+			if prevHash, ok := prevHashes[filename]; !ok {
+				addedFiles = append(addedFiles, fi)
+			} else if prevHash != hash {
+				modifiedFiles = append(modifiedFiles, fi)
+			}
+		}
+		for prevFilename := range prevHashes {
+			if _, ok := hv.FileHashes[prevFilename]; !ok {
+				removedFiles = append(removedFiles, prevFilename)
+			}
+		}
+
+		if _, err = c.metadataStore.AddDocumentVersion(
+			ctx, v, prevVersion, doc.ID, doc.CompanyID, hv.CommitUserID,
+			hv.CommitReason, addedFiles, modifiedFiles, removedFiles,
+		); err != nil {
+			return err
+		}
+		if err = c.documentStore.CreateDocument(ctx, doc.ID, v, files); err != nil {
 			return err
 		}
 	}
