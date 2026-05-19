@@ -474,14 +474,14 @@ func (store *postgresMetadataStore) DeleteDocumentVersion(
 				and version = $2
 			returning id
 		)
+		-- Aggregate each CTE independently so an empty left_versions
+		-- or hashes_to_delete does not zero-out the deleted_ids count
+		-- via Cartesian-product collapse. Cast version::text so the
+		-- result column matches the []string scan target.
 		select
-			array_agg(distinct left_versions) as left_versions,
-			array_agg(distinct hashes_to_delete) as hashes_to_delete,
-			count(deleted_ids) as deleted_ids
-		from
-			left_versions,
-			hashes_to_delete,
-			deleted_ids
+			coalesce((select array_agg(distinct version::text) from left_versions), '{}'::text[]) as left_versions,
+			coalesce((select array_agg(distinct hash) from hashes_to_delete), '{}'::text[]) as hashes_to_delete,
+			(select count(*)::int from deleted_ids) as deleted_ids
 		`,
 		docID,
 		version,
