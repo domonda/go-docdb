@@ -445,12 +445,28 @@ func (store *postgresMetadataStore) DeleteDocumentVersion(
 			order by version
 		),
 		hashes_to_delete as (
-			select hash from docdb.document_version_file dvf
+			-- Hashes referenced only by the version being deleted.
+			-- Files in docdb.document_version_file represent the full
+			-- per-version file set (carry-forward + adds + mods), so
+			-- naïvely returning every file of the deleted version would
+			-- also wipe blobs still referenced by sibling versions and
+			-- corrupt them on the documentStore side.
+			select dvf.hash
+			from docdb.document_version_file dvf
 			join docdb.document_version dv
 				on dvf.document_version_id = dv.id
 				and dv.document_id = $1
 				and dv.version = $2
-			order by hash
+			where not exists (
+				select 1
+				from docdb.document_version_file other_dvf
+				join docdb.document_version other_dv
+					on other_dvf.document_version_id = other_dv.id
+					and other_dv.document_id = $1
+					and other_dv.version != $2
+				where other_dvf.hash = dvf.hash
+			)
+			order by dvf.hash
 		),
 		deleted_ids as (
 			delete from docdb.document_version
