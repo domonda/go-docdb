@@ -64,6 +64,8 @@ type routerConn struct {
 	allConns         []docdb.Conn
 }
 
+var _ docdb.Conn = (*routerConn)(nil)
+
 func (r *routerConn) DocumentExists(ctx context.Context, docID uu.ID) (exists bool, err error) {
 	conn, err := r.connForDocID(ctx, docID)
 	if err != nil {

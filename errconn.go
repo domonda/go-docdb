@@ -18,6 +18,8 @@ type errConn struct {
 	err error
 }
 
+var _ Conn = errConn{}
+
 func (c errConn) DocumentExists(context.Context, uu.ID) (bool, error) {
 	return false, c.err
 }

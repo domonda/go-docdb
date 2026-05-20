@@ -28,6 +28,8 @@ type conn struct {
 	metadataStore MetadataStore
 }
 
+var _ docdb.Conn = (*conn)(nil)
+
 func (c *conn) DocumentExists(ctx context.Context, docID uu.ID) (exists bool, err error) {
 	return c.documentStore.DocumentExists(ctx, docID)
 }
