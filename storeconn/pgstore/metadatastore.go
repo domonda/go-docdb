@@ -1,4 +1,4 @@
-package postgres
+package pgstore
 
 import (
 	"context"
@@ -10,9 +10,10 @@ import (
 	"github.com/domonda/go-types/uu"
 
 	"github.com/domonda/go-docdb"
+	"github.com/domonda/go-docdb/storeconn"
 )
 
-func NewMetadataStore() docdb.MetadataStore {
+func NewMetadataStore() storeconn.MetadataStore {
 	return &postgresMetadataStore{}
 }
 

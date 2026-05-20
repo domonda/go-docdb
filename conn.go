@@ -2,9 +2,12 @@ package docdb
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"github.com/ungerik/go-fs"
 
+	"github.com/domonda/go-errs"
 	"github.com/domonda/go-types/uu"
 )
 
@@ -125,4 +128,66 @@ type Conn interface {
 	// Returns wrapped ErrNotImplemented if the implementation does not
 	// support restoration.
 	RestoreDocument(ctx context.Context, doc *HashedDocument, recreate bool) error
+}
+
+// AddMultiDocumentVersionImpl adds a new version to each document in docIDs
+// by calling conn.AddDocumentVersion for each one sequentially.
+//
+// It is the shared implementation for Conn.AddMultiDocumentVersion.
+// Conn implementations that can't provide native multi-document atomicity
+// should delegate to this function.
+//
+// Documents with no file changes (ErrNoChanges from AddDocumentVersion) are skipped.
+// Returns ErrNoChanges only if no document was changed at all.
+//
+// Atomicity is achieved by tracking each successfully created version and,
+// on any error, rolling back all of them via conn.DeleteDocumentVersion.
+// Any rollback errors are joined to the returned error.
+func AddMultiDocumentVersionImpl(ctx context.Context, conn Conn, docIDs uu.IDSlice, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) (err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, docIDs, userID, reason, createVersion, onNewVersion)
+
+	type createdVersion struct {
+		docID   uu.ID
+		version VersionTime
+	}
+	var created []createdVersion
+
+	defer func() {
+		if r := recover(); r != nil {
+			err = errs.AsErrorWithDebugStack(r)
+		}
+		if err != nil {
+			for _, cv := range created {
+				_, deleteErr := conn.DeleteDocumentVersion(ctx, cv.docID, cv.version)
+				if deleteErr != nil {
+					err = errors.Join(err, fmt.Errorf("failed to undo new document version of atomic multi-document operation: %w", deleteErr))
+				}
+			}
+		}
+	}()
+
+	for _, docID := range docIDs {
+		err = conn.AddDocumentVersion(ctx, docID, userID, reason, createVersion, func(ctx context.Context, versionInfo *VersionInfo) error {
+			err := onNewVersion(ctx, versionInfo)
+			if err == nil {
+				created = append(created, createdVersion{
+					docID:   versionInfo.DocID,
+					version: versionInfo.Version,
+				})
+			}
+			return err
+		})
+		if err != nil {
+			// Skip documents that have no changes,
+			// only return ErrNoChanges if no document was changed at all.
+			if errors.Is(err, ErrNoChanges) {
+				continue
+			}
+			return err
+		}
+	}
+	if len(created) == 0 {
+		return ErrNoChanges
+	}
+	return nil
 }

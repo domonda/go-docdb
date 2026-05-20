@@ -1,4 +1,4 @@
-package postgres
+package pgstore
 
 import (
 	"context"
@@ -6,10 +6,11 @@ import (
 	"github.com/ungerik/go-fs"
 
 	"github.com/domonda/go-docdb"
+	"github.com/domonda/go-docdb/storeconn"
 	"github.com/domonda/go-types/uu"
 )
 
-func NewReadOnlyMetadataStore() docdb.MetadataStore {
+func NewReadOnlyMetadataStore() storeconn.MetadataStore {
 	return &readonlyMetadataStore{}
 }
 

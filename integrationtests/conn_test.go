@@ -4,15 +4,16 @@ import (
 	"context"
 	"testing"
 
-	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/stretchr/testify/require"
 	"github.com/ungerik/go-fs"
 
 	"github.com/domonda/go-docdb"
-	"github.com/domonda/go-docdb/postgres"
-	"github.com/domonda/go-docdb/postgres/pgfixtures"
-	"github.com/domonda/go-docdb/s3"
-	"github.com/domonda/go-docdb/s3/s3fixtures"
+	"github.com/domonda/go-docdb/storeconn"
+	"github.com/domonda/go-docdb/storeconn/pgstore"
+	"github.com/domonda/go-docdb/storeconn/pgstore/pgfixtures"
+	"github.com/domonda/go-docdb/storeconn/s3store"
+	"github.com/domonda/go-docdb/storeconn/s3store/s3fixtures"
 	"github.com/domonda/go-sqldb/db"
 	"github.com/domonda/go-types/uu"
 )
@@ -22,10 +23,10 @@ func TestConn(t *testing.T) {
 		t.Run("Adds new files to the new version", func(t *testing.T) {
 			// given
 			bucketName := s3fixtures.FixtureCleanBucket(t)
-			documentStore := s3.NewDocumentStore(bucketName, s3fixtures.FixtureGlobalS3Client(t))
-			conn := docdb.NewConn(
+			documentStore := s3store.NewDocumentStore(bucketName, s3fixtures.FixtureGlobalS3Client(t))
+			conn := storeconn.New(
 				documentStore,
-				postgres.NewMetadataStore(),
+				pgstore.NewMetadataStore(),
 			)
 			populator := pgfixtures.FixturePopulator(t)
 			documentVersionFile := populator.DocumentVersionFile()
@@ -81,9 +82,9 @@ func TestConn(t *testing.T) {
 		t.Run("Adds modified files to the new version", func(t *testing.T) {
 			// given
 			documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
-			conn := docdb.NewConn(
+			conn := storeconn.New(
 				documentStore,
-				postgres.NewMetadataStore(),
+				pgstore.NewMetadataStore(),
 			)
 			populator := pgfixtures.FixturePopulator(t)
 			content := []byte("a")
@@ -147,9 +148,9 @@ func TestConn(t *testing.T) {
 		t.Run("Adds removed files to the new version", func(t *testing.T) {
 			// given
 			documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
-			conn := docdb.NewConn(
+			conn := storeconn.New(
 				documentStore,
-				postgres.NewMetadataStore(),
+				pgstore.NewMetadataStore(),
 			)
 			populator := pgfixtures.FixturePopulator(t)
 			content := []byte("a")
@@ -210,9 +211,9 @@ func TestConn(t *testing.T) {
 		t.Run("Basic document version data is correct", func(t *testing.T) {
 			// given
 			documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
-			conn := docdb.NewConn(
+			conn := storeconn.New(
 				documentStore,
-				postgres.NewMetadataStore(),
+				pgstore.NewMetadataStore(),
 			)
 			populator := pgfixtures.FixturePopulator(t)
 			documentVersion := populator.DocumentVersion()
@@ -239,7 +240,7 @@ func TestConn(t *testing.T) {
 			require.NoError(t, err)
 
 			// then
-			savedNewVersion, err := db.QueryRowAs[postgres.DocumentVersion](
+			savedNewVersion, err := db.QueryRowAs[pgstore.DocumentVersion](
 				ctx,
 				/* sql */ `
 				select * from docdb.document_version
@@ -264,9 +265,9 @@ func TestConn(t *testing.T) {
 			// given
 			documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
 			bucketName := s3fixtures.FixtureCleanBucket(t)
-			conn := docdb.NewConn(
+			conn := storeconn.New(
 				documentStore,
-				postgres.NewMetadataStore(),
+				pgstore.NewMetadataStore(),
 			)
 			populator := pgfixtures.FixturePopulator(t)
 			documentVersion := populator.DocumentVersion()
@@ -308,9 +309,9 @@ func TestConn(t *testing.T) {
 
 			response, err := s3client.ListObjectsV2(
 				ctx,
-				&awss3.ListObjectsV2Input{
-					Bucket: p(bucketName),
-					Prefix: p(documentVersion.DocumentID.String() + "/"),
+				&s3.ListObjectsV2Input{
+					Bucket: new(bucketName),
+					Prefix: new(documentVersion.DocumentID.String() + "/"),
 				},
 			)
 
@@ -325,7 +326,7 @@ func TestConn(t *testing.T) {
 			// given: create a document with two versions to back up
 			s3fixtures.FixtureCleanBucket(t)
 			documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
-			conn := docdb.NewConn(documentStore, postgres.NewMetadataStore())
+			conn := storeconn.New(documentStore, pgstore.NewMetadataStore())
 
 			ctx := pgfixtures.FixtureCtxWithTestTx(t)
 
@@ -378,7 +379,7 @@ func TestConn(t *testing.T) {
 			// given: create a doc with three versions, snapshot the backup, then drop the middle version
 			s3fixtures.FixtureCleanBucket(t)
 			documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
-			conn := docdb.NewConn(documentStore, postgres.NewMetadataStore())
+			conn := storeconn.New(documentStore, pgstore.NewMetadataStore())
 
 			ctx := pgfixtures.FixtureCtxWithTestTx(t)
 
@@ -438,5 +439,3 @@ func TestConn(t *testing.T) {
 		})
 	})
 }
-
-func p[T any](v T) *T { return &v }

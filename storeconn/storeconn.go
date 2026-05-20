@@ -1,18 +1,22 @@
-package docdb
+// Package storeconn provides a docdb.Conn implementation that combines
+// a DocumentStore for file content storage with a MetadataStore
+// for version metadata.
+package storeconn
 
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/domonda/go-errs"
 	"github.com/domonda/go-types/uu"
 	"github.com/ungerik/go-fs"
+
+	"github.com/domonda/go-docdb"
 )
 
-// NewConn returns a new Conn that uses the provided DocumentStore
+// New returns a new docdb.Conn that uses the provided DocumentStore
 // for file storage and MetadataStore for version metadata.
-func NewConn(documentStore DocumentStore, metadataStore MetadataStore) Conn {
+func New(documentStore DocumentStore, metadataStore MetadataStore) docdb.Conn {
 	return &conn{
 		documentStore: documentStore,
 		metadataStore: metadataStore,
@@ -32,7 +36,7 @@ func (c *conn) EnumDocumentIDs(ctx context.Context, callback func(context.Contex
 	return c.documentStore.EnumDocumentIDs(ctx, callback)
 }
 
-func (c *conn) DocumentVersionFileProvider(ctx context.Context, docID uu.ID, version VersionTime) (FileProvider, error) {
+func (c *conn) DocumentVersionFileProvider(ctx context.Context, docID uu.ID, version docdb.VersionTime) (docdb.FileProvider, error) {
 	versionInfo, err := c.metadataStore.DocumentVersionInfo(ctx, docID, version)
 	if err != nil {
 		return nil, err
@@ -46,7 +50,7 @@ func (c *conn) DocumentVersionFileProvider(ctx context.Context, docID uu.ID, ver
 	return c.documentStore.DocumentHashFileProvider(ctx, docID, hashes)
 }
 
-func (c *conn) ReadDocumentVersionFile(ctx context.Context, docID uu.ID, version VersionTime, filename string) (data []byte, err error) {
+func (c *conn) ReadDocumentVersionFile(ctx context.Context, docID uu.ID, version docdb.VersionTime, filename string) (data []byte, err error) {
 	versionInfo, err := c.metadataStore.DocumentVersionInfo(ctx, docID, version)
 	if err != nil {
 		return nil, err
@@ -54,7 +58,7 @@ func (c *conn) ReadDocumentVersionFile(ctx context.Context, docID uu.ID, version
 
 	fileInfo, ok := versionInfo.Files[filename]
 	if !ok {
-		return nil, NewErrDocumentFileNotFound(docID, filename)
+		return nil, docdb.NewErrDocumentFileNotFound(docID, filename)
 	}
 
 	return c.documentStore.ReadDocumentHashFile(ctx, docID, filename, fileInfo.Hash)
@@ -68,11 +72,11 @@ func (c *conn) SetDocumentCompanyID(ctx context.Context, docID, companyID uu.ID)
 	return c.metadataStore.SetDocumentCompanyID(ctx, docID, companyID)
 }
 
-func (c *conn) DocumentVersions(ctx context.Context, docID uu.ID) ([]VersionTime, error) {
+func (c *conn) DocumentVersions(ctx context.Context, docID uu.ID) ([]docdb.VersionTime, error) {
 	return c.metadataStore.DocumentVersions(ctx, docID)
 }
 
-func (c *conn) LatestDocumentVersion(ctx context.Context, docID uu.ID) (VersionTime, error) {
+func (c *conn) LatestDocumentVersion(ctx context.Context, docID uu.ID) (docdb.VersionTime, error) {
 	return c.metadataStore.LatestDocumentVersion(ctx, docID)
 }
 
@@ -80,11 +84,11 @@ func (c *conn) EnumCompanyDocumentIDs(ctx context.Context, companyID uu.ID, call
 	return c.metadataStore.EnumCompanyDocumentIDs(ctx, companyID, callback)
 }
 
-func (c *conn) DocumentVersionInfo(ctx context.Context, docID uu.ID, version VersionTime) (*VersionInfo, error) {
+func (c *conn) DocumentVersionInfo(ctx context.Context, docID uu.ID, version docdb.VersionTime) (*docdb.VersionInfo, error) {
 	return c.metadataStore.DocumentVersionInfo(ctx, docID, version)
 }
 
-func (c *conn) LatestDocumentVersionInfo(ctx context.Context, docID uu.ID) (*VersionInfo, error) {
+func (c *conn) LatestDocumentVersionInfo(ctx context.Context, docID uu.ID) (*docdb.VersionInfo, error) {
 	return c.metadataStore.LatestDocumentVersionInfo(ctx, docID)
 }
 
@@ -100,7 +104,7 @@ func (c *conn) DeleteDocument(ctx context.Context, docID uu.ID) error {
 	return nil
 }
 
-func (c *conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version VersionTime) (leftVersions []VersionTime, err error) {
+func (c *conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version docdb.VersionTime) (leftVersions []docdb.VersionTime, err error) {
 	leftVersions, hashesToDelete, err := c.metadataStore.DeleteDocumentVersion(ctx, docID, version)
 
 	if err != nil {
@@ -120,9 +124,9 @@ func (c *conn) CreateDocument(
 	docID,
 	userID uu.ID,
 	reason string,
-	version VersionTime,
+	version docdb.VersionTime,
 	files []fs.FileReader,
-	onNewVersion OnNewVersionFunc,
+	onNewVersion docdb.OnNewVersionFunc,
 ) error {
 	return c.createDocumentVersion(ctx, companyID, docID, userID, reason, version, files, onNewVersion)
 }
@@ -133,9 +137,9 @@ func (c *conn) createDocumentVersion(
 	docID,
 	userID uu.ID,
 	reason string,
-	version VersionTime,
+	version docdb.VersionTime,
 	files []fs.FileReader,
-	onNewVersion OnNewVersionFunc,
+	onNewVersion docdb.OnNewVersionFunc,
 ) (err error) {
 	if err := version.Validate(); err != nil {
 		return err
@@ -144,7 +148,7 @@ func (c *conn) createDocumentVersion(
 		return errs.New("nil onNewVersion func passed to createDocumentVersion")
 	}
 
-	var versionInfo *VersionInfo
+	var versionInfo *docdb.VersionInfo
 
 	defer func() {
 		errs.RecoverPanicAsErrorWithFuncParams(&err, ctx, companyID, docID, userID, reason, version, files, onNewVersion)
@@ -178,8 +182,8 @@ func (c *conn) AddDocumentVersion(
 	docID,
 	userID uu.ID,
 	reason string,
-	createVersion CreateVersionFunc,
-	onNewVersion OnNewVersionFunc,
+	createVersion docdb.CreateVersionFunc,
+	onNewVersion docdb.OnNewVersionFunc,
 ) (err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, userID, reason, createVersion, onNewVersion)
 
@@ -229,8 +233,8 @@ func (c *conn) AddDocumentVersion(
 
 	companyID := result.NewCompanyID.GetOr(latestVersionInfo.CompanyID)
 
-	addedFiles := []*FileInfo{}
-	modifiedFiles := []*FileInfo{}
+	addedFiles := []*docdb.FileInfo{}
+	modifiedFiles := []*docdb.FileInfo{}
 
 	for _, file := range result.WriteFiles {
 		data, err := file.ReadAll()
@@ -238,7 +242,7 @@ func (c *conn) AddDocumentVersion(
 			return err
 		}
 
-		fileInfo := &FileInfo{Name: file.Name(), Size: file.Size(), Hash: ContentHash(data)}
+		fileInfo := &docdb.FileInfo{Name: file.Name(), Size: file.Size(), Hash: docdb.ContentHash(data)}
 		if fileExists, _ := fileProvider.HasFile(file.Name()); fileExists {
 			modifiedFiles = append(modifiedFiles, fileInfo)
 		} else {
@@ -298,11 +302,11 @@ func (c *conn) AddDocumentVersion(
 	return err
 }
 
-func (c *conn) AddMultiDocumentVersion(ctx context.Context, docIDs uu.IDSlice, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error {
-	return AddMultiDocumentVersionImpl(ctx, c, docIDs, userID, reason, createVersion, onNewVersion)
+func (c *conn) AddMultiDocumentVersion(ctx context.Context, docIDs uu.IDSlice, userID uu.ID, reason string, createVersion docdb.CreateVersionFunc, onNewVersion docdb.OnNewVersionFunc) error {
+	return docdb.AddMultiDocumentVersionImpl(ctx, c, docIDs, userID, reason, createVersion, onNewVersion)
 }
 
-func (c *conn) RestoreDocument(ctx context.Context, doc *HashedDocument, recreate bool) (err error) {
+func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, recreate bool) (err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, doc, recreate)
 
 	if err = ctx.Err(); err != nil {
@@ -324,7 +328,7 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *HashedDocument, recreat
 		docExists = false
 	}
 
-	var existingVersions []VersionTime
+	var existingVersions []docdb.VersionTime
 	if !recreate && docExists {
 		currCompanyID, err := c.DocumentCompanyID(ctx, doc.ID)
 		if err != nil {
@@ -342,7 +346,7 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *HashedDocument, recreat
 		}
 	}
 
-	noopOnNew := func(context.Context, *VersionInfo) error { return nil }
+	noopOnNew := func(context.Context, *docdb.VersionInfo) error { return nil }
 	versionTimes := doc.VersionTimes()
 
 	for i, v := range versionTimes {
@@ -365,7 +369,7 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *HashedDocument, recreat
 		// strictly-after ordering check. Call metadataStore directly because
 		// (*conn).AddDocumentVersion enforces newVersion > latestOnDisk.
 		var (
-			prevVersion VersionTime
+			prevVersion docdb.VersionTime
 			prevHashes  map[string]string
 		)
 		if i > 0 {
@@ -374,12 +378,12 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *HashedDocument, recreat
 		}
 
 		var (
-			addedFiles    []*FileInfo
-			modifiedFiles []*FileInfo
+			addedFiles    []*docdb.FileInfo
+			modifiedFiles []*docdb.FileInfo
 			removedFiles  []string
 		)
 		for filename, hash := range hv.FileHashes {
-			fi := &FileInfo{Name: filename, Size: int64(len(doc.HashedFiles[hash])), Hash: hash}
+			fi := &docdb.FileInfo{Name: filename, Size: int64(len(doc.HashedFiles[hash])), Hash: hash}
 			if prevHash, ok := prevHashes[filename]; !ok {
 				addedFiles = append(addedFiles, fi)
 			} else if prevHash != hash {
@@ -405,9 +409,9 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *HashedDocument, recreat
 	return nil
 }
 
-// hashedVersionFiles materializes the files of a HashedVersion as in-memory
+// hashedVersionFiles materializes the files of a docdb.HashedVersion as in-memory
 // fs.FileReaders backed by the corresponding HashedFiles entries.
-func hashedVersionFiles(doc *HashedDocument, hv *HashedVersion) []fs.FileReader {
+func hashedVersionFiles(doc *docdb.HashedDocument, hv *docdb.HashedVersion) []fs.FileReader {
 	files := make([]fs.FileReader, 0, len(hv.FileHashes))
 	for filename, hash := range hv.FileHashes {
 		files = append(files, fs.NewMemFile(filename, doc.HashedFiles[hash]))
@@ -415,7 +419,7 @@ func hashedVersionFiles(doc *HashedDocument, hv *HashedVersion) []fs.FileReader 
 	return files
 }
 
-func versionTimeIn(versions []VersionTime, v VersionTime) bool {
+func versionTimeIn(versions []docdb.VersionTime, v docdb.VersionTime) bool {
 	for _, e := range versions {
 		if e.Equal(v) {
 			return true
@@ -427,73 +431,11 @@ func versionTimeIn(versions []VersionTime, v VersionTime) bool {
 func safelyCallCreateVersionFunc(
 	ctx context.Context,
 	docID uu.ID,
-	prevVersion VersionTime,
-	prevFiles FileProvider,
-	createVersion CreateVersionFunc,
-) (result *CreateVersionResult, err error) {
+	prevVersion docdb.VersionTime,
+	prevFiles docdb.FileProvider,
+	createVersion docdb.CreateVersionFunc,
+) (result *docdb.CreateVersionResult, err error) {
 	defer errs.RecoverPanicAsError(&err)
 
 	return createVersion(ctx, docID, prevVersion, prevFiles)
-}
-
-// AddMultiDocumentVersionImpl adds a new version to each document in docIDs
-// by calling conn.AddDocumentVersion for each one sequentially.
-//
-// It is the shared implementation for Conn.AddMultiDocumentVersion.
-// Conn implementations that can't provide native multi-document atomicity
-// should delegate to this function.
-//
-// Documents with no file changes (ErrNoChanges from AddDocumentVersion) are skipped.
-// Returns ErrNoChanges only if no document was changed at all.
-//
-// Atomicity is achieved by tracking each successfully created version and,
-// on any error, rolling back all of them via conn.DeleteDocumentVersion.
-// Any rollback errors are joined to the returned error.
-func AddMultiDocumentVersionImpl(ctx context.Context, conn Conn, docIDs uu.IDSlice, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) (err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, docIDs, userID, reason, createVersion, onNewVersion)
-
-	type createdVersion struct {
-		docID   uu.ID
-		version VersionTime
-	}
-	var created []createdVersion
-
-	defer func() {
-		if r := recover(); r != nil {
-			err = errs.AsErrorWithDebugStack(r)
-		}
-		if err != nil {
-			for _, cv := range created {
-				_, deleteErr := conn.DeleteDocumentVersion(ctx, cv.docID, cv.version)
-				if deleteErr != nil {
-					err = errors.Join(err, fmt.Errorf("failed to undo new document version of atomic multi-document operation: %w", deleteErr))
-				}
-			}
-		}
-	}()
-
-	for _, docID := range docIDs {
-		err = conn.AddDocumentVersion(ctx, docID, userID, reason, createVersion, func(ctx context.Context, versionInfo *VersionInfo) error {
-			err := onNewVersion(ctx, versionInfo)
-			if err == nil {
-				created = append(created, createdVersion{
-					docID:   versionInfo.DocID,
-					version: versionInfo.Version,
-				})
-			}
-			return err
-		})
-		if err != nil {
-			// Skip documents that have no changes,
-			// only return ErrNoChanges if no document was changed at all.
-			if errors.Is(err, ErrNoChanges) {
-				continue
-			}
-			return err
-		}
-	}
-	if len(created) == 0 {
-		return ErrNoChanges
-	}
-	return nil
 }

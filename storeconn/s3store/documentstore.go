@@ -1,7 +1,7 @@
-// Package s3 implements the docdb.DocumentStore interface backed by an
+// Package s3store implements the storeconn.DocumentStore interface backed by an
 // Amazon S3 (or S3-compatible) bucket. Documents are stored as individual
 // objects keyed by "<docID>/<filename>/<contentHash>".
-package s3
+package s3store
 
 import (
 	"bytes"
@@ -16,20 +16,21 @@ import (
 	"github.com/ungerik/go-fs"
 
 	"github.com/domonda/go-docdb"
+	"github.com/domonda/go-docdb/storeconn"
 	"github.com/domonda/go-types/uu"
 )
 
-// NewDocumentStore returns a docdb.DocumentStore that stores document files
+// NewDocumentStore returns a storeconn.DocumentStore that stores document files
 // as objects in the given S3 bucket using the provided S3 client.
 // The bucket must already exist; this constructor does not create it.
-func NewDocumentStore(bucketName string, s3Client *awss3.Client) docdb.DocumentStore {
+func NewDocumentStore(bucketName string, s3Client *awss3.Client) storeconn.DocumentStore {
 	return &docStore{
 		client:     s3Client,
 		bucketName: bucketName,
 	}
 }
 
-// docStore is the S3-backed implementation of docdb.DocumentStore.
+// docStore is the S3-backed implementation of storeconn.DocumentStore.
 type docStore struct {
 	client     *awss3.Client
 	bucketName string

@@ -1,4 +1,4 @@
-package s3_test
+package s3store_test
 
 import (
 	"bytes"
@@ -12,8 +12,8 @@ import (
 	"github.com/ungerik/go-fs"
 
 	"github.com/domonda/go-docdb"
-	"github.com/domonda/go-docdb/s3"
-	"github.com/domonda/go-docdb/s3/s3fixtures"
+	"github.com/domonda/go-docdb/storeconn/s3store"
+	"github.com/domonda/go-docdb/storeconn/s3store/s3fixtures"
 	"github.com/domonda/go-types/uu"
 )
 
@@ -65,7 +65,7 @@ func TestDocumentExists(t *testing.T) {
 					t.Context(),
 					&awss3.PutObjectInput{
 						Bucket: new(bucketName),
-						Key:    new(s3.Key(docID, filename, hash)),
+						Key:    new(s3store.Key(docID, filename, hash)),
 						Body:   bytes.NewReader(content),
 					},
 				)
@@ -186,7 +186,7 @@ func TestCreateDocument(t *testing.T) {
 		require.NoError(t, err)
 
 		for _, file := range files {
-			key := s3.Key(docID, file.Name(), docdb.ContentHash(file.FileData))
+			key := s3store.Key(docID, file.Name(), docdb.ContentHash(file.FileData))
 			_, err = client.GetObject(t.Context(), &awss3.GetObjectInput{Bucket: &bucketName, Key: &key})
 			require.NoError(t, err)
 		}

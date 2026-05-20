@@ -1,6 +1,6 @@
-// Package s3fixtures provides shared test fixtures for the s3 package.
-// Fixtures are built on github.com/datek/fix and are lazily initialized per
-// test; clients come from AWS config and the following environment variables:
+// Package s3fixtures provides shared test fixtures for the s3store package.
+// Fixtures are lazily initialized once per test; clients come from AWS config
+// and the following environment variables:
 //
 //	DOCDB_BUCKET_NAME    bucket used by the fixtures
 //	AWS_DEFAULT_REGION   region used when creating buckets
@@ -12,22 +12,23 @@ import (
 	"context"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-	"github.com/datek/fix"
 
 	"github.com/domonda/go-docdb"
-	"github.com/domonda/go-docdb/s3"
+	"github.com/domonda/go-docdb/storeconn"
+	"github.com/domonda/go-docdb/storeconn/s3store"
 	"github.com/domonda/go-types/uu"
 )
 
 // FixtureCreateDocument returns a helper that writes a single document file
 // to the fixture bucket under the canonical "<docID>/<filename>/<hash>" key,
 // using the fixture S3 client. The helper calls t.Fatal on any error.
-var FixtureCreateDocument = fix.New(func(t *testing.T) func(
+var FixtureCreateDocument = newFixture(func(t *testing.T) func(
 	docID uu.ID,
 	filename string,
 	content []byte,
@@ -41,7 +42,7 @@ var FixtureCreateDocument = fix.New(func(t *testing.T) func(
 			t.Context(),
 			&awss3.PutObjectInput{
 				Bucket: new(bucketName),
-				Key:    new(s3.Key(docID, filename, hash)),
+				Key:    new(s3store.Key(docID, filename, hash)),
 				Body:   bytes.NewReader(content),
 			},
 		)
@@ -55,7 +56,7 @@ var FixtureCreateDocument = fix.New(func(t *testing.T) func(
 // FixtureObjectExists returns a helper that reports whether the object for
 // the passed (docID, filename, hash) is present in the fixture bucket.
 // A successful GetObject counts as "exists"; any error is treated as "not exists".
-var FixtureObjectExists = fix.New(func(t *testing.T) func(docID uu.ID, filename, hash string) bool {
+var FixtureObjectExists = newFixture(func(t *testing.T) func(docID uu.ID, filename, hash string) bool {
 	bucketName := FixtureCleanBucket(t)
 	client := FixtureGlobalS3Client(t)
 
@@ -64,7 +65,7 @@ var FixtureObjectExists = fix.New(func(t *testing.T) func(docID uu.ID, filename,
 			t.Context(),
 			&awss3.GetObjectInput{
 				Bucket: &bucketName,
-				Key:    new(s3.Key(docID, filename, hash)),
+				Key:    new(s3store.Key(docID, filename, hash)),
 			},
 		)
 
@@ -75,7 +76,7 @@ var FixtureObjectExists = fix.New(func(t *testing.T) func(docID uu.ID, filename,
 // FixtureNoBucket ensures the fixture bucket does not exist by deleting it
 // (and any contained objects) if present. Returns the bucket name for use
 // in test assertions. Calls t.Fatal if deletion fails.
-var FixtureNoBucket = fix.New(func(t *testing.T) string {
+var FixtureNoBucket = newFixture(func(t *testing.T) string {
 	bucketName := FixtureBucketName(t)
 	err := deleteBucket(t.Context(), FixtureGlobalS3Client(t), new(bucketName))
 	if err != nil {
@@ -88,7 +89,7 @@ var FixtureNoBucket = fix.New(func(t *testing.T) string {
 // FixtureCleanBucket ensures an empty fixture bucket exists for the duration
 // of the test. If a bucket with the same name already exists it is deleted
 // and recreated. The bucket is removed on t.Cleanup.
-var FixtureCleanBucket = fix.New(func(t *testing.T) string {
+var FixtureCleanBucket = newFixture(func(t *testing.T) string {
 	bucketName := FixtureBucketName(t)
 	client := FixtureGlobalS3Client(t)
 	createBucket := func() (*awss3.CreateBucketOutput, error) {
@@ -125,51 +126,57 @@ var FixtureCleanBucket = fix.New(func(t *testing.T) string {
 
 // docStore caches the DocumentStore returned by FixtureGlobalDocumentStore
 // so that all tests in a run share a single instance.
-var docStore docdb.DocumentStore
+var docStore storeconn.DocumentStore
 
-// FixtureGlobalDocumentStore returns a process-wide docdb.DocumentStore
+// FixtureGlobalDocumentStore returns a process-wide storeconn.DocumentStore
 // pointed at the fixture bucket and backed by the fixture S3 client.
 // The instance is cached across tests.
-var FixtureGlobalDocumentStore = fix.New(func(t *testing.T) docdb.DocumentStore {
+var FixtureGlobalDocumentStore = newFixture(func(t *testing.T) storeconn.DocumentStore {
 	if docStore != nil {
 		return docStore
 	}
 
-	documentStore := s3.NewDocumentStore(FixtureBucketName(t), FixtureGlobalS3Client(t))
+	documentStore := s3store.NewDocumentStore(FixtureBucketName(t), FixtureGlobalS3Client(t))
 	docStore = documentStore
 	return docStore
 })
 
-// s3Client caches the *awss3.Client returned by FixtureGlobalS3Client so that
-// all tests in a run share a single, fully configured S3 client.
-var s3Client *awss3.Client
-
-// FixtureGlobalS3Client returns a process-wide *awss3.Client built from the
-// default AWS config with BaseEndpoint set from AWS_ENDPOINT_URL.
-// The instance is cached across tests.
-var FixtureGlobalS3Client = fix.New(func(t *testing.T) *awss3.Client {
-	if s3Client != nil {
-		return s3Client
-	}
-
+// globalS3Client lazily builds the test S3 client once per process and probes
+// it with a ListBuckets call. Build and probe failures are returned rather than
+// fatal, so tests can skip cleanly when no S3 backend is available
+// (e.g. plain `go test ./...`).
+var globalS3Client = sync.OnceValues(func() (*awss3.Client, error) {
 	ctx := context.Background()
 	cfg, err := config.LoadDefaultConfig(ctx)
-
 	if err != nil {
-		t.Fatalf("Unable to load AWS SDK config, %v", err)
+		return nil, err
 	}
 
-	s3Client = awss3.NewFromConfig(cfg, func(o *awss3.Options) {
+	client := awss3.NewFromConfig(cfg, func(o *awss3.Options) {
 		o.BaseEndpoint = new(os.Getenv("AWS_ENDPOINT_URL"))
 		o.UsePathStyle = true
 	})
 
-	return s3Client
+	if _, err := client.ListBuckets(ctx, &awss3.ListBucketsInput{}); err != nil {
+		return nil, err
+	}
+	return client, nil
+})
+
+// FixtureGlobalS3Client returns a process-wide *awss3.Client built from the
+// default AWS config with BaseEndpoint set from AWS_ENDPOINT_URL.
+// The test is skipped if no S3 backend is reachable.
+var FixtureGlobalS3Client = newFixture(func(t *testing.T) *awss3.Client {
+	client, err := globalS3Client()
+	if err != nil {
+		t.Skipf("S3 test backend not available: %v", err)
+	}
+	return client
 })
 
 // FixtureBucketName returns the bucket name used by all fixtures, taken from
 // the DOCDB_BUCKET_NAME environment variable.
-var FixtureBucketName = fix.New(func(t *testing.T) string {
+var FixtureBucketName = newFixture(func(t *testing.T) string {
 	return os.Getenv("DOCDB_BUCKET_NAME")
 })
 
@@ -208,4 +215,34 @@ func deleteBucket(ctx context.Context, client *awss3.Client, bucketName *string)
 		return err
 	}
 	return nil
+}
+
+// newFixture wraps create so its result is memoized per test: create runs at
+// most once per *testing.T, and every call within that test returns the same
+// value. The cache entry is dropped when the test ends.
+func newFixture[V any](create func(t *testing.T) V) func(t *testing.T) V {
+	var (
+		mu     sync.Mutex
+		values = make(map[*testing.T]V)
+	)
+	return func(t *testing.T) V {
+		mu.Lock()
+		v, cached := values[t]
+		mu.Unlock()
+		if cached {
+			return v
+		}
+
+		v = create(t)
+
+		mu.Lock()
+		values[t] = v
+		mu.Unlock()
+		t.Cleanup(func() {
+			mu.Lock()
+			delete(values, t)
+			mu.Unlock()
+		})
+		return v
+	}
 }

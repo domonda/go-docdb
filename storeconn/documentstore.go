@@ -1,26 +1,27 @@
-package docdb
+package storeconn
 
 import (
 	"context"
 
+	"github.com/domonda/go-types/uu"
 	"github.com/ungerik/go-fs"
 
-	"github.com/domonda/go-types/uu"
+	"github.com/domonda/go-docdb"
 )
 
 // DocumentStore is the interface for storing and retrieving document file content
 // by content hash. It is used together with MetadataStore by the split-store
-// Conn implementation returned by NewConn.
+// docdb.Conn implementation returned by New.
 //
-// Implementations must return the typed errors from this package when the
+// Implementations must return the typed errors from the docdb package when the
 // documented not-found conditions occur, so callers can match them with
-// errors.Is: ErrDocumentNotFound, ErrDocumentFileNotFound.
+// errors.Is: docdb.ErrDocumentNotFound, docdb.ErrDocumentFileNotFound.
 type DocumentStore interface {
 	// CreateDocument stores the provided files for a document version.
 	// Files are keyed by their content hash, so identical content is
 	// deduplicated. Uniqueness of the document ID is enforced by the
 	// MetadataStore, not by this method.
-	CreateDocument(ctx context.Context, docID uu.ID, version VersionTime, files []fs.FileReader) error
+	CreateDocument(ctx context.Context, docID uu.ID, version docdb.VersionTime, files []fs.FileReader) error
 
 	// DocumentExists returns true if a document with the passed docID exists in the store.
 	DocumentExists(ctx context.Context, docID uu.ID) (exists bool, err error)
@@ -33,7 +34,7 @@ type DocumentStore interface {
 	// identified by the given content hashes for a document.
 	// The returned FileProvider returns ErrDocumentFileNotFound from ReadFile
 	// for filenames that are not part of the provided hashes.
-	DocumentHashFileProvider(ctx context.Context, docID uu.ID, fileHashes []string) (FileProvider, error)
+	DocumentHashFileProvider(ctx context.Context, docID uu.ID, fileHashes []string) (docdb.FileProvider, error)
 
 	// ReadDocumentHashFile reads a single file identified by its content hash.
 	// Returns ErrDocumentFileNotFound if no file with the given filename

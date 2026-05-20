@@ -12,12 +12,12 @@ The package provides two ways to create a `Conn`:
 
 `localfsdb.NewConn(documentsDir, companiesDir)` stores both file contents and metadata together as a directory hierarchy on the local filesystem. See [localfsdb/README.md](localfsdb/README.md) for full details.
 
-### 2. Split-store: `docdb.NewConn(DocumentStore, MetadataStore)`
+### 2. Split-store: `storeconn.New(DocumentStore, MetadataStore)`
 
-`docdb.NewConn` composes a separate `DocumentStore` (file contents) and `MetadataStore` (version metadata):
+`storeconn.New` composes a separate `DocumentStore` (file contents) and `MetadataStore` (version metadata):
 
-- **`DocumentStore`**: stores and retrieves file content by content hash. Implemented by the `s3/` subpackage.
-- **`MetadataStore`**: stores and queries version metadata (company, user, reason, file lists). Implemented by the `postgres/` subpackage.
+- **`DocumentStore`**: stores and retrieves file content by content hash. Implemented by the `storeconn/s3store` subpackage.
+- **`MetadataStore`**: stores and queries version metadata (company, user, reason, file lists). Implemented by the `storeconn/pgstore` subpackage.
 
 ### Global connection
 
@@ -247,7 +247,8 @@ Backends without restore support return wrapped `ErrNotImplemented`.
 | Package | Description |
 |---|---|
 | `localfsdb` | Filesystem-based `Conn` storing files and metadata together (see [localfsdb/README.md](localfsdb/README.md)) |
-| `s3` | `DocumentStore` implementation backed by AWS S3 |
-| `postgres` | `MetadataStore` and read-only `MetadataStore` implementations backed by PostgreSQL |
+| `storeconn` | Split-store `Conn` composing a `DocumentStore` and `MetadataStore` |
+| `storeconn/s3store` | `DocumentStore` implementation backed by AWS S3 |
+| `storeconn/pgstore` | `MetadataStore` and read-only `MetadataStore` implementations backed by PostgreSQL |
 | `proxyconn` | `Conn` decorator/proxy |
 | `integrationtests` | Shared integration test suite runnable against any `Conn` implementation |

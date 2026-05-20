@@ -1,4 +1,4 @@
-package postgres_test
+package pgstore_test
 
 import (
 	"context"
@@ -14,11 +14,11 @@ import (
 	"github.com/domonda/go-types/uu"
 
 	"github.com/domonda/go-docdb"
-	"github.com/domonda/go-docdb/postgres"
-	"github.com/domonda/go-docdb/postgres/pgfixtures"
+	"github.com/domonda/go-docdb/storeconn/pgstore"
+	"github.com/domonda/go-docdb/storeconn/pgstore/pgfixtures"
 )
 
-var store = postgres.NewMetadataStore()
+var store = pgstore.NewMetadataStore()
 
 func TestCreateDocument(t *testing.T) {
 	t.Run("Creates document version with proper file metadata", func(t *testing.T) {
@@ -56,7 +56,7 @@ func TestCreateDocument(t *testing.T) {
 		require.Nil(t, versionInfo.RemovedFiles)
 		require.Nil(t, versionInfo.PrevVersion)
 
-		savedFiles, err := db.QueryRowsAsSlice[postgres.DocumentVersionFile](
+		savedFiles, err := db.QueryRowsAsSlice[pgstore.DocumentVersionFile](
 			ctx,
 			/* sql */ `
 			select dvf.* from docdb.document_version_file dvf
@@ -151,7 +151,7 @@ func TestSetDocumentCompanyID(t *testing.T) {
 		// then
 		require.NoError(t, err)
 
-		savedDocumentVersions, err := db.QueryRowsAsSlice[postgres.DocumentVersion](
+		savedDocumentVersions, err := db.QueryRowsAsSlice[pgstore.DocumentVersion](
 			ctx,
 			/* sql */ `select * from docdb.document_version where document_id = $1`,
 			docVersion1.DocumentID,
