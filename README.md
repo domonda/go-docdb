@@ -236,6 +236,18 @@ err = conn.RestoreDocument(ctx, backup, recreate)
 
 Backends without restore support return wrapped `ErrNotImplemented`.
 
+To copy a document directly from one `Conn` to another, `SyncDocument` combines `ReadHashedDocument` and `Conn.RestoreDocument`:
+
+```go
+// Copy a document with all versions and file content from srcConn to destConn
+err := docdb.SyncDocument(ctx, srcConn, destConn, docID, recreate)
+
+// Copy all documents of a company from srcConn to destConn
+syncedDocIDs, err := docdb.SyncAllCompanyDocuments(ctx, srcConn, destConn, companyID, recreate, continueOnError)
+```
+
+The `recreate` flag has the same meaning as for `RestoreDocument`. When `continueOnError` is true, `SyncAllCompanyDocuments` collects per-document errors and keeps going instead of stopping at the first failure; `syncedDocIDs` always lists the documents that synced successfully.
+
 ## Testing Helpers
 
 - `localfsdb.NewTestConn(t)` — creates a `localfsdb.Conn` in a temp directory, cleaned up after the test

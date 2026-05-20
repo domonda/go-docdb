@@ -136,6 +136,78 @@ func ReadHashedDocument(ctx context.Context, conn Conn, docID uu.ID) (doc *Hashe
 	return doc, nil
 }
 
+// SyncDocument copies a document with all its versions and file content
+// from srcConn to destConn.
+//
+// The document is read from srcConn into an in-memory HashedDocument via
+// ReadHashedDocument, which verifies every file's size and content hash
+// against the version metadata, and is then written to destConn via
+// Conn.RestoreDocument.
+//
+// The recreate flag is passed through to Conn.RestoreDocument and controls
+// how an already existing document on destConn is handled:
+//
+//   - recreate=true (replace): an existing document with the same ID on
+//     destConn is deleted first, then recreated entirely from srcConn.
+//     The CompanyID on destConn after the call equals the one on srcConn.
+//   - recreate=false (additive merge): the document is created on destConn
+//     if missing, otherwise existing versions are kept and only versions
+//     not already present on destConn are added. If the document exists,
+//     its CompanyID on destConn must equal the one on srcConn, otherwise
+//     the call fails without changing anything.
+//
+// Returns wrapped ErrDocumentNotFound if the document does not exist on
+// srcConn, and wrapped ErrNotImplemented if destConn does not support
+// restoration.
+func SyncDocument(ctx context.Context, srcConn, destConn Conn, docID uu.ID, recreate bool) (err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, srcConn, destConn, docID, recreate)
+
+	doc, err := ReadHashedDocument(ctx, srcConn, docID)
+	if err != nil {
+		return err
+	}
+	return destConn.RestoreDocument(ctx, doc, recreate)
+}
+
+// SyncAllCompanyDocuments copies all documents of a company
+// from srcConn to destConn by calling SyncDocument for every document
+// enumerated via srcConn.EnumCompanyDocumentIDs.
+//
+// The recreate flag is passed through to SyncDocument for every document.
+//
+// Documents are synced one after another in enumeration order.
+//
+// If continueOnError is false the sync stops at the first failing
+// document and returns that error.
+//
+// If continueOnError is true a failing document does not stop the sync:
+// the error is collected and syncing continues with the next document,
+// and err is the join of all encountered errors, or nil if none.
+//
+// syncedDocIDs always contains the IDs of the documents
+// that were synced successfully.
+func SyncAllCompanyDocuments(ctx context.Context, srcConn, destConn Conn, companyID uu.ID, recreate, continueOnError bool) (syncedDocIDs uu.IDSlice, err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, srcConn, destConn, companyID, recreate, continueOnError)
+
+	var stop = errors.New("stop")
+	enumErr := srcConn.EnumCompanyDocumentIDs(ctx, companyID, func(ctx context.Context, docID uu.ID) error {
+		syncErr := SyncDocument(ctx, srcConn, destConn, docID, recreate)
+		if syncErr != nil {
+			err = errors.Join(err, syncErr)
+			if continueOnError {
+				return nil
+			}
+			return stop // Don't return syncErr, it's already collected in err
+		}
+		syncedDocIDs = append(syncedDocIDs, docID)
+		return nil
+	})
+	if errors.Is(enumErr, stop) {
+		enumErr = nil
+	}
+	return syncedDocIDs, errors.Join(enumErr, err)
+}
+
 // VersionTimes returns the version timestamps of the document sorted in ascending order.
 func (doc *HashedDocument) VersionTimes() []VersionTime {
 	return slices.SortedFunc(maps.Keys(doc.Versions), func(a, b VersionTime) int {
