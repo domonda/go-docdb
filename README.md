@@ -188,16 +188,16 @@ Documents with no file changes are silently skipped. Returns `ErrNoChanges` only
 
 ## Error Types
 
-| Error | Description |
-|---|---|
-| `ErrNoChanges` | New version is identical to the previous version |
-| `ErrNotImplemented` | Operation not supported by this `Conn` implementation |
-| `ErrDocumentNotFound` | No document with the given ID; also matches `os.ErrNotExist`, `sql.ErrNoRows`, `errs.ErrNotFound` |
-| `ErrDocumentFileNotFound` | File not found in the version |
-| `ErrDocumentVersionNotFound` | Version not found for the document |
-| `ErrDocumentAlreadyExists` | `CreateDocument` called for an existing document ID |
-| `ErrVersionAlreadyExists` | Version timestamp already in use |
-| `ErrDocumentChanged` | Optimistic concurrency conflict |
+| Error                        | Description                                        |
+| ---------------------------- | -------------------------------------------------- |
+| `ErrNoChanges`               | New version is identical to the previous version   |
+| `ErrNotImplemented`          | Operation not supported by this `Conn` implementation |
+| `ErrDocumentNotFound`        | No document with the given ID; also matches `os.ErrNotExist`, `sql.ErrNoRows`, `errs.ErrNotFound` |
+| `ErrDocumentFileNotFound`    | File not found in the version                      |
+| `ErrDocumentVersionNotFound` | Version not found for the document                 |
+| `ErrDocumentAlreadyExists`   | `CreateDocument` called for an existing document ID |
+| `ErrVersionAlreadyExists`    | Version timestamp already in use                   |
+| `ErrDocumentChanged`         | Optimistic concurrency conflict                    |
 
 Use `errs.Has[ErrDocumentNotFound](err)` (from `github.com/domonda/go-errs`) to test for a specific error type.
 
@@ -244,11 +244,11 @@ Backends without restore support return wrapped `ErrNotImplemented`.
 
 ## Subpackages
 
-| Package | Description |
-|---|---|
-| `localfsdb` | Filesystem-based `Conn` storing files and metadata together (see [localfsdb/README.md](localfsdb/README.md)) |
-| `storeconn` | Split-store `Conn` composing a `DocumentStore` and `MetadataStore` |
-| `storeconn/s3store` | `DocumentStore` implementation backed by AWS S3 |
+| Package             | Description                                        |
+| ------------------- | -------------------------------------------------- |
+| `localfsdb`         | Filesystem-based `Conn` storing files and metadata together (see [localfsdb/README.md](localfsdb/README.md)) |
+| `storeconn`         | Split-store `Conn` composing a `DocumentStore` and `MetadataStore` |
+| `storeconn/s3store` | `DocumentStore` implementation backed by AWS S3    |
 | `storeconn/pgstore` | `MetadataStore` and read-only `MetadataStore` implementations backed by PostgreSQL |
-| `proxyconn` | `Conn` decorator/proxy |
-| `integrationtests` | Shared integration test suite runnable against any `Conn` implementation |
+| `routerconn`        | Routing `Conn` selecting a backend per document via a callback |
+| `integrationtests`  | Shared integration test suite runnable against any `Conn` implementation |

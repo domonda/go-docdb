@@ -12,7 +12,7 @@ exit_code=0
 echo ""
 echo "Running tests..."
 ( \
-    go test ./proxyconn -count 1 \
+    go test ./routerconn -count 1 \
     && go test ./localfsdb -count 1 \
     && go test ./storeconn/pgstore -count 1 \
     && go test ./storeconn/s3store -count 1 \
