@@ -248,6 +248,8 @@ syncedDocIDs, err := docdb.SyncAllCompanyDocuments(ctx, srcConn, destConn, compa
 
 The `recreate` flag has the same meaning as for `RestoreDocument`. When `continueOnError` is true, `SyncAllCompanyDocuments` collects per-document errors and keeps going instead of stopping at the first failure; `syncedDocIDs` always lists the documents that synced successfully.
 
+Sync works across any pair of `Conn` implementations, including `localfsdb` and split-store `storeconn` in either direction. Document and company IDs of any UUID version 1-8 are supported on both sides — in particular time-ordered v7 IDs (`uu.IDv7`) are correctly enumerated by `localfsdb`.
+
 ## Testing Helpers
 
 - `localfsdb.NewTestConn(t)` — creates a `localfsdb.Conn` in a temp directory, cleaned up after the test
