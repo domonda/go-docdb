@@ -9,9 +9,9 @@ require (
 	github.com/domonda/go-pretty v1.0.0
 	github.com/domonda/go-sqldb/pqconn v1.3.0
 	github.com/domonda/go-types v0.0.0-20260520104552-1bc362a3e9a9
-	github.com/domonda/golog v1.0.7
+	github.com/domonda/golog v1.0.8-0.20260521071823-eddda39b48e8
 	github.com/stretchr/testify v1.11.1
-	github.com/ungerik/go-fs v0.0.0-20260519122754-65e3c83e7b40
+	github.com/ungerik/go-fs v0.0.0-20260521071813-83d5e82d379a
 )
 
 require (

@@ -60,6 +60,8 @@ github.com/domonda/go-types v0.0.0-20260520104552-1bc362a3e9a9 h1:oWtEUaaNYw1PVX
 github.com/domonda/go-types v0.0.0-20260520104552-1bc362a3e9a9/go.mod h1:1RA4JTA9IyraO4D9R+jiUoXTrRJv0HmT+L4qb1gpkPU=
 github.com/domonda/golog v1.0.7 h1:+ds1BKwPT1Njf1r8Q6ubG8EF3gU0/mlvr/ZmgBj1igM=
 github.com/domonda/golog v1.0.7/go.mod h1:b4IrKkCzQXlmuRXL2ngqh9D+3Dn2uBsFbq7FdjKpW6I=
+github.com/domonda/golog v1.0.8-0.20260521071823-eddda39b48e8 h1:VzNWtFBjXhno1FGwGg8qLhHz1xjEaJ4ZeAU4SX9wNoE=
+github.com/domonda/golog v1.0.8-0.20260521071823-eddda39b48e8/go.mod h1:b4IrKkCzQXlmuRXL2ngqh9D+3Dn2uBsFbq7FdjKpW6I=
 github.com/fsnotify/fsnotify v1.10.1 h1:b0/UzAf9yR5rhf3RPm9gf3ehBPpf0oZKIjtpKrx59Ho=
 github.com/fsnotify/fsnotify v1.10.1/go.mod h1:TLheqan6HD6GBK6PrDWyDPBaEV8LspOxvPSjC+bVfgo=
 github.com/invopop/jsonschema v0.14.0 h1:MHQqLhvpNUZfw+hM3AZDYK7jxO8FZoQeQM77g8iyZjg=
@@ -90,6 +92,8 @@ github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/ungerik/go-fs v0.0.0-20260519122754-65e3c83e7b40 h1:hfvXz37fFV5znDa5hW8XengcEKqT2Rs/RhrkIHhwpCI=
 github.com/ungerik/go-fs v0.0.0-20260519122754-65e3c83e7b40/go.mod h1:qCHNyfJFShwOyCfktO+3gwwsTsfV2WbQgjRVjjd0ckw=
+github.com/ungerik/go-fs v0.0.0-20260521071813-83d5e82d379a h1:1+IQ5vVFCcTAYn7jH4zb2G1I4xmZ+T6r4vdF16VjkfE=
+github.com/ungerik/go-fs v0.0.0-20260521071813-83d5e82d379a/go.mod h1:qCHNyfJFShwOyCfktO+3gwwsTsfV2WbQgjRVjjd0ckw=
 go.yaml.in/yaml/v4 v4.0.0-rc.4 h1:UP4+v6fFrBIb1l934bDl//mmnoIZEDK0idg1+AIvX5U=
 go.yaml.in/yaml/v4 v4.0.0-rc.4/go.mod h1:aZqd9kCMsGL7AuUv/m/PvWLdg5sjJsZ4oHDEnfPPfY0=
 golang.org/x/sys v0.0.0-20220408201424-a24fb2fb8a0f/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
