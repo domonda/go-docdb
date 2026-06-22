@@ -1,0 +1,12 @@
+{
+  "gopls": {
+    "buildFlags": ["-tags=darwin"],
+    "formatting.local": "github.com/domonda,github.com/ungerik"
+  },
+  "[go]": {
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit"
+    }
+  }
+}
