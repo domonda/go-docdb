@@ -932,10 +932,15 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 	docDir := c.documentDir(doc.ID)
 
 	if recreate && docDir.Exists() {
-		if currCompanyID, e := c.documentCompanyID(ctx, doc.ID); e == nil {
-			if e := uuiddir.Remove(c.companiesDir.Join(currCompanyID.String()), doc.ID); e != nil {
-				return e
-			}
+		// Surface a failure to read the current company instead of swallowing
+		// it: without the company we cannot remove the old company-document
+		// marker, so proceeding would leave a stale mapping behind.
+		currCompanyID, e := c.documentCompanyID(ctx, doc.ID)
+		if e != nil {
+			return e
+		}
+		if e := uuiddir.Remove(c.companiesDir.Join(currCompanyID.String()), doc.ID); e != nil {
+			return e
 		}
 		if e := uuiddir.RemoveDir(c.documentsDir, docDir); e != nil {
 			return e

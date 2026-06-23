@@ -192,3 +192,43 @@ func TestHashedDocument_Validate(t *testing.T) {
 		})
 	}
 }
+
+func TestHashedDocument_VersionInfo(t *testing.T) {
+	v0 := MustVersionTimeFromString("2024-01-01_00-00-00.000")
+	data := []byte("hello")
+	hash := ContentHash(data)
+
+	doc := &HashedDocument{
+		ID:          uu.IDv4(),
+		CompanyID:   uu.IDv4(),
+		HashedFiles: map[string][]byte{hash: data},
+		Versions: map[VersionTime]*HashedVersion{
+			v0: {CommitUserID: uu.IDv4(), CommitReason: "init", FileHashes: map[string]string{"a.txt": hash}},
+		},
+	}
+
+	t.Run("valid version", func(t *testing.T) {
+		info := doc.VersionInfo(v0)
+		require.NotNil(t, info)
+		require.Nil(t, info.PrevVersion)
+		require.Equal(t, []string{"a.txt"}, info.AddedFiles)
+	})
+
+	t.Run("unknown version returns nil", func(t *testing.T) {
+		require.Nil(t, doc.VersionInfo(MustVersionTimeFromString("2030-01-01_00-00-00.000")))
+	})
+
+	t.Run("inconsistent document returns nil instead of panicking", func(t *testing.T) {
+		bad := &HashedDocument{
+			ID:          uu.IDv4(),
+			CompanyID:   uu.IDv4(),
+			HashedFiles: map[string][]byte{}, // referenced hash is absent
+			Versions: map[VersionTime]*HashedVersion{
+				v0: {FileHashes: map[string]string{"a.txt": hash}},
+			},
+		}
+		require.NotPanics(t, func() {
+			require.Nil(t, bad.VersionInfo(v0))
+		})
+	})
+}

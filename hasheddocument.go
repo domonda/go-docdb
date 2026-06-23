@@ -217,7 +217,9 @@ func (doc *HashedDocument) VersionTimes() []VersionTime {
 
 // VersionInfo reconstructs a VersionInfo for the given version timestamp
 // by comparing against the previous version to compute added, modified,
-// and removed files. Returns nil if the version does not exist.
+// and removed files. Returns nil if the version does not exist or if the
+// document is internally inconsistent (a referenced file hash is missing
+// from HashedFiles); use Validate to detect such inconsistencies explicitly.
 func (doc *HashedDocument) VersionInfo(versionTime VersionTime) *VersionInfo {
 	var (
 		prevVersionTime *VersionTime
@@ -251,7 +253,9 @@ func (doc *HashedDocument) VersionInfo(versionTime VersionTime) *VersionInfo {
 	for filename, hash := range version.FileHashes {
 		data, ok := doc.HashedFiles[hash]
 		if !ok {
-			panic("HashedDocument is inconsistent, file hash not found in doc.HashedFiles")
+			// Inconsistent document (a file references a hash with no content).
+			// Return nil rather than panicking; callers should Validate first.
+			return nil
 		}
 		info.Files[filename] = FileInfo{
 			Name: filename,
