@@ -5,10 +5,31 @@ All notable changes to `github.com/domonda/go-docdb` are documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [v0.6.4] - 2026-06-23
+## [v0.7.0] - 2026-06-23
 
 ### Added
-- `DebugPrintDocument` and `DebugPrintCompanyDocuments`: print a human-readable, indented tree of a document (or all documents of a company) to standard output — every version and its files, sorted by name for deterministic output — for quick inspection during development. See the Debugging section in the README.
+- `SyncDocument` and `SyncAllCompanyDocuments`: copy a document — or every document of a company — with all versions and file content between any two `Conn` implementations. `SyncAllCompanyDocuments` takes a `continueOnError` flag to collect per-document failures instead of stopping at the first error.
+- `Conn.RestoreDocument` is now implemented for `localfsdb` and the split-store `storeconn` (previously `ErrNotImplemented` stubs), restoring a document from a `HashedDocument` backup. Added `(*HashedDocument).Validate()` to check a backup before restoring.
+- `DebugPrintDocument` and `DebugPrintCompanyDocuments`: print a human-readable, indented tree of a document (or all documents of a company) to standard output — every version and its files, with the files of each version sorted by name — for quick inspection during development. See the Debugging section in the README.
+- `ErrPathConflict`: `localfsdb.CreateDocument` now reports filesystem path conflicts with full disk-state diagnostics (document/company IDs, paths, entry type, size, mtime) instead of an opaque "file already exists" error.
+- `localfsdb` enumerates document and company IDs of any UUID version 1-8, including time-ordered v7 (`uu.IDv7`).
+
+### Changed
+- Split-store support moved into a new `storeconn` package: `docdb.NewConn` → `storeconn.New`, `docdb.DocumentStore` → `storeconn.DocumentStore`, `docdb.MetadataStore` → `storeconn.MetadataStore`, and the backends `s3` → `storeconn/s3store` and `postgres` → `storeconn/pgstore`. The `docdb` package now only defines the `Conn` interface and shared types.
+- `proxyconn` rewritten as `routerconn`: the `ConfigMap`/`ConnType` model is replaced by routing callbacks (`connForCompanyID`, `connForDocID`), and `EnumDocumentIDs` is now implemented, deduplicating document IDs across all backends.
+- The S3 `DocumentStore` now returns typed errors (`ErrDocumentFileNotFound`, `ErrDocumentNotFound`); `NewS3DocumentStore` → `NewDocumentStore`, `FileProviderFromS3Keys` → `FileProviderFromKeys`, and the public `s3.ErrNoSuchFile` sentinel was removed.
+- `Conn.RestoreDocument`'s parameter was renamed `merge` → `recreate` (semantics inverted): `recreate=true` replaces an existing document, `recreate=false` adds only the backup's missing versions to a document that must match the backup's company.
+- `Configure` now guards the global connection with a `sync.RWMutex` and panics on a nil `Conn`.
+- Bumped the Go toolchain to 1.26.
+
+### Fixed
+- `localfsdb.CreateDocument` is now race-safe under concurrent imports (go-fs bump), eliminating spurious "file already exists" errors when documents share UUID-prefix parent directories.
+- `DeleteDocumentVersion` (Postgres) no longer deletes file blobs that sibling versions still reference, and no longer falsely raises `ErrDocumentNotFound` after a successful delete.
+- `RestoreDocument` merge mode can now restore a deleted middle version instead of rejecting it.
+- `ReadHashedDocument` now errors clearly when storage and version metadata disagree about a file, instead of reporting "expected 0 bytes" or silently skipping it.
+
+### Removed
+- The Postgres `Postgres*` document-version helper functions (app-specific glue exposing the internal `document_version` key) moved to domonda-service; the unused `ToRefactorVersionExists` was dropped.
 
 ## [v0.6.3] - 2026-04-20
 
@@ -115,7 +136,7 @@ Initial release.
 - `ProxyConn` and `DeprecatedConn` (holding deprecated check-out/in methods).
 - `VersionInfo` with `CompanyID`, `LatestDocumentVersionInfo`, and `VersionTime.SetNull`.
 
-[v0.6.4]: https://github.com/domonda/go-docdb/releases/tag/v0.6.4
+[v0.7.0]: https://github.com/domonda/go-docdb/releases/tag/v0.7.0
 [v0.6.3]: https://github.com/domonda/go-docdb/releases/tag/v0.6.3
 [v0.6.2]: https://github.com/domonda/go-docdb/releases/tag/v0.6.2
 [v0.6.1]: https://github.com/domonda/go-docdb/releases/tag/v0.6.1

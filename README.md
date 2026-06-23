@@ -198,6 +198,7 @@ Documents with no file changes are silently skipped. Returns `ErrNoChanges` only
 | `ErrDocumentAlreadyExists`   | `CreateDocument` called for an existing document ID |
 | `ErrVersionAlreadyExists`    | Version timestamp already in use                   |
 | `ErrDocumentChanged`         | Optimistic concurrency conflict                    |
+| `ErrPathConflict`            | Filesystem path conflict in `localfsdb`            |
 
 Use `errs.Has[ErrDocumentNotFound](err)` (from `github.com/domonda/go-errs`) to test for a specific error type.
 
@@ -262,7 +263,7 @@ err := docdb.DebugPrintDocument(ctx, conn, docID, "", "  ")
 err := docdb.DebugPrintCompanyDocuments(ctx, conn, companyID, "", "  ")
 ```
 
-`linePrefix` is prepended to every line and `indent` is added once per tree level (document → version → file). Files are printed sorted by name for deterministic output. Example layout:
+`linePrefix` is prepended to every line and `indent` is added once per tree level (document → version → file). Within each version, files are printed sorted by name. `DebugPrintCompanyDocuments` prints documents in `EnumCompanyDocumentIDs` enumeration order, which is not necessarily sorted. Example layout:
 
 ```
 Document: 0c4e8f2a-…  Company: 7b1d…  Versions: 2
