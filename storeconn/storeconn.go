@@ -269,8 +269,29 @@ func (c *conn) AddDocumentVersion(
 		return err
 	}
 
-	if err := c.documentStore.CreateDocument(ctx, docID, result.Version, result.WriteFiles); err != nil {
-		return err
+	// rollbackNewVersion removes the metadata version just added plus the file
+	// blobs written for it, joining any cleanup error onto cause. Used when a
+	// later step fails after the metadata version is already committed, so the
+	// store is not left with a version that references missing file content.
+	rollbackNewVersion := func(cause error) error {
+		if _, _, pgErr := c.metadataStore.DeleteDocumentVersion(ctx, docID, result.Version); pgErr != nil {
+			cause = errors.Join(cause, pgErr)
+		}
+		hashesToDelete := make([]string, 0, len(addedFiles)+len(modifiedFiles))
+		for _, f := range addedFiles {
+			hashesToDelete = append(hashesToDelete, f.Hash)
+		}
+		for _, f := range modifiedFiles {
+			hashesToDelete = append(hashesToDelete, f.Hash)
+		}
+		if s3Err := c.documentStore.DeleteDocumentHashes(ctx, docID, hashesToDelete); s3Err != nil {
+			cause = errors.Join(cause, s3Err)
+		}
+		return cause
+	}
+
+	if err = c.documentStore.CreateDocument(ctx, docID, result.Version, result.WriteFiles); err != nil {
+		return rollbackNewVersion(err)
 	}
 
 	safeOnNewVersion := func() (err error) {
@@ -278,30 +299,11 @@ func (c *conn) AddDocumentVersion(
 		return onNewVersion(ctx, newVersionInfo)
 	}
 
-	err = safeOnNewVersion()
-	if err == nil {
-		return nil
+	if err = safeOnNewVersion(); err != nil {
+		return rollbackNewVersion(err)
 	}
 
-	_, _, pgCleanupErr := c.metadataStore.DeleteDocumentVersion(ctx, docID, result.Version)
-	if pgCleanupErr != nil {
-		err = errors.Join(err, pgCleanupErr)
-	}
-
-	hashesToDelete := []string{}
-	for _, f := range addedFiles {
-		hashesToDelete = append(hashesToDelete, f.Hash)
-	}
-
-	for _, f := range modifiedFiles {
-		hashesToDelete = append(hashesToDelete, f.Hash)
-	}
-
-	if s3Err := c.documentStore.DeleteDocumentHashes(ctx, docID, hashesToDelete); s3Err != nil {
-		err = errors.Join(err, s3Err)
-	}
-
-	return err
+	return nil
 }
 
 func (c *conn) AddMultiDocumentVersion(ctx context.Context, docIDs uu.IDSlice, userID uu.ID, reason string, createVersion docdb.CreateVersionFunc, onNewVersion docdb.OnNewVersionFunc) error {
@@ -351,6 +353,29 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 	noopOnNew := func(context.Context, *docdb.VersionInfo) error { return nil }
 	versionTimes := doc.VersionTimes()
 
+	// Roll back versions created during this call if a later step fails, so a
+	// partial restore does not leave a half-written document behind. If the
+	// document was created fresh here, drop it entirely; otherwise remove only
+	// the versions added here, leaving pre-existing ones intact.
+	var (
+		createdVersions []docdb.VersionTime
+		createdDoc      bool
+	)
+	defer func() {
+		if err == nil {
+			return
+		}
+		if createdDoc {
+			err = errors.Join(err, c.DeleteDocument(ctx, doc.ID))
+			return
+		}
+		for i := len(createdVersions) - 1; i >= 0; i-- {
+			if _, delErr := c.DeleteDocumentVersion(ctx, doc.ID, createdVersions[i]); delErr != nil {
+				err = errors.Join(err, delErr)
+			}
+		}
+	}()
+
 	for i, v := range versionTimes {
 		if !recreate && versionTimeIn(existingVersions, v) {
 			continue
@@ -363,6 +388,7 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 				return err
 			}
 			docExists = true
+			createdDoc = true
 			continue
 		}
 
@@ -404,6 +430,9 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		); err != nil {
 			return err
 		}
+		// Record as created right after the metadata commit so the rollback
+		// also covers a failure of the following blob write.
+		createdVersions = append(createdVersions, v)
 		if err = c.documentStore.CreateDocument(ctx, doc.ID, v, files); err != nil {
 			return err
 		}

@@ -708,6 +708,13 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 		return errs.New("nil onNewVersion func passed to AddDocumentVersion")
 	}
 
+	docWriteMtx.Lock(docID)
+	defer docWriteMtx.Unlock(docID)
+
+	// Register the rollback after acquiring the lock so cleanup runs while the
+	// lock is still held (defers are LIFO). Otherwise the unlock would fire
+	// first and a concurrent writer could chain a new version off the
+	// half-written one this call is about to remove.
 	var (
 		newVersionDir      fs.File
 		newVersionInfoFile fs.File
@@ -722,9 +729,6 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 			}
 		}
 	}()
-
-	docWriteMtx.Lock(docID)
-	defer docWriteMtx.Unlock(docID)
 
 	prevVersionInfo, prevVersionDir, err := c.latestDocumentVersionInfo(ctx, docID)
 	if err != nil {
@@ -961,11 +965,11 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		if err != nil {
 			return err
 		}
-		if len(existingVersions) > 0 {
-			latest := existingVersions[len(existingVersions)-1]
-			prevVersion = &latest
-			prevVersionDir = docDir.Join(latest.String())
-		}
+		// prevVersion/prevVersionDir are intentionally left nil/empty here.
+		// VersionTimes() is ascending and the loop below sets the predecessor
+		// as it walks (both for skipped existing versions and newly written
+		// ones), so the earliest missing version is correctly diffed against
+		// its real predecessor (or none) rather than the latest on-disk version.
 	} else {
 		if err = docDir.MakeAllDirs(); err != nil {
 			return err

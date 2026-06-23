@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `DeleteDocumentVersion` (Postgres) no longer deletes file blobs that sibling versions still reference, and no longer falsely raises `ErrDocumentNotFound` after a successful delete.
 - `RestoreDocument` merge mode can now restore a deleted middle version instead of rejecting it.
 - `ReadHashedDocument` now errors clearly when storage and version metadata disagree about a file, instead of reporting "expected 0 bytes" or silently skipping it.
+- `localfsdb.RestoreDocument` writes the correct `VersionInfo` (predecessor and file diff) when restoring a version that precedes the document's existing versions; it previously diffed such a version against the latest on-disk version, corrupting its metadata.
+- `localfsdb.AddDocumentVersion` runs its error-path cleanup while still holding the per-document lock, closing a window where a concurrent writer could chain a new version off a half-written one.
+- `storeconn.AddDocumentVersion` rolls back the metadata version when the file-content write fails, and `storeconn.RestoreDocument` rolls back partially-restored versions on error, so a failed operation no longer leaves a version referencing missing file content.
 
 ### Removed
 - The Postgres `Postgres*` document-version helper functions (app-specific glue exposing the internal `document_version` key) moved to domonda-service; the unused `ToRefactorVersionExists` was dropped.

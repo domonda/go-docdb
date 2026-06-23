@@ -2,7 +2,6 @@ package pgstore
 
 import (
 	"context"
-	"strings"
 
 	"github.com/ungerik/go-fs"
 
@@ -496,9 +495,7 @@ func (store *postgresMetadataStore) DeleteDocumentVersion(
 		return nil, nil, docdb.NewErrDocumentNotFound(docID)
 	}
 
-	// array_agg unfortunately appends some characters to the records
 	for _, versionStr := range res.LeftVersions {
-		versionStr = strings.Trim(versionStr, "\"()")
 		version, err := docdb.VersionTimeFromString(versionStr)
 		if err != nil {
 			return nil, nil, err
@@ -506,9 +503,7 @@ func (store *postgresMetadataStore) DeleteDocumentVersion(
 		leftVersions = append(leftVersions, version)
 	}
 
-	// array_agg unfortunately appends some characters to the records
 	for _, hash := range res.HashesToDelete {
-		hash = strings.Trim(hash, "\"()")
 		hashesToDelete = append(hashesToDelete, hash)
 	}
 

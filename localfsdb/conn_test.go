@@ -571,6 +571,26 @@ func TestRestoreDocument(t *testing.T) {
 		assertMatches(t, target, backup)
 	})
 
+	t.Run("recreate=false fills in missing earliest version with correct metadata", func(t *testing.T) {
+		target, backup := setup(t)
+		// Delete the earliest version so restore must re-add it as the first
+		// version of the document, with no predecessor.
+		_, err := target.DeleteDocumentVersion(ctx, docID, version0)
+		require.NoError(t, err)
+		require.NoError(t, target.RestoreDocument(ctx, backup, false))
+		assertMatches(t, target, backup)
+
+		// The restored earliest version must be diffed against nothing, not
+		// against a later on-disk version. assertMatches recomputes diffs, so
+		// it cannot catch a corrupt stored VersionInfo — check it directly.
+		info, err := target.DocumentVersionInfo(ctx, docID, version0)
+		require.NoError(t, err)
+		require.Nil(t, info.PrevVersion)
+		require.Equal(t, []string{"a.txt"}, info.AddedFiles)
+		require.Empty(t, info.ModifiedFiles)
+		require.Empty(t, info.RemovedFiles)
+	})
+
 	t.Run("recreate=false skips already-present versions", func(t *testing.T) {
 		target, backup := setup(t)
 		// All versions present — restore should be a no-op.
