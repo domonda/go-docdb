@@ -17,6 +17,3 @@
 # Local dev environment related files
 .env
 .lh/
-
-# Editor settings generated per Conductor workspace (see .conductor/settings.local.toml)
-.conductor/settings.local.toml
