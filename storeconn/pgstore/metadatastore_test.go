@@ -610,4 +610,48 @@ func TestDeleteDocumentVersion(t *testing.T) {
 		// then
 		require.ErrorIs(t, err, docdb.NewErrDocumentNotFound(docID))
 	})
+
+	// Regression test for the two DeleteDocumentVersion fixes:
+	//   - keep hashes still referenced by other versions (do not report them
+	//     for deletion, otherwise the cascade wipes live blobs)
+	//   - do not raise ErrDocumentNotFound when a successful delete frees no
+	//     hashes (the carry-forward case where hashesToDelete is empty)
+	t.Run("Keeps hashes shared with another version and does not error", func(t *testing.T) {
+		// given
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		populator := pgfixtures.FixturePopulator(t)
+
+		sharedHash := docdb.ContentHash([]byte("shared content"))
+
+		// version 1 with a single file
+		versionFile1 := populator.DocumentVersionFile(map[string]any{
+			"Name": "shared.pdf",
+			"Hash": sharedHash,
+		})
+
+		// version 2 of the SAME document carries the same file (same hash) forward
+		docVersion2 := populator.DocumentVersion(map[string]any{
+			"DocumentID": versionFile1.DocumentVersion.DocumentID,
+			"CompanyID":  versionFile1.DocumentVersion.CompanyID,
+			"Version":    docdb.VersionTimeFrom(time.Now().Add(time.Second)),
+		})
+		populator.DocumentVersionFile(map[string]any{
+			"DocumentVersion": docVersion2,
+			"Name":            "shared.pdf",
+			"Hash":            sharedHash,
+		})
+
+		// when: delete version 1, whose only file hash is still used by version 2
+		leftVersions, hashesToDelete, err := store.DeleteDocumentVersion(
+			ctx,
+			versionFile1.DocumentVersion.DocumentID,
+			versionFile1.DocumentVersion.Version,
+		)
+
+		// then
+		require.NoError(t, err)
+		require.Empty(t, hashesToDelete)
+		require.Equal(t, []docdb.VersionTime{docVersion2.Version}, leftVersions)
+	})
 }
