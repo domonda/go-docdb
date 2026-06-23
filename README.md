@@ -28,7 +28,7 @@ docdb.Configure(conn)      // set the global connection
 docdb.GetConn()            // retrieve it
 ```
 
-All package-level functions (e.g. `docdb.CreateDocument(...)`) delegate to the global connection.
+All package-level functions (e.g. `docdb.CreateDocument(...)`) delegate to the global connection. `Configure` panics if `conn` is nil, and the global connection is guarded by an `RWMutex` so `Configure` and `GetConn` are safe to call concurrently.
 
 ## Core Types
 
