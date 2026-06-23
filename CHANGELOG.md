@@ -5,6 +5,11 @@ All notable changes to `github.com/domonda/go-docdb` are documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.6.4] - 2026-06-23
+
+### Added
+- `DebugPrintDocument` and `DebugPrintCompanyDocuments`: print a human-readable, indented tree of a document (or all documents of a company) to standard output — every version and its files, sorted by name for deterministic output — for quick inspection during development. See the Debugging section in the README.
+
 ## [v0.6.3] - 2026-04-20
 
 ### Added
@@ -110,6 +115,7 @@ Initial release.
 - `ProxyConn` and `DeprecatedConn` (holding deprecated check-out/in methods).
 - `VersionInfo` with `CompanyID`, `LatestDocumentVersionInfo`, and `VersionTime.SetNull`.
 
+[v0.6.4]: https://github.com/domonda/go-docdb/releases/tag/v0.6.4
 [v0.6.3]: https://github.com/domonda/go-docdb/releases/tag/v0.6.3
 [v0.6.2]: https://github.com/domonda/go-docdb/releases/tag/v0.6.2
 [v0.6.1]: https://github.com/domonda/go-docdb/releases/tag/v0.6.1
