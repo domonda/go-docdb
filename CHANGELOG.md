@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `localfsdb.RestoreDocument` writes the correct `VersionInfo` (predecessor and file diff) when restoring a version that precedes the document's existing versions; it previously diffed such a version against the latest on-disk version, corrupting its metadata.
 - `localfsdb.AddDocumentVersion` runs its error-path cleanup while still holding the per-document lock, closing a window where a concurrent writer could chain a new version off a half-written one.
 - `storeconn.AddDocumentVersion` rolls back the metadata version when the file-content write fails, and `storeconn.RestoreDocument` rolls back partially-restored versions on error, so a failed operation no longer leaves a version referencing missing file content.
+- `localfsdb.RestoreDocument` (recreate mode) surfaces a company-ID read error instead of swallowing it, so it no longer silently leaves a stale company-document marker behind.
+- `HashedDocument.VersionInfo` returns nil for an internally inconsistent document instead of panicking.
 
 ### Removed
 - The Postgres `Postgres*` document-version helper functions (app-specific glue exposing the internal `document_version` key) moved to domonda-service; the unused `ToRefactorVersionExists` was dropped.
