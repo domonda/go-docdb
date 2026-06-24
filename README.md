@@ -28,7 +28,7 @@ docdb.Configure(conn)      // set the global connection
 docdb.GetConn()            // retrieve it
 ```
 
-All package-level functions (e.g. `docdb.CreateDocument(...)`) delegate to the global connection.
+All package-level functions (e.g. `docdb.CreateDocument(...)`) delegate to the global connection. `Configure` panics if `conn` is nil, and the global connection is guarded by an `RWMutex` so `Configure` and `GetConn` are safe to call concurrently.
 
 ## Core Types
 
@@ -198,6 +198,7 @@ Documents with no file changes are silently skipped. Returns `ErrNoChanges` only
 | `ErrDocumentAlreadyExists`   | `CreateDocument` called for an existing document ID |
 | `ErrVersionAlreadyExists`    | Version timestamp already in use                   |
 | `ErrDocumentChanged`         | Optimistic concurrency conflict                    |
+| `ErrPathConflict`            | Filesystem path conflict in `localfsdb`            |
 
 Use `errs.Has[ErrDocumentNotFound](err)` (from `github.com/domonda/go-errs`) to test for a specific error type.
 
@@ -249,6 +250,29 @@ syncedDocIDs, err := docdb.SyncAllCompanyDocuments(ctx, srcConn, destConn, compa
 The `recreate` flag has the same meaning as for `RestoreDocument`. When `continueOnError` is true, `SyncAllCompanyDocuments` collects per-document errors and keeps going instead of stopping at the first failure; `syncedDocIDs` always lists the documents that synced successfully.
 
 Sync works across any pair of `Conn` implementations, including `localfsdb` and split-store `storeconn` in either direction. Document and company IDs of any UUID version 1-8 are supported on both sides — in particular time-ordered v7 IDs (`uu.IDv7`) are correctly enumerated by `localfsdb`.
+
+## Debugging
+
+`DebugPrintDocument` and `DebugPrintCompanyDocuments` print a human-readable, indented tree of a document — or of all documents of a company — to standard output, useful for inspecting versions and files during development:
+
+```go
+// Print one document: a header, every version, and the files of each version
+err := docdb.DebugPrintDocument(ctx, conn, docID, "", "  ")
+
+// Print every document of a company (header + each document's tree)
+err := docdb.DebugPrintCompanyDocuments(ctx, conn, companyID, "", "  ")
+```
+
+`linePrefix` is prepended to every line and `indent` is added once per tree level (document → version → file). Within each version, files are printed sorted by name. `DebugPrintCompanyDocuments` prints documents in `EnumCompanyDocumentIDs` enumeration order, which is not necessarily sorted. Example layout:
+
+```
+Document: 0c4e8f2a-…  Company: 7b1d…  Versions: 2
+  Version: 2024-11-15_09-00-00.000  User: 3f2a…  Reason: "initial upload"
+    File: invoice.pdf  Size: 12345  Hash: 1f8ac…
+  Version: 2024-11-16_10-30-00.000  User: 3f2a…  Reason: "added OCR result"
+    File: invoice.pdf  Size: 12345  Hash: 1f8ac…
+    File: ocr.json     Size: 678    Hash: 9b3de…
+```
 
 ## Testing Helpers
 

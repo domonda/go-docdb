@@ -621,6 +621,11 @@ func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.I
 	if onNewVersion == nil {
 		return errs.New("nil onNewVersion func passed to CreateDocument")
 	}
+	if len(files) == 0 {
+		// The first version of a document must contain at least one file:
+		// a document cannot start with an empty, change-less version.
+		return errs.Errorf("cannot create document %s without files", docID)
+	}
 
 	docWriteMtx.Lock(docID)
 	defer docWriteMtx.Unlock(docID)
@@ -708,6 +713,13 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 		return errs.New("nil onNewVersion func passed to AddDocumentVersion")
 	}
 
+	docWriteMtx.Lock(docID)
+	defer docWriteMtx.Unlock(docID)
+
+	// Register the rollback after acquiring the lock so cleanup runs while the
+	// lock is still held (defers are LIFO). Otherwise the unlock would fire
+	// first and a concurrent writer could chain a new version off the
+	// half-written one this call is about to remove.
 	var (
 		newVersionDir      fs.File
 		newVersionInfoFile fs.File
@@ -722,9 +734,6 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 			}
 		}
 	}()
-
-	docWriteMtx.Lock(docID)
-	defer docWriteMtx.Unlock(docID)
 
 	prevVersionInfo, prevVersionDir, err := c.latestDocumentVersionInfo(ctx, docID)
 	if err != nil {
@@ -796,6 +805,12 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 	)
 	if err != nil {
 		return err
+	}
+
+	if len(versionInfo.Files) == 0 {
+		// Every version must contain at least one file: removing all files of a
+		// document is not allowed (use DeleteDocument to remove the document).
+		return errs.Errorf("cannot remove all files of document %s: every version must contain at least one file", docID)
 	}
 
 	if versionInfo.EqualFiles(prevVersionInfo) {
@@ -928,10 +943,20 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 	docDir := c.documentDir(doc.ID)
 
 	if recreate && docDir.Exists() {
-		if currCompanyID, e := c.documentCompanyID(ctx, doc.ID); e == nil {
-			if e := uuiddir.Remove(c.companiesDir.Join(currCompanyID.String()), doc.ID); e != nil {
-				return e
-			}
+		// NOTE: recreate deletes the existing document before the replacement
+		// is written and is therefore not atomic — a later failure in this call
+		// leaves the document absent (the rollback below only undoes what this
+		// call created, not this up-front delete). See Conn.RestoreDocument.
+		//
+		// Surface a failure to read the current company instead of swallowing
+		// it: without the company we cannot remove the old company-document
+		// marker, so proceeding would leave a stale mapping behind.
+		currCompanyID, e := c.documentCompanyID(ctx, doc.ID)
+		if e != nil {
+			return e
+		}
+		if e := uuiddir.Remove(c.companiesDir.Join(currCompanyID.String()), doc.ID); e != nil {
+			return e
 		}
 		if e := uuiddir.RemoveDir(c.documentsDir, docDir); e != nil {
 			return e
@@ -961,11 +986,11 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		if err != nil {
 			return err
 		}
-		if len(existingVersions) > 0 {
-			latest := existingVersions[len(existingVersions)-1]
-			prevVersion = &latest
-			prevVersionDir = docDir.Join(latest.String())
-		}
+		// prevVersion/prevVersionDir are intentionally left nil/empty here.
+		// VersionTimes() is ascending and the loop below sets the predecessor
+		// as it walks (both for skipped existing versions and newly written
+		// ones), so the earliest missing version is correctly diffed against
+		// its real predecessor (or none) rather than the latest on-disk version.
 	} else {
 		if err = docDir.MakeAllDirs(); err != nil {
 			return err

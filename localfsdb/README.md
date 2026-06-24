@@ -197,12 +197,22 @@ If an error occurs, the new version directory and info file are removed during c
 - **`DeleteDocument()`**: Removes the document directory and the company mapping entry.
 - **`DeleteDocumentVersion()`**: Removes a single version directory and its `.json` info file. If no versions remain after deletion, the document directory and company mapping are also removed.
 
+### Restoring a Document
+
+`RestoreDocument()` rebuilds a document from an in-memory `docdb.HashedDocument` backup (see the root README's Backup & Restore section). It holds the per-document write mutex and writes each version's files and `VersionInfo` JSON directly under the document directory, creating `company.id` and the company mapping when the document does not yet exist. The `recreate` flag controls how an existing document is handled:
+
+- **`recreate=true` (replace)**: if the document directory already exists, it and its company mapping are removed first, then the document is recreated entirely from the backup. The on-disk `company.id` after the call equals the backup's `CompanyID`.
+- **`recreate=false` (additive merge)**: the document is created if missing; otherwise existing versions are kept and only backup versions whose timestamp is not already on disk are added. The on-disk `company.id` must equal the backup's `CompanyID`, otherwise the call fails without changing anything.
+
+If an error occurs, the version directories and info files created during the call are removed during cleanup.
+
 ## Concurrency & Safety
 
 - **Per-document mutex**: All write operations acquire a per-document mutex via `docWriteMtx.Lock(docID)` to prevent concurrent modifications to the same document
 - **Atomic directory operations**: Directory existence is used as an atomic marker (e.g., for company-document mappings)
 - **Error cleanup**: Defer functions clean up partially created structures on error
 - **Version ordering**: Timestamps ensure strict version ordering; `AddDocumentVersion` enforces that the new version is strictly after the previous one
+- **Path-conflict diagnostics**: if a non-directory entry occupies a path needed for a document's directory tree (an out-of-band write, manual intervention, or backup tool), `CreateDocument` returns a `docdb.ErrPathConflict` carrying the offending on-disk path, entry type, size, and mtime instead of an opaque "file already exists" error. `ErrPathConflict` matches `os.ErrExist` via `errors.Is`.
 
 ## UUID Directory Structure
 

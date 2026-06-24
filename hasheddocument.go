@@ -33,9 +33,14 @@ type HashedVersion struct {
 // It checks for nil receiver, invalid IDs, empty Versions, invalid VersionTime,
 // nil HashedVersion entries, and FileHashes references that have no corresponding
 // entry in HashedFiles. All encountered problems are joined with errors.Join.
+//
+// It also enforces the document version invariants: every version must contain
+// at least one file (a document cannot be created empty, and no version may
+// remove all files), and every version after the first must differ from its
+// predecessor (no change-less versions).
 func (doc *HashedDocument) Validate() error {
 	if doc == nil {
-		return errs.New("nil HashedDocument")
+		return errors.New("nil HashedDocument")
 	}
 	var err error
 	if e := doc.ID.Validate(); e != nil {
@@ -45,7 +50,7 @@ func (doc *HashedDocument) Validate() error {
 		err = errors.Join(err, fmt.Errorf("HashedDocument.CompanyID is invalid: %w", e))
 	}
 	if len(doc.Versions) == 0 {
-		err = errors.Join(err, errs.New("HashedDocument has no versions"))
+		err = errors.Join(err, errors.New("HashedDocument has no versions"))
 	}
 	for v, hv := range doc.Versions {
 		if e := v.Validate(); e != nil {
@@ -60,6 +65,30 @@ func (doc *HashedDocument) Validate() error {
 				err = errors.Join(err, fmt.Errorf(
 					"HashedDocument version %s file %q references missing hash %s",
 					v, filename, hash,
+				))
+			}
+		}
+	}
+
+	// Ordered version invariants: every version must contain at least one file
+	// (no version may remove all files), and every version after the first must
+	// differ from its predecessor. VersionTimes returns the versions sorted
+	// ascending. Nil HashedVersions were already reported above and are skipped
+	// here to avoid a nil deref.
+	sorted := doc.VersionTimes()
+	for i, v := range sorted {
+		hv := doc.Versions[v]
+		if hv == nil {
+			continue
+		}
+		if len(hv.FileHashes) == 0 {
+			err = errors.Join(err, fmt.Errorf("HashedDocument version %s has no files", v))
+		}
+		if i > 0 {
+			if prev := doc.Versions[sorted[i-1]]; prev != nil && maps.Equal(hv.FileHashes, prev.FileHashes) {
+				err = errors.Join(err, fmt.Errorf(
+					"HashedDocument version %s is identical to previous version %s (no change)",
+					v, sorted[i-1],
 				))
 			}
 		}
@@ -150,6 +179,10 @@ func ReadHashedDocument(ctx context.Context, conn Conn, docID uu.ID) (doc *Hashe
 //   - recreate=true (replace): an existing document with the same ID on
 //     destConn is deleted first, then recreated entirely from srcConn.
 //     The CompanyID on destConn after the call equals the one on srcConn.
+//     This is not atomic: if the restore on destConn fails partway, the old
+//     document on destConn is already gone and is not restored. The source on
+//     srcConn is untouched, so the document is missing on destConn only until
+//     the sync is retried.
 //   - recreate=false (additive merge): the document is created on destConn
 //     if missing, otherwise existing versions are kept and only versions
 //     not already present on destConn are added. If the document exists,
@@ -217,8 +250,14 @@ func (doc *HashedDocument) VersionTimes() []VersionTime {
 
 // VersionInfo reconstructs a VersionInfo for the given version timestamp
 // by comparing against the previous version to compute added, modified,
-// and removed files. Returns nil if the version does not exist.
-func (doc *HashedDocument) VersionInfo(versionTime VersionTime) *VersionInfo {
+// and removed files.
+//
+// It returns ErrDocumentVersionNotFound if the version does not exist in the
+// document, and a different error if the document is internally inconsistent
+// (a version references a file hash that is missing from HashedFiles), so
+// corruption is never reported as a missing version. Callers that want to
+// detect such inconsistencies up-front should use Validate.
+func (doc *HashedDocument) VersionInfo(versionTime VersionTime) (*VersionInfo, error) {
 	var (
 		prevVersionTime *VersionTime
 		prevVersion     *HashedVersion
@@ -236,7 +275,7 @@ func (doc *HashedDocument) VersionInfo(versionTime VersionTime) *VersionInfo {
 		}
 	}
 	if version == nil {
-		return nil
+		return nil, NewErrDocumentVersionNotFound(doc.ID, versionTime)
 	}
 
 	info := &VersionInfo{
@@ -251,7 +290,13 @@ func (doc *HashedDocument) VersionInfo(versionTime VersionTime) *VersionInfo {
 	for filename, hash := range version.FileHashes {
 		data, ok := doc.HashedFiles[hash]
 		if !ok {
-			panic("HashedDocument is inconsistent, file hash not found in doc.HashedFiles")
+			// Inconsistent document: a file references a hash with no content.
+			// Surface it as an error rather than panicking or returning a nil
+			// that callers cannot tell apart from a missing version.
+			return nil, errs.Errorf(
+				"HashedDocument %s version %s file %q references hash %s missing from HashedFiles",
+				doc.ID, versionTime, filename, hash,
+			)
 		}
 		info.Files[filename] = FileInfo{
 			Name: filename,
@@ -279,5 +324,5 @@ func (doc *HashedDocument) VersionInfo(versionTime VersionTime) *VersionInfo {
 	slices.Sort(info.AddedFiles)
 	slices.Sort(info.ModifiedFiles)
 	slices.Sort(info.RemovedFiles)
-	return info
+	return info, nil
 }

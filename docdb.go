@@ -46,7 +46,7 @@ func SetDocumentCompanyID(ctx context.Context, docID, companyID uu.ID) (err erro
 }
 
 // DocumentVersions returns all version timestamps of a document in ascending order.
-// Returns nil and no error if the document does not exist or has no versions.
+// Returns ErrDocumentNotFound if the document does not exist.
 func DocumentVersions(ctx context.Context, docID uu.ID) (versions []VersionTime, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
@@ -230,6 +230,9 @@ func DeleteDocumentVersion(ctx context.Context, docID uu.ID, version VersionTime
 // If onNewVersion returns an error or panics, the entire document creation
 // is atomically rolled back, the error is returned, or the panic is propagated.
 //
+// At least one file must be provided: a document's first version cannot be
+// empty, so an empty files slice is rejected with an error.
+//
 // Returns ErrDocumentAlreadyExists if a document with docID already exists.
 func CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, version VersionTime, files []fs.FileReader, onNewVersion OnNewVersionFunc) (err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, companyID, docID, userID, reason, version, files, onNewVersion)
@@ -247,6 +250,9 @@ func CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason 
 // If createVersion or onNewVersion returns an error or panics,
 // the entire version creation is atomically rolled back,
 // the error is returned, or the panic is propagated.
+//
+// A new version must keep at least one file: removing all files of a document
+// is rejected with an error (use DeleteDocument to remove the document entirely).
 //
 // Returns wrapped ErrDocumentNotFound if the document does not exist.
 // Returns wrapped ErrNoChanges if the new version has identical files

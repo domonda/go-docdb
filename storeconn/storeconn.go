@@ -6,6 +6,7 @@ package storeconn
 import (
 	"context"
 	"errors"
+	"maps"
 
 	"github.com/domonda/go-errs"
 	"github.com/domonda/go-types/uu"
@@ -130,6 +131,11 @@ func (c *conn) CreateDocument(
 	files []fs.FileReader,
 	onNewVersion docdb.OnNewVersionFunc,
 ) error {
+	if len(files) == 0 {
+		// The first version of a document must contain at least one file:
+		// a document cannot start with an empty, change-less version.
+		return errs.Errorf("cannot create document %s without files", docID)
+	}
 	return c.createDocumentVersion(ctx, companyID, docID, userID, reason, version, files, onNewVersion)
 }
 
@@ -252,6 +258,25 @@ func (c *conn) AddDocumentVersion(
 		}
 	}
 
+	// Compute the resulting full file set (previous files, minus the removed
+	// ones, with added/modified overlaid) to enforce, before committing
+	// anything, that every version contains at least one file: removing all
+	// files of a document is not allowed.
+	resultingFiles := make(map[string]docdb.FileInfo, len(latestVersionInfo.Files))
+	maps.Copy(resultingFiles, latestVersionInfo.Files)
+	for _, name := range result.RemoveFiles {
+		delete(resultingFiles, name)
+	}
+	for _, fi := range addedFiles {
+		resultingFiles[fi.Name] = *fi
+	}
+	for _, fi := range modifiedFiles {
+		resultingFiles[fi.Name] = *fi
+	}
+	if len(resultingFiles) == 0 {
+		return errs.Errorf("cannot remove all files of document %s: every version must contain at least one file", docID)
+	}
+
 	newVersionInfo, err := c.metadataStore.AddDocumentVersion(
 		ctx,
 		result.Version,
@@ -269,8 +294,33 @@ func (c *conn) AddDocumentVersion(
 		return err
 	}
 
-	if err := c.documentStore.CreateDocument(ctx, docID, result.Version, result.WriteFiles); err != nil {
-		return err
+	// rollbackNewVersion removes the metadata version just added plus the file
+	// blobs written for it, joining any cleanup error onto cause. Used when a
+	// later step fails after the metadata version is already committed, so the
+	// store is not left with a version that references missing file content.
+	//
+	// The blobs to delete are taken from the hash set DeleteDocumentVersion
+	// reports as referenced only by the removed version. Deleting the version's
+	// addedFiles/modifiedFiles hashes directly would also wipe blobs that share
+	// their content hash with a sibling version (content is deduplicated by
+	// hash across the whole document) and corrupt those versions.
+	rollbackNewVersion := func(cause error) error {
+		_, hashesToDelete, pgErr := c.metadataStore.DeleteDocumentVersion(ctx, docID, result.Version)
+		if pgErr != nil {
+			// Without the metadata delete the safe hash set is unknown, so do
+			// not guess: leaving the blobs is preferable to deleting shared ones.
+			return errors.Join(cause, pgErr)
+		}
+		if len(hashesToDelete) > 0 {
+			if s3Err := c.documentStore.DeleteDocumentHashes(ctx, docID, hashesToDelete); s3Err != nil {
+				cause = errors.Join(cause, s3Err)
+			}
+		}
+		return cause
+	}
+
+	if err = c.documentStore.CreateDocument(ctx, docID, result.Version, result.WriteFiles); err != nil {
+		return rollbackNewVersion(err)
 	}
 
 	safeOnNewVersion := func() (err error) {
@@ -278,30 +328,11 @@ func (c *conn) AddDocumentVersion(
 		return onNewVersion(ctx, newVersionInfo)
 	}
 
-	err = safeOnNewVersion()
-	if err == nil {
-		return nil
+	if err = safeOnNewVersion(); err != nil {
+		return rollbackNewVersion(err)
 	}
 
-	_, _, pgCleanupErr := c.metadataStore.DeleteDocumentVersion(ctx, docID, result.Version)
-	if pgCleanupErr != nil {
-		err = errors.Join(err, pgCleanupErr)
-	}
-
-	hashesToDelete := []string{}
-	for _, f := range addedFiles {
-		hashesToDelete = append(hashesToDelete, f.Hash)
-	}
-
-	for _, f := range modifiedFiles {
-		hashesToDelete = append(hashesToDelete, f.Hash)
-	}
-
-	if s3Err := c.documentStore.DeleteDocumentHashes(ctx, docID, hashesToDelete); s3Err != nil {
-		err = errors.Join(err, s3Err)
-	}
-
-	return err
+	return nil
 }
 
 func (c *conn) AddMultiDocumentVersion(ctx context.Context, docIDs uu.IDSlice, userID uu.ID, reason string, createVersion docdb.CreateVersionFunc, onNewVersion docdb.OnNewVersionFunc) error {
@@ -324,6 +355,10 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 	}
 
 	if recreate && docExists {
+		// NOTE: recreate deletes the existing document before the replacement
+		// is written and is therefore not atomic — a later failure in this call
+		// leaves the document absent (the rollback below only undoes what this
+		// call created, not this up-front delete). See Conn.RestoreDocument.
 		if err = c.DeleteDocument(ctx, doc.ID); err != nil {
 			return err
 		}
@@ -351,6 +386,29 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 	noopOnNew := func(context.Context, *docdb.VersionInfo) error { return nil }
 	versionTimes := doc.VersionTimes()
 
+	// Roll back versions created during this call if a later step fails, so a
+	// partial restore does not leave a half-written document behind. If the
+	// document was created fresh here, drop it entirely; otherwise remove only
+	// the versions added here, leaving pre-existing ones intact.
+	var (
+		createdVersions []docdb.VersionTime
+		createdDoc      bool
+	)
+	defer func() {
+		if err == nil {
+			return
+		}
+		if createdDoc {
+			err = errors.Join(err, c.DeleteDocument(ctx, doc.ID))
+			return
+		}
+		for i := len(createdVersions) - 1; i >= 0; i-- {
+			if _, delErr := c.DeleteDocumentVersion(ctx, doc.ID, createdVersions[i]); delErr != nil {
+				err = errors.Join(err, delErr)
+			}
+		}
+	}()
+
 	for i, v := range versionTimes {
 		if !recreate && versionTimeIn(existingVersions, v) {
 			continue
@@ -363,6 +421,7 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 				return err
 			}
 			docExists = true
+			createdDoc = true
 			continue
 		}
 
@@ -404,6 +463,9 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		); err != nil {
 			return err
 		}
+		// Record as created right after the metadata commit so the rollback
+		// also covers a failure of the following blob write.
+		createdVersions = append(createdVersions, v)
 		if err = c.documentStore.CreateDocument(ctx, doc.ID, v, files); err != nil {
 			return err
 		}

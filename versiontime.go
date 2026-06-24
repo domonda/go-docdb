@@ -2,6 +2,7 @@ package docdb
 
 import (
 	sqldriver "database/sql/driver"
+	"errors"
 	"time"
 
 	"github.com/domonda/go-errs"
@@ -65,7 +66,7 @@ func MustVersionTimeFromString(str string) VersionTime {
 // Use Validate to check version arguments passed into functions.
 func (v VersionTime) Validate() error {
 	if v.Time.IsZero() {
-		return errs.New("invalid zero VersionTime")
+		return errors.New("invalid zero VersionTime")
 	}
 	return nil
 }

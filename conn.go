@@ -75,6 +75,9 @@ type Conn interface {
 	// is atomically rolled back, the error is returned, or the panic is propagated.
 	// onNewVersion must not be nil.
 	//
+	// At least one file must be provided: a document's first version cannot be
+	// empty, so an empty files slice is rejected with an error.
+	//
 	// Returns ErrDocumentAlreadyExists if a document with docID already exists.
 	CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, version VersionTime, files []fs.FileReader, onNewVersion OnNewVersionFunc) error
 
@@ -89,6 +92,10 @@ type Conn interface {
 	// the entire version creation is atomically rolled back,
 	// the error is returned, or the panic is propagated.
 	// createVersion and onNewVersion must not be nil.
+	//
+	// A new version must keep at least one file: removing all files of a
+	// document is rejected with an error (use DeleteDocument to remove the
+	// document entirely).
 	//
 	// Returns wrapped ErrDocumentNotFound if the document does not exist.
 	// Returns wrapped ErrNoChanges if the new version has identical files
@@ -109,6 +116,15 @@ type Conn interface {
 	// If recreate is true (replace): an existing document with the same ID is
 	// deleted first (including its company-document marker), then recreated
 	// from doc. The on-disk CompanyID after the call equals doc.CompanyID.
+	//
+	// WARNING: recreate is NOT atomic with respect to the pre-existing
+	// document. It is deleted before the replacement is written, so if the
+	// restore fails partway the original is gone and the rollback only removes
+	// what this call created — it cannot bring the original back. The document
+	// is left absent until the restore is retried. This is safe for the common
+	// SyncDocument flow, where the source still holds the data and the sync can
+	// simply be re-run, but callers must not delete their source on a failed
+	// recreate restore.
 	//
 	// If recreate is false (additive merge):
 	//   - If the document does not exist on disk, it is created from doc —

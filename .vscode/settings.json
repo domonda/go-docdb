@@ -1,0 +1,12 @@
+{
+  "gopls": {
+    "formatting.local": "github.com/domonda"
+  },
+  "[go]": {
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit"
+    }
+  },
+  "groupImports.onSave": false
+}
