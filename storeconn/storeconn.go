@@ -6,6 +6,7 @@ package storeconn
 import (
 	"context"
 	"errors"
+	"maps"
 
 	"github.com/domonda/go-errs"
 	"github.com/domonda/go-types/uu"
@@ -130,6 +131,11 @@ func (c *conn) CreateDocument(
 	files []fs.FileReader,
 	onNewVersion docdb.OnNewVersionFunc,
 ) error {
+	if len(files) == 0 {
+		// The first version of a document must contain at least one file:
+		// a document cannot start with an empty, change-less version.
+		return errs.Errorf("cannot create document %s without files", docID)
+	}
 	return c.createDocumentVersion(ctx, companyID, docID, userID, reason, version, files, onNewVersion)
 }
 
@@ -252,6 +258,29 @@ func (c *conn) AddDocumentVersion(
 		}
 	}
 
+	// Compute the resulting full file set (previous files, minus the removed
+	// ones, with added/modified overlaid) to enforce the version invariants
+	// before committing anything: a version must contain at least one file
+	// (removing all files is not allowed) and must differ from the previous
+	// version.
+	resultingFiles := make(map[string]docdb.FileInfo, len(latestVersionInfo.Files))
+	maps.Copy(resultingFiles, latestVersionInfo.Files)
+	for _, name := range result.RemoveFiles {
+		delete(resultingFiles, name)
+	}
+	for _, fi := range addedFiles {
+		resultingFiles[fi.Name] = *fi
+	}
+	for _, fi := range modifiedFiles {
+		resultingFiles[fi.Name] = *fi
+	}
+	if len(resultingFiles) == 0 {
+		return errs.Errorf("cannot remove all files of document %s: every version must contain at least one file", docID)
+	}
+	if maps.Equal(resultingFiles, latestVersionInfo.Files) {
+		return docdb.ErrNoChanges
+	}
+
 	newVersionInfo, err := c.metadataStore.AddDocumentVersion(
 		ctx,
 		result.Version,
@@ -273,19 +302,23 @@ func (c *conn) AddDocumentVersion(
 	// blobs written for it, joining any cleanup error onto cause. Used when a
 	// later step fails after the metadata version is already committed, so the
 	// store is not left with a version that references missing file content.
+	//
+	// The blobs to delete are taken from the hash set DeleteDocumentVersion
+	// reports as referenced only by the removed version. Deleting the version's
+	// addedFiles/modifiedFiles hashes directly would also wipe blobs that share
+	// their content hash with a sibling version (content is deduplicated by
+	// hash across the whole document) and corrupt those versions.
 	rollbackNewVersion := func(cause error) error {
-		if _, _, pgErr := c.metadataStore.DeleteDocumentVersion(ctx, docID, result.Version); pgErr != nil {
-			cause = errors.Join(cause, pgErr)
+		_, hashesToDelete, pgErr := c.metadataStore.DeleteDocumentVersion(ctx, docID, result.Version)
+		if pgErr != nil {
+			// Without the metadata delete the safe hash set is unknown, so do
+			// not guess: leaving the blobs is preferable to deleting shared ones.
+			return errors.Join(cause, pgErr)
 		}
-		hashesToDelete := make([]string, 0, len(addedFiles)+len(modifiedFiles))
-		for _, f := range addedFiles {
-			hashesToDelete = append(hashesToDelete, f.Hash)
-		}
-		for _, f := range modifiedFiles {
-			hashesToDelete = append(hashesToDelete, f.Hash)
-		}
-		if s3Err := c.documentStore.DeleteDocumentHashes(ctx, docID, hashesToDelete); s3Err != nil {
-			cause = errors.Join(cause, s3Err)
+		if len(hashesToDelete) > 0 {
+			if s3Err := c.documentStore.DeleteDocumentHashes(ctx, docID, hashesToDelete); s3Err != nil {
+				cause = errors.Join(cause, s3Err)
+			}
 		}
 		return cause
 	}
@@ -326,6 +359,10 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 	}
 
 	if recreate && docExists {
+		// NOTE: recreate deletes the existing document before the replacement
+		// is written and is therefore not atomic — a later failure in this call
+		// leaves the document absent (the rollback below only undoes what this
+		// call created, not this up-front delete). See Conn.RestoreDocument.
 		if err = c.DeleteDocument(ctx, doc.ID); err != nil {
 			return err
 		}

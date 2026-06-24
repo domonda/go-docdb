@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/ungerik/go-fs"
 
+	"github.com/domonda/go-errs"
 	"github.com/domonda/go-types/uu"
 )
 
@@ -105,6 +106,7 @@ func TestHashedDocument_Validate(t *testing.T) {
 	validID := uu.IDv4()
 	validCompanyID := uu.IDv4()
 	validVersion := MustVersionTimeFromString("2024-01-01_00-00-00.000")
+	validVersion2 := MustVersionTimeFromString("2024-01-01_00-00-00.001")
 	var zeroVersion VersionTime
 
 	data := []byte("hello")
@@ -149,6 +151,46 @@ func TestHashedDocument_Validate(t *testing.T) {
 			doc:         &HashedDocument{ID: validID, CompanyID: validCompanyID, HashedFiles: validHashedFiles(), Versions: nil},
 			wantErr:     true,
 			errContains: "no versions",
+		},
+		{
+			// The first version of a document cannot be empty.
+			name: "first version with no files is invalid",
+			doc: &HashedDocument{
+				ID: validID, CompanyID: validCompanyID, HashedFiles: map[string][]byte{},
+				Versions: map[VersionTime]*HashedVersion{
+					validVersion: {CommitUserID: uu.IDv4(), CommitReason: "init", FileHashes: map[string]string{}},
+				},
+			},
+			wantErr:     true,
+			errContains: "has no files",
+		},
+		{
+			// No version may remove all files: a later version with no files is
+			// invalid, not just the first one.
+			name: "later version with no files is invalid",
+			doc: &HashedDocument{
+				ID: validID, CompanyID: validCompanyID, HashedFiles: validHashedFiles(),
+				Versions: map[VersionTime]*HashedVersion{
+					validVersion:  {CommitUserID: uu.IDv4(), CommitReason: "init", FileHashes: map[string]string{"a.txt": hash}},
+					validVersion2: {CommitUserID: uu.IDv4(), CommitReason: "removed all files", FileHashes: map[string]string{}},
+				},
+			},
+			wantErr:     true,
+			errContains: "has no files",
+		},
+		{
+			// Two consecutive versions with identical files are a change-less
+			// version, which must not exist.
+			name: "identical consecutive versions are invalid",
+			doc: &HashedDocument{
+				ID: validID, CompanyID: validCompanyID, HashedFiles: validHashedFiles(),
+				Versions: map[VersionTime]*HashedVersion{
+					validVersion:  {CommitUserID: uu.IDv4(), CommitReason: "init", FileHashes: map[string]string{"a.txt": hash}},
+					validVersion2: {CommitUserID: uu.IDv4(), CommitReason: "no change", FileHashes: map[string]string{"a.txt": hash}},
+				},
+			},
+			wantErr:     true,
+			errContains: "no change",
 		},
 		{
 			name: "invalid version time",
@@ -208,17 +250,20 @@ func TestHashedDocument_VersionInfo(t *testing.T) {
 	}
 
 	t.Run("valid version", func(t *testing.T) {
-		info := doc.VersionInfo(v0)
+		info, err := doc.VersionInfo(v0)
+		require.NoError(t, err)
 		require.NotNil(t, info)
 		require.Nil(t, info.PrevVersion)
 		require.Equal(t, []string{"a.txt"}, info.AddedFiles)
 	})
 
-	t.Run("unknown version returns nil", func(t *testing.T) {
-		require.Nil(t, doc.VersionInfo(MustVersionTimeFromString("2030-01-01_00-00-00.000")))
+	t.Run("unknown version returns ErrDocumentVersionNotFound", func(t *testing.T) {
+		info, err := doc.VersionInfo(MustVersionTimeFromString("2030-01-01_00-00-00.000"))
+		require.Nil(t, info)
+		require.True(t, errs.Has[ErrDocumentVersionNotFound](err))
 	})
 
-	t.Run("inconsistent document returns nil instead of panicking", func(t *testing.T) {
+	t.Run("inconsistent document returns a non-not-found error", func(t *testing.T) {
 		bad := &HashedDocument{
 			ID:          uu.IDv4(),
 			CompanyID:   uu.IDv4(),
@@ -228,7 +273,12 @@ func TestHashedDocument_VersionInfo(t *testing.T) {
 			},
 		}
 		require.NotPanics(t, func() {
-			require.Nil(t, bad.VersionInfo(v0))
+			info, err := bad.VersionInfo(v0)
+			require.Nil(t, info)
+			// Corruption must be reported as an error and be distinguishable
+			// from a merely missing version.
+			require.Error(t, err)
+			require.False(t, errs.Has[ErrDocumentVersionNotFound](err))
 		})
 	})
 }

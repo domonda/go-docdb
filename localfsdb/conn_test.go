@@ -46,7 +46,10 @@ func TestCreateDocument(t *testing.T) {
 			wantFinalErr: true,
 		},
 		{
-			name: "create document without files",
+			// A document's first version must contain at least one file:
+			// creating a document with no files is rejected, because a document
+			// cannot start with an empty, change-less version.
+			name: "create document without files is rejected",
 			args: args{
 				companyID: defaultCompanyID,
 				docID:     uu.IDFrom("ce6f0867-0172-4ffc-a0c0-c5878b921171"),
@@ -55,15 +58,7 @@ func TestCreateDocument(t *testing.T) {
 				version:   versionTime0,
 				files:     nil,
 			},
-			wantVersionInfo: &docdb.VersionInfo{
-				CompanyID:    defaultCompanyID,
-				DocID:        uu.IDFrom("ce6f0867-0172-4ffc-a0c0-c5878b921171"),
-				Version:      versionTime0,
-				CommitUserID: defaultUserID,
-				CommitReason: defaultReason,
-				Files:        newTestFileInfos(),
-			},
-			wantFiles: newTestMemFiles(),
+			wantFinalErr: true,
 		},
 		{
 			name: "create document with 1 file",
@@ -143,6 +138,33 @@ func TestCreateDocument(t *testing.T) {
 			require.Equal(t, defaultCompanyID, gotCompanyID)
 		})
 	}
+}
+
+// TestAddDocumentVersion_RemoveAllFilesRejected verifies that a new version
+// cannot remove every file of a document: at least one file must remain in
+// every version.
+func TestAddDocumentVersion_RemoveAllFilesRejected(t *testing.T) {
+	conn := localfsdb.NewTestConn(t)
+	companyID := uu.IDv4()
+	docID := uu.IDv4()
+	userID := uu.IDv4()
+	v0 := docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+	noopOnNew := func(context.Context, *docdb.VersionInfo) error { return nil }
+
+	require.NoError(t, conn.CreateDocument(
+		t.Context(), companyID, docID, userID, "init", v0,
+		newTestMemFiles("a.txt"), noopOnNew,
+	))
+
+	// Removing the only file would leave the new version with zero files.
+	err := conn.AddDocumentVersion(
+		t.Context(), docID, userID, "remove all files",
+		docdb.CreateVersionRemoveFiles("a.txt"),
+		noopOnNew,
+	)
+	require.Error(t, err)
+	require.NotErrorIs(t, err, docdb.ErrNoChanges) // a distinct error, not no-change
+	require.ErrorContains(t, err, "at least one file")
 }
 
 func TestAddDocumentVersion(t *testing.T) {
@@ -692,7 +714,7 @@ func TestCreateDocument_PathConflict(t *testing.T) {
 		userID,
 		"TestCreateDocument_PathConflict",
 		version,
-		nil,
+		newTestMemFiles("a.txt"),
 		func(ctx context.Context, vi *docdb.VersionInfo) error { return nil },
 	)
 
@@ -774,7 +796,7 @@ func TestCreateDocument_ConcurrentSharedPathPrefix(t *testing.T) {
 				userID,
 				"TestCreateDocument_ConcurrentSharedPathPrefix",
 				version,
-				nil,
+				newTestMemFiles("a.txt"),
 				func(ctx context.Context, vi *docdb.VersionInfo) error { return nil },
 			)
 			if err != nil {

@@ -197,8 +197,10 @@ func TestDocumentVersions(t *testing.T) {
 		// then
 		require.NoError(t, err)
 		require.Equal(t, 2, len(versions))
-		require.Equal(t, docVersion2.Version, versions[0])
-		require.Equal(t, docVersion1.Version, versions[1])
+		// Versions must be returned in ascending order (oldest first),
+		// as documented by the MetadataStore.DocumentVersions contract.
+		require.Equal(t, docVersion1.Version, versions[0])
+		require.Equal(t, docVersion2.Version, versions[1])
 	})
 
 	t.Run("Returns error if no versions", func(t *testing.T) {

@@ -621,6 +621,11 @@ func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.I
 	if onNewVersion == nil {
 		return errs.New("nil onNewVersion func passed to CreateDocument")
 	}
+	if len(files) == 0 {
+		// The first version of a document must contain at least one file:
+		// a document cannot start with an empty, change-less version.
+		return errs.Errorf("cannot create document %s without files", docID)
+	}
 
 	docWriteMtx.Lock(docID)
 	defer docWriteMtx.Unlock(docID)
@@ -802,6 +807,12 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 		return err
 	}
 
+	if len(versionInfo.Files) == 0 {
+		// Every version must contain at least one file: removing all files of a
+		// document is not allowed (use DeleteDocument to remove the document).
+		return errs.Errorf("cannot remove all files of document %s: every version must contain at least one file", docID)
+	}
+
 	if versionInfo.EqualFiles(prevVersionInfo) {
 		return docdb.ErrNoChanges
 	}
@@ -932,6 +943,11 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 	docDir := c.documentDir(doc.ID)
 
 	if recreate && docDir.Exists() {
+		// NOTE: recreate deletes the existing document before the replacement
+		// is written and is therefore not atomic — a later failure in this call
+		// leaves the document absent (the rollback below only undoes what this
+		// call created, not this up-front delete). See Conn.RestoreDocument.
+		//
 		// Surface a failure to read the current company instead of swallowing
 		// it: without the company we cannot remove the old company-document
 		// marker, so proceeding would leave a stale mapping behind.

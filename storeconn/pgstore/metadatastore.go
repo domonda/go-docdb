@@ -235,7 +235,7 @@ func (store *postgresMetadataStore) DocumentVersions(ctx context.Context, docID 
 		select version
 		from docdb.document_version
 		where document_id = $1
-		order by version desc
+		order by version asc
 		`,
 		docID,
 	)
