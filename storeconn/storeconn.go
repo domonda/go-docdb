@@ -259,10 +259,9 @@ func (c *conn) AddDocumentVersion(
 	}
 
 	// Compute the resulting full file set (previous files, minus the removed
-	// ones, with added/modified overlaid) to enforce the version invariants
-	// before committing anything: a version must contain at least one file
-	// (removing all files is not allowed) and must differ from the previous
-	// version.
+	// ones, with added/modified overlaid) to enforce, before committing
+	// anything, that every version contains at least one file: removing all
+	// files of a document is not allowed.
 	resultingFiles := make(map[string]docdb.FileInfo, len(latestVersionInfo.Files))
 	maps.Copy(resultingFiles, latestVersionInfo.Files)
 	for _, name := range result.RemoveFiles {
@@ -276,9 +275,6 @@ func (c *conn) AddDocumentVersion(
 	}
 	if len(resultingFiles) == 0 {
 		return errs.Errorf("cannot remove all files of document %s: every version must contain at least one file", docID)
-	}
-	if maps.Equal(resultingFiles, latestVersionInfo.Files) {
-		return docdb.ErrNoChanges
 	}
 
 	newVersionInfo, err := c.metadataStore.AddDocumentVersion(

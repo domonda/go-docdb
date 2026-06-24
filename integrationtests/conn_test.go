@@ -155,6 +155,9 @@ func TestConn(t *testing.T) {
 			populator := pgfixtures.FixturePopulator(t)
 			content := []byte("a")
 			documentVersionFile := populator.DocumentVersionFile(map[string]any{"Hash": docdb.ContentHash(content)})
+			// A second file in the same version, so removing one still leaves a
+			// file: every version must contain at least one file.
+			populator.DocumentVersionFile(map[string]any{"DocumentVersion": documentVersionFile.DocumentVersion})
 			createDocument := s3fixtures.FixtureCreateDocument(t)
 
 			createDocument(
@@ -205,18 +208,21 @@ func TestConn(t *testing.T) {
 				documentVersionFile.DocumentVersion.Version,
 			)
 			require.NoError(t, err)
-			require.Equal(t, 0, res)
+			require.Equal(t, 1, res) // the removed file is gone; the second file is carried forward
 		})
 
 		t.Run("Basic document version data is correct", func(t *testing.T) {
 			// given
+			s3fixtures.FixtureCleanBucket(t) // the carried-forward file is looked up in S3
 			documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
 			conn := storeconn.New(
 				documentStore,
 				pgstore.NewMetadataStore(),
 			)
 			populator := pgfixtures.FixturePopulator(t)
-			documentVersion := populator.DocumentVersion()
+			// The document must have at least one file; a company-only change
+			// carries it forward so the new version is non-empty.
+			documentVersionFile := populator.DocumentVersionFile()
 			newCompanyID := uu.IDv7()
 
 			newVersion := &docdb.VersionInfo{}
@@ -226,7 +232,7 @@ func TestConn(t *testing.T) {
 			// when
 			err := conn.AddDocumentVersion(
 				ctx,
-				documentVersion.DocumentID,
+				documentVersionFile.DocumentVersion.DocumentID,
 				uu.IDv7(),
 				"reason",
 				func(ctx context.Context, docID uu.ID, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (*docdb.CreateVersionResult, error) {

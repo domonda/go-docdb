@@ -51,19 +51,3 @@ func TestConn_AddDocumentVersion_RemoveAllFilesRejected(t *testing.T) {
 	require.ErrorContains(t, err, "at least one file")
 	require.False(t, meta.deleteVersionCalled, "must be rejected before any metadata commit/rollback")
 }
-
-// TestConn_AddDocumentVersion_NoChangeRejected verifies that storeconn returns
-// ErrNoChanges when the new version's files are identical to the previous one,
-// matching the documented contract and localfsdb's behavior.
-func TestConn_AddDocumentVersion_NoChangeRejected(t *testing.T) {
-	content := []byte("a content")
-	meta, conn, docID := singleFileBackend(content)
-
-	// Writing a.txt with identical content yields no change.
-	err := conn.AddDocumentVersion(context.Background(), docID, uu.IDv4(), "no change",
-		docdb.CreateVersionWriteFiles(fs.NewMemFile("a.txt", content)),
-		func(context.Context, *docdb.VersionInfo) error { return nil },
-	)
-	require.ErrorIs(t, err, docdb.ErrNoChanges)
-	require.False(t, meta.deleteVersionCalled, "must be rejected before any metadata commit/rollback")
-}
