@@ -17,6 +17,9 @@ const (
 	// ErrNotImplemented is returned when an operation is not supported
 	// by a particular Conn implementation.
 	ErrNotImplemented errs.Sentinel = "not implemented"
+	// ErrReadonly is returned by the write methods of a read-only Conn,
+	// such as one created with ReadonlyConn.
+	ErrReadonly errs.Sentinel = "connection is read-only"
 )
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -28,6 +31,8 @@ type ErrDocumentNotFound struct {
 	docID uu.ID
 }
 
+// NewErrDocumentNotFound returns an ErrDocumentNotFound
+// for the document with the passed docID.
 func NewErrDocumentNotFound(docID uu.ID) ErrDocumentNotFound {
 	return ErrDocumentNotFound{docID}
 }
@@ -54,6 +59,8 @@ type ErrDocumentFileNotFound struct {
 	filename string
 }
 
+// NewErrDocumentFileNotFound returns an ErrDocumentFileNotFound
+// for the file with the passed filename within the document with the passed docID.
 func NewErrDocumentFileNotFound(docID uu.ID, filename string) ErrDocumentFileNotFound {
 	return ErrDocumentFileNotFound{docID, filename}
 }
@@ -78,6 +85,8 @@ type ErrDocumentVersionNotFound struct {
 	version VersionTime
 }
 
+// NewErrDocumentVersionNotFound returns an ErrDocumentVersionNotFound
+// for the passed version of the document with the passed docID.
 func NewErrDocumentVersionNotFound(docID uu.ID, version VersionTime) ErrDocumentVersionNotFound {
 	return ErrDocumentVersionNotFound{docID, version}
 }
@@ -99,6 +108,8 @@ type ErrDocumentAlreadyExists struct {
 	docID uu.ID
 }
 
+// NewErrDocumentAlreadyExists returns an ErrDocumentAlreadyExists
+// for the document with the passed docID.
 func NewErrDocumentAlreadyExists(docID uu.ID) ErrDocumentAlreadyExists {
 	return ErrDocumentAlreadyExists{docID}
 }
@@ -117,6 +128,8 @@ type ErrVersionAlreadyExists struct {
 	version VersionTime
 }
 
+// NewErrVersionAlreadyExists returns an ErrVersionAlreadyExists
+// for the passed version of the document with the passed docID.
 func NewErrVersionAlreadyExists(docID uu.ID, version VersionTime) ErrVersionAlreadyExists {
 	return ErrVersionAlreadyExists{docID, version}
 }
@@ -148,6 +161,10 @@ type ErrPathConflict struct {
 	modTime      time.Time
 }
 
+// NewErrPathConflict returns an ErrPathConflict for the document with the
+// passed docID and companyID. targetPath is the directory path that was
+// expected, conflictPath is the existing non-directory entry that blocks it,
+// and entryType, size, and modTime describe that offending on-disk entry.
 func NewErrPathConflict(docID, companyID uu.ID, targetPath, conflictPath, entryType string, size int64, modTime time.Time) ErrPathConflict {
 	return ErrPathConflict{
 		docID:        docID,
@@ -187,6 +204,9 @@ type ErrDocumentChanged struct {
 	baseVersion VersionTime
 }
 
+// NewErrDocumentChanged returns an ErrDocumentChanged for the document with
+// the passed docID, where version is the base version it was expected to
+// still be at.
 func NewErrDocumentChanged(docID uu.ID, version VersionTime) ErrDocumentChanged {
 	return ErrDocumentChanged{docID, version}
 }

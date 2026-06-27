@@ -17,11 +17,14 @@ import (
 // documented not-found conditions occur, so callers can match them with
 // errors.Is: docdb.ErrDocumentNotFound, docdb.ErrDocumentFileNotFound.
 type DocumentStore interface {
-	// CreateDocument stores the provided files for a document version.
-	// Files are keyed by their content hash, so identical content is
-	// deduplicated. Uniqueness of the document ID is enforced by the
-	// MetadataStore, not by this method.
-	CreateDocument(ctx context.Context, docID uu.ID, version docdb.VersionTime, files []fs.FileReader) error
+	// CreateDocumentVersion stores the provided files for a document version
+	// and returns a FileInfo (name, size, content hash) for each stored file in
+	// the same order as files. Returning the hashes the store computed while
+	// writing lets the caller avoid re-reading and re-hashing the files. Files
+	// are keyed by their content hash, so identical content is deduplicated.
+	// Uniqueness of the document ID is enforced by the MetadataStore, not by
+	// this method.
+	CreateDocumentVersion(ctx context.Context, docID uu.ID, version docdb.VersionTime, files []fs.FileReader) ([]*docdb.FileInfo, error)
 
 	// DocumentExists returns true if a document with the passed docID exists in the store.
 	DocumentExists(ctx context.Context, docID uu.ID) (exists bool, err error)

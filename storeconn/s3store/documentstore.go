@@ -69,20 +69,21 @@ func (s *docStore) EnumDocumentIDs(ctx context.Context, callback func(context.Co
 	return enumerator.Run(ctx)
 }
 
-// CreateDocument uploads each of the passed files as a separate S3 object
+// CreateDocumentVersion uploads each of the passed files as a separate S3 object
 // keyed by "<docID>/<filename>/<contentHash>". Filenames containing "/"
 // are rejected because "/" is the key separator. The version argument is
 // accepted for interface compatibility but not persisted at this layer;
 // version tracking is the MetadataStore's responsibility.
-func (s *docStore) CreateDocument(ctx context.Context, docID uu.ID, version docdb.VersionTime, files []fs.FileReader) error {
-	for _, file := range files {
+func (s *docStore) CreateDocumentVersion(ctx context.Context, docID uu.ID, version docdb.VersionTime, files []fs.FileReader) ([]*docdb.FileInfo, error) {
+	fileInfos := make([]*docdb.FileInfo, len(files))
+	for i, file := range files {
 		if strings.Contains(file.Name(), "/") {
-			return fmt.Errorf("filename '%s' contains '/'", file.Name())
+			return nil, fmt.Errorf("filename '%s' contains '/'", file.Name())
 		}
 
 		data, err := file.ReadAll()
 		if err != nil {
-			return err
+			return nil, err
 		}
 		hash := docdb.ContentHash(data)
 		_, err = s.client.PutObject(
@@ -94,11 +95,12 @@ func (s *docStore) CreateDocument(ctx context.Context, docID uu.ID, version docd
 			},
 		)
 		if err != nil {
-			return err
+			return nil, err
 		}
+		fileInfos[i] = &docdb.FileInfo{Name: file.Name(), Size: file.Size(), Hash: hash}
 	}
 
-	return nil
+	return fileInfos, nil
 }
 
 // DocumentHashFileProvider lists all objects under the docID prefix, filters
