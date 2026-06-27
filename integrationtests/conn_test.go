@@ -443,5 +443,78 @@ func TestConn(t *testing.T) {
 				require.True(t, ok, "version %s missing after merge restore", v)
 			}
 		})
+
+		t.Run("recreate=false fills in a deleted earliest version on existing doc", func(t *testing.T) {
+			// given: create a doc with three versions, snapshot the backup, then
+			// drop the EARLIEST version. Merge-restoring it forces the loop to
+			// re-insert a version that precedes the document's remaining versions
+			// (loop index 0, no predecessor), which must store prev_version NULL.
+			s3fixtures.FixtureCleanBucket(t)
+			documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
+			conn := storeconn.New(documentStore, pgstore.NewMetadataStore())
+
+			ctx := pgfixtures.FixtureCtxWithTestTx(t)
+
+			companyID := uu.IDv7()
+			docID := uu.IDv7()
+			userID := uu.IDv7()
+
+			require.NoError(t, conn.CreateDocument(
+				ctx, companyID, docID, userID, "v0",
+				docdb.NewVersionTime(),
+				[]fs.FileReader{fs.NewMemFile("a.txt", []byte("a"))},
+				func(context.Context, *docdb.VersionInfo) error { return nil },
+			))
+			require.NoError(t, conn.AddDocumentVersion(
+				ctx, docID, userID, "v1",
+				func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+					return &docdb.CreateVersionResult{
+						Version:    docdb.NewVersionTime(),
+						WriteFiles: []fs.FileReader{fs.NewMemFile("b.txt", []byte("b"))},
+					}, nil
+				},
+				func(context.Context, *docdb.VersionInfo) error { return nil },
+			))
+			require.NoError(t, conn.AddDocumentVersion(
+				ctx, docID, userID, "v2",
+				func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+					return &docdb.CreateVersionResult{
+						Version:    docdb.NewVersionTime(),
+						WriteFiles: []fs.FileReader{fs.NewMemFile("c.txt", []byte("c"))},
+					}, nil
+				},
+				func(context.Context, *docdb.VersionInfo) error { return nil },
+			))
+
+			backup, err := docdb.ReadHashedDocument(ctx, conn, docID)
+			require.NoError(t, err)
+			require.Equal(t, 3, len(backup.Versions))
+
+			versions, err := conn.DocumentVersions(ctx, docID)
+			require.NoError(t, err)
+			require.Equal(t, 3, len(versions))
+			earliestVersion := versions[0] // DocumentVersions is ordered ascending
+			_, err = conn.DeleteDocumentVersion(ctx, docID, earliestVersion)
+			require.NoError(t, err)
+
+			// when: merge-restore the original backup. Without the nil-genesis
+			// fix this fails with "invalid zero VersionTime" because the earliest
+			// version is re-inserted with a pointer to the zero VersionTime.
+			require.NoError(t, conn.RestoreDocument(ctx, backup, false))
+
+			// then: all three versions are present again, and the restored
+			// earliest version is stored as a genesis version (prev_version NULL).
+			restored, err := docdb.ReadHashedDocument(ctx, conn, docID)
+			require.NoError(t, err)
+			require.Equal(t, 3, len(restored.Versions))
+			for v := range backup.Versions {
+				_, ok := restored.Versions[v]
+				require.True(t, ok, "version %s missing after merge restore", v)
+			}
+
+			earliestInfo, err := conn.DocumentVersionInfo(ctx, docID, earliestVersion)
+			require.NoError(t, err)
+			require.Nil(t, earliestInfo.PrevVersion, "restored earliest version must have NULL prev_version")
+		})
 	})
 }

@@ -154,7 +154,7 @@ func TestEnumDocumentIDs(t *testing.T) {
 	})
 }
 
-func TestCreateDocument(t *testing.T) {
+func TestCreateDocumentVersion(t *testing.T) {
 	t.Run("Saves files", func(t *testing.T) {
 		// given
 		bucketName := s3fixtures.FixtureCleanBucket(t)
@@ -175,7 +175,7 @@ func TestCreateDocument(t *testing.T) {
 		}
 
 		// when
-		err := documentStore.CreateDocument(
+		fileInfos, err := documentStore.CreateDocumentVersion(
 			t.Context(),
 			docID,
 			version,
@@ -184,6 +184,14 @@ func TestCreateDocument(t *testing.T) {
 
 		// then
 		require.NoError(t, err)
+
+		// the returned FileInfos describe each stored file in input order
+		require.Len(t, fileInfos, len(files))
+		for i := range files {
+			require.Equal(t, files[i].Name(), fileInfos[i].Name)
+			require.Equal(t, files[i].Size(), fileInfos[i].Size)
+			require.Equal(t, docdb.ContentHash(files[i].FileData), fileInfos[i].Hash)
+		}
 
 		for _, file := range files {
 			key := s3store.Key(docID, file.Name(), docdb.ContentHash(file.FileData))
@@ -195,7 +203,7 @@ func TestCreateDocument(t *testing.T) {
 	t.Run("Returns error if bucket does not exist", func(t *testing.T) {
 		// when
 		documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
-		err := documentStore.CreateDocument(
+		_, err := documentStore.CreateDocumentVersion(
 			t.Context(),
 			uu.IDv4(),
 			docdb.NewVersionTime(),

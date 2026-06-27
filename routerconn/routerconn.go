@@ -61,7 +61,7 @@ func New(
 type routerConn struct {
 	connForCompanyID func(ctx context.Context, companyID uu.ID) (docdb.Conn, error)
 	connForDocID     func(ctx context.Context, docID uu.ID) (docdb.Conn, error)
-	allConns         []docdb.Conn
+	allConns         []docdb.Conn // Used for EnumDocumentIDs
 }
 
 var _ docdb.Conn = (*routerConn)(nil)

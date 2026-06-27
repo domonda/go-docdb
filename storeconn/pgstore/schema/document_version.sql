@@ -31,4 +31,14 @@ create index document_version_version_idx on docdb.document_version (version);
 create index document_version_commit_user_id_idx on docdb.document_version (commit_user_id);
 create index document_version_commit_reason_idx on docdb.document_version (commit_reason);
 
+-- A document has exactly one genesis (first) version, stored with prev_version
+-- NULL. This partial unique index enforces that: a second genesis insert for the
+-- same document — even with a different version timestamp — raises a unique
+-- violation, which CreateDocumentVersion maps to ErrDocumentAlreadyExists. It
+-- prevents a document whose metadata exists but whose blobs are absent from
+-- being silently given a duplicate genesis version.
+create unique index document_version_one_genesis_per_document_idx
+    on docdb.document_version (document_id)
+    where prev_version is null;
+
 comment on table docdb.document_version is 'Document version meta data';

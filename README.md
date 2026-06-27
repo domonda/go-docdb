@@ -19,6 +19,8 @@ The package provides two ways to create a `Conn`:
 - **`DocumentStore`**: stores and retrieves file content by content hash. Implemented by the `storeconn/s3store` subpackage.
 - **`MetadataStore`**: stores and queries version metadata (company, user, reason, file lists). Implemented by the `storeconn/pgstore` subpackage.
 
+> **Note (external data assumption):** when a version's complete file set is not supplied explicitly, `pgstore` reconstructs it from the predecessor plus that version's added/modified/removed lists; the initial (genesis) version has no predecessor, so its full set comes entirely from `added_files`. That an initial version's `added_files` actually holds the document's complete initial file set is a fact of the deployed system that populated the `document_version` table — it is assumed here, and is neither enforced nor verifiable from this repository.
+
 ### Global connection
 
 The package maintains a global `Conn` configured once at startup:
@@ -127,6 +129,19 @@ type Conn interface {
 }
 ```
 
+### Read-only connections
+
+`ReadonlyConn` wraps any `Conn` to hand out a read-only view. Read methods pass through to the wrapped connection; every write method returns the `ErrReadonly` sentinel without touching the underlying connection.
+
+```go
+ro := docdb.ReadonlyConn(conn)
+
+info, err := ro.LatestDocumentVersionInfo(ctx, docID) // forwarded to conn
+err = ro.DeleteDocument(ctx, docID)                   // returns ErrReadonly
+```
+
+The write methods (`SetDocumentCompanyID`, `CreateDocument`, `AddDocumentVersion`, `AddMultiDocumentVersion`, `DeleteDocument`, `DeleteDocumentVersion`, `RestoreDocument`) return an error that names the document they refused and wraps `ErrReadonly`. Test for it with `errors.Is(err, docdb.ErrReadonly)`.
+
 ## Creating and Versioning Documents
 
 ### Creating a document
@@ -192,6 +207,7 @@ Documents with no file changes are silently skipped. Returns `ErrNoChanges` only
 | ---------------------------- | -------------------------------------------------- |
 | `ErrNoChanges`               | New version is identical to the previous version   |
 | `ErrNotImplemented`          | Operation not supported by this `Conn` implementation |
+| `ErrReadonly`                | Write method called on a read-only `Conn`          |
 | `ErrDocumentNotFound`        | No document with the given ID; also matches `os.ErrNotExist`, `sql.ErrNoRows`, `errs.ErrNotFound` |
 | `ErrDocumentFileNotFound`    | File not found in the version                      |
 | `ErrDocumentVersionNotFound` | Version not found for the document                 |
@@ -251,6 +267,76 @@ The `recreate` flag has the same meaning as for `RestoreDocument`. When `continu
 
 Sync works across any pair of `Conn` implementations, including `localfsdb` and split-store `storeconn` in either direction. Document and company IDs of any UUID version 1-8 are supported on both sides — in particular time-ordered v7 IDs (`uu.IDv7`) are correctly enumerated by `localfsdb`.
 
+## Split-store backends (`storeconn`)
+
+`storeconn.New(documentStore, metadataStore)` builds a `docdb.Conn` from two collaborating backends. The conn owns the orchestration — ordering the two stores' writes, enforcing the "every version keeps at least one file" rule, and rolling back on failure — so each backend only implements storage primitives.
+
+```go
+docStore := s3store.NewDocumentStore(bucketName, s3Client) // DocumentStore
+metaStore := pgstore.NewMetadataStore()                   // MetadataStore
+conn := storeconn.New(docStore, metaStore)
+```
+
+### `DocumentStore` — file content by hash
+
+Stores and retrieves file content, keyed by content hash so identical content is deduplicated. The write method returns a `FileInfo` per stored file so the conn can reuse the hash the store computed while writing instead of re-reading the file:
+
+```go
+CreateDocumentVersion(ctx, docID, version, files) ([]*docdb.FileInfo, error)
+```
+
+It also implements `DocumentExists`, `DocumentHashFileProvider`, `ReadDocumentHashFile`, `DeleteDocument`, `DeleteDocumentHashes`, and `EnumDocumentIDs`. `storeconn/s3store` is the reference implementation; uniqueness of the document ID is enforced by the `MetadataStore`, not here.
+
+### `MetadataStore` — version metadata
+
+Stores and queries version metadata (company, user, reason, file lists, previous version). One method writes a version; the rest are queries plus two deletes:
+
+```go
+CreateDocumentVersion(ctx, CreateDocumentVersionInput) (*docdb.VersionInfo, error)
+```
+
+`CreateDocumentVersionInput` describes the version to write:
+
+```go
+type CreateDocumentVersionInput struct {
+    DocID, CompanyID, UserID  uu.ID
+    Reason                    string
+    NewVersion                docdb.VersionTime
+    PreviousVersion           *docdb.VersionTime         // nil => genesis (prev_version NULL)
+    AddedFiles, ModifiedFiles []*docdb.FileInfo
+    RemovedFiles              []string
+    Files                     map[string]docdb.FileInfo  // optional: pre-resolved full file set
+}
+```
+
+- A nil `PreviousVersion` writes the first (genesis) version: `prev_version` is stored as NULL and every passed file is recorded as added.
+- A non-nil `PreviousVersion` appends: the store carries that version's files forward, then applies the added/modified/removed deltas.
+- `Files`, when set, is the complete resolved file set. The conn passes it from `AddDocumentVersion`/`RestoreDocument` (which already compute it) so the store skips the predecessor lookup and re-derivation. When nil, the store resolves the set itself from `PreviousVersion` plus the deltas.
+
+`CreateDocumentVersion` never reads file content — `AddedFiles`/`ModifiedFiles` already carry the `FileInfo` (name, size, hash) the `DocumentStore` computed. `storeconn/pgstore` is the reference implementation.
+
+### Blob-only migration (versions-exist mode)
+
+`pgstore.ContextWithMetadataStoreVersionsExist(ctx)` switches the Postgres `MetadataStore` into versions-exist mode, where it is immutable: it verifies versions instead of inserting them and verifies existence instead of deleting. It exists for one job — copying a document's file blobs to a *different* `DocumentStore` while reusing a `MetadataStore` that already holds the versions (for example moving blobs to a new S3 bucket without rewriting Postgres):
+
+```go
+// Same shared Postgres metadata, new blob store.
+dest := storeconn.New(newDocStore, sharedMetaStore)
+
+// In versions-exist mode the metadata is read and verified, never mutated.
+ctx = pgstore.ContextWithMetadataStoreVersionsExist(ctx)
+
+// Drives newDocStore to write the blobs; verifies each version against the
+// shared metadata instead of re-inserting it.
+err := docdb.SyncDocument(ctx, srcConn, dest, docID, false)
+```
+
+In this mode:
+
+- `CreateDocumentVersion` inserts nothing; it errors if the stored version is missing or any field differs from what it would have written.
+- `DeleteDocument` / `DeleteDocumentVersion` delete nothing; they verify existence (returning `ErrDocumentNotFound` if missing). `DeleteDocumentVersion` still reports the same leftover versions and blob hashes a real delete would, so the caller can clean up the `DocumentStore`.
+- The shared metadata is never mutated, even when a copy fails and rolls back.
+
 ## Debugging
 
 `DebugPrintDocument` and `DebugPrintCompanyDocuments` print a human-readable, indented tree of a document — or of all documents of a company — to standard output, useful for inspecting versions and files during development:
@@ -287,6 +373,6 @@ Document: 0c4e8f2a-…  Company: 7b1d…  Versions: 2
 | `localfsdb`         | Filesystem-based `Conn` storing files and metadata together (see [localfsdb/README.md](localfsdb/README.md)) |
 | `storeconn`         | Split-store `Conn` composing a `DocumentStore` and `MetadataStore` |
 | `storeconn/s3store` | `DocumentStore` implementation backed by AWS S3    |
-| `storeconn/pgstore` | `MetadataStore` and read-only `MetadataStore` implementations backed by PostgreSQL |
+| `storeconn/pgstore` | `MetadataStore` backed by PostgreSQL; supports an immutable versions-exist mode via `ContextWithMetadataStoreVersionsExist` |
 | `routerconn`        | Routing `Conn` selecting a backend per document via a callback |
 | `integrationtests`  | Shared integration test suite runnable against any `Conn` implementation |

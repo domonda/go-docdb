@@ -10,22 +10,26 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/ungerik/go-fs"
 
+	"github.com/domonda/go-errs"
 	"github.com/domonda/go-sqldb/db"
 	"github.com/domonda/go-types/uu"
 
 	"github.com/domonda/go-docdb"
+	"github.com/domonda/go-docdb/storeconn"
 	"github.com/domonda/go-docdb/storeconn/pgstore"
 	"github.com/domonda/go-docdb/storeconn/pgstore/pgfixtures"
 )
 
 var store = pgstore.NewMetadataStore()
 
-func TestCreateDocument(t *testing.T) {
-	t.Run("Creates document version with proper file metadata", func(t *testing.T) {
+func TestCreateDocumentVersion(t *testing.T) {
+	t.Run("Creates the first version with every file recorded as added", func(t *testing.T) {
 		// given
 		t.Parallel()
 		ctx := pgfixtures.FixtureCtxWithTestTx(t)
 		version := docdb.NewVersionTime()
+		docID := uu.IDv7()
+		companyID := uu.IDv7()
 
 		memFiles := []fs.MemFile{
 			{
@@ -37,17 +41,20 @@ func TestCreateDocument(t *testing.T) {
 				FileData: []byte("b"),
 			},
 		}
+		addedFiles := []*docdb.FileInfo{
+			{Name: memFiles[0].FileName, Size: memFiles[0].Size(), Hash: docdb.ContentHash(memFiles[0].FileData)},
+			{Name: memFiles[1].FileName, Size: memFiles[1].Size(), Hash: docdb.ContentHash(memFiles[1].FileData)},
+		}
 
-		// when
-		versionInfo, err := store.CreateDocument(
-			ctx,
-			uu.IDv7(),
-			uu.IDv7(),
-			uu.IDv7(),
-			"reason",
-			version,
-			[]fs.FileReader{memFiles[0], memFiles[1]},
-		)
+		// when: a nil PreviousVersion creates the first (genesis) version
+		versionInfo, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+			DocID:      docID,
+			CompanyID:  companyID,
+			UserID:     uu.IDv7(),
+			Reason:     "reason",
+			NewVersion: version,
+			AddedFiles: addedFiles,
+		})
 
 		// then
 		require.NoError(t, err)
@@ -55,6 +62,20 @@ func TestCreateDocument(t *testing.T) {
 		require.Nil(t, versionInfo.ModifiedFiles)
 		require.Nil(t, versionInfo.RemovedFiles)
 		require.Nil(t, versionInfo.PrevVersion)
+
+		// The deployed system relies on the first version's added_files column
+		// being persisted with every file of that version (not left empty) and
+		// on prev_version being NULL. Assert the stored row, not just the
+		// returned VersionInfo.
+		savedVersion, err := db.QueryRowAs[pgstore.DocumentVersion](
+			ctx,
+			/* sql */ `select * from docdb.document_version where document_id = $1 and version = $2`,
+			docID,
+			version,
+		)
+		require.NoError(t, err)
+		require.Equal(t, []string{memFiles[0].FileName, memFiles[1].FileName}, savedVersion.AddedFiles)
+		require.Nil(t, savedVersion.PrevVersion)
 
 		savedFiles, err := db.QueryRowsAsSlice[pgstore.DocumentVersionFile](
 			ctx,
@@ -88,6 +109,470 @@ func TestCreateDocument(t *testing.T) {
 			docdb.ContentHash(memFiles[1].FileData),
 			savedFiles[1].Hash,
 		)
+	})
+}
+
+func TestCreateDocumentVersionVersionsExistMode(t *testing.T) {
+	fileInfo := func(name, content string) *docdb.FileInfo {
+		return &docdb.FileInfo{Name: name, Size: int64(len(content)), Hash: docdb.ContentHash([]byte(content))}
+	}
+
+	t.Run("Verifies an existing matching version without inserting new rows", func(t *testing.T) {
+		// given
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		docID := uu.IDv7()
+		companyID := uu.IDv7()
+		userID := uu.IDv7()
+		version := docdb.NewVersionTime()
+		addedFiles := []*docdb.FileInfo{fileInfo("a.pdf", "a"), fileInfo("b.pdf", "b")}
+
+		created, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{DocID: docID, CompanyID: companyID, UserID: userID, Reason: "reason", NewVersion: version, AddedFiles: addedFiles})
+		require.NoError(t, err)
+
+		// when: re-running under versions-exist mode must not insert
+		// anything, just verify and return the same VersionInfo.
+		assumeCtx := pgstore.ContextWithMetadataStoreVersionsExist(ctx)
+		verified, err := store.CreateDocumentVersion(assumeCtx, storeconn.CreateDocumentVersionInput{DocID: docID, CompanyID: companyID, UserID: userID, Reason: "reason", NewVersion: version, AddedFiles: addedFiles})
+
+		// then
+		require.NoError(t, err)
+		require.Equal(t, created, verified)
+
+		// Exactly one version row and two file rows: no duplicate insert.
+		versionCount, err := db.QueryRowAs[int](ctx,
+			/* sql */ `select count(*) from docdb.document_version where document_id = $1 and version = $2`,
+			docID,
+			version,
+		)
+		require.NoError(t, err)
+		require.Equal(t, 1, versionCount)
+
+		fileCount, err := db.QueryRowAs[int](ctx,
+			/* sql */ `
+			select count(*) from docdb.document_version_file dvf
+			join docdb.document_version dv on dvf.document_version_id = dv.id
+			where dv.document_id = $1 and dv.version = $2
+			`,
+			docID,
+			version,
+		)
+		require.NoError(t, err)
+		require.Equal(t, 2, fileCount)
+	})
+
+	t.Run("Verifies a version that has a previous version", func(t *testing.T) {
+		// given
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		docID := uu.IDv7()
+		companyID := uu.IDv7()
+		userID := uu.IDv7()
+		v1 := docdb.NewVersionTime()
+		v2 := docdb.VersionTimeFrom(time.Now().Add(time.Second))
+
+		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "v1", NewVersion: v1,
+			AddedFiles: []*docdb.FileInfo{fileInfo("a.pdf", "a")},
+		})
+		require.NoError(t, err)
+
+		added := []*docdb.FileInfo{fileInfo("b.pdf", "b")}
+		created, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{DocID: docID, CompanyID: companyID, UserID: userID, Reason: "v2", NewVersion: v2, PreviousVersion: &v1, AddedFiles: added})
+		require.NoError(t, err)
+
+		// when
+		assumeCtx := pgstore.ContextWithMetadataStoreVersionsExist(ctx)
+		verified, err := store.CreateDocumentVersion(assumeCtx, storeconn.CreateDocumentVersionInput{DocID: docID, CompanyID: companyID, UserID: userID, Reason: "v2", NewVersion: v2, PreviousVersion: &v1, AddedFiles: added})
+
+		// then
+		require.NoError(t, err)
+		require.Equal(t, created, verified)
+		// The full file set carries a.pdf forward from v1 plus the new b.pdf.
+		require.Equal(t, 2, len(verified.Files))
+	})
+
+	t.Run("Ignores the order of added files when comparing", func(t *testing.T) {
+		// given
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		docID := uu.IDv7()
+		companyID := uu.IDv7()
+		userID := uu.IDv7()
+		version := docdb.NewVersionTime()
+		fileA := fileInfo("a.pdf", "a")
+		fileB := fileInfo("b.pdf", "b")
+
+		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "reason", NewVersion: version,
+			AddedFiles: []*docdb.FileInfo{fileA, fileB},
+		})
+		require.NoError(t, err)
+
+		// when: same file set in reversed order. Callers derive the file lists
+		// from map iteration, so order is not significant and must still match.
+		assumeCtx := pgstore.ContextWithMetadataStoreVersionsExist(ctx)
+		_, err = store.CreateDocumentVersion(assumeCtx, storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "reason", NewVersion: version,
+			AddedFiles: []*docdb.FileInfo{fileB, fileA},
+		})
+
+		// then
+		require.NoError(t, err)
+	})
+
+	t.Run("Returns error when a scalar field differs", func(t *testing.T) {
+		// given
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		docID := uu.IDv7()
+		companyID := uu.IDv7()
+		userID := uu.IDv7()
+		version := docdb.NewVersionTime()
+		addedFiles := []*docdb.FileInfo{fileInfo("a.pdf", "a")}
+
+		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{DocID: docID, CompanyID: companyID, UserID: userID, Reason: "reason", NewVersion: version, AddedFiles: addedFiles})
+		require.NoError(t, err)
+
+		// when: same version but a different commit reason
+		assumeCtx := pgstore.ContextWithMetadataStoreVersionsExist(ctx)
+		_, err = store.CreateDocumentVersion(assumeCtx, storeconn.CreateDocumentVersionInput{DocID: docID, CompanyID: companyID, UserID: userID, Reason: "different reason", NewVersion: version, AddedFiles: addedFiles})
+
+		// then
+		require.ErrorContains(t, err, "does not match")
+	})
+
+	t.Run("Returns error when a file's content hash differs", func(t *testing.T) {
+		// given
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		docID := uu.IDv7()
+		companyID := uu.IDv7()
+		userID := uu.IDv7()
+		version := docdb.NewVersionTime()
+
+		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "reason", NewVersion: version,
+			AddedFiles: []*docdb.FileInfo{fileInfo("a.pdf", "a")},
+		})
+		require.NoError(t, err)
+
+		// when: same filename but different content
+		assumeCtx := pgstore.ContextWithMetadataStoreVersionsExist(ctx)
+		_, err = store.CreateDocumentVersion(assumeCtx, storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "reason", NewVersion: version,
+			AddedFiles: []*docdb.FileInfo{fileInfo("a.pdf", "different")},
+		})
+
+		// then
+		require.ErrorContains(t, err, "does not match")
+	})
+
+	t.Run("Returns error when the companyID differs", func(t *testing.T) {
+		// given
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		docID := uu.IDv7()
+		userID := uu.IDv7()
+		version := docdb.NewVersionTime()
+		addedFiles := []*docdb.FileInfo{fileInfo("a.pdf", "a")}
+
+		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{DocID: docID, CompanyID: uu.IDv7(), UserID: userID, Reason: "reason", NewVersion: version, AddedFiles: addedFiles})
+		require.NoError(t, err)
+
+		// when: same version but a different companyID
+		assumeCtx := pgstore.ContextWithMetadataStoreVersionsExist(ctx)
+		_, err = store.CreateDocumentVersion(assumeCtx, storeconn.CreateDocumentVersionInput{DocID: docID, CompanyID: uu.IDv7(), UserID: userID, Reason: "reason", NewVersion: version, AddedFiles: addedFiles})
+
+		// then
+		require.ErrorContains(t, err, "does not match")
+	})
+
+	t.Run("Returns error when the commitUserID differs", func(t *testing.T) {
+		// given
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		docID := uu.IDv7()
+		companyID := uu.IDv7()
+		version := docdb.NewVersionTime()
+		addedFiles := []*docdb.FileInfo{fileInfo("a.pdf", "a")}
+
+		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{DocID: docID, CompanyID: companyID, UserID: uu.IDv7(), Reason: "reason", NewVersion: version, AddedFiles: addedFiles})
+		require.NoError(t, err)
+
+		// when: same version but a different commitUserID
+		assumeCtx := pgstore.ContextWithMetadataStoreVersionsExist(ctx)
+		_, err = store.CreateDocumentVersion(assumeCtx, storeconn.CreateDocumentVersionInput{DocID: docID, CompanyID: companyID, UserID: uu.IDv7(), Reason: "reason", NewVersion: version, AddedFiles: addedFiles})
+
+		// then
+		require.ErrorContains(t, err, "does not match")
+	})
+
+	t.Run("Returns error when the previousVersion differs", func(t *testing.T) {
+		// given: a genesis version plus a second version that points at it.
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		docID := uu.IDv7()
+		companyID := uu.IDv7()
+		userID := uu.IDv7()
+		v1 := docdb.NewVersionTime()
+		v2 := docdb.VersionTimeFrom(time.Now().Add(time.Second))
+
+		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "v1", NewVersion: v1,
+			AddedFiles: []*docdb.FileInfo{fileInfo("a.pdf", "a")},
+		})
+		require.NoError(t, err)
+
+		added := []*docdb.FileInfo{fileInfo("b.pdf", "b")}
+		_, err = store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{DocID: docID, CompanyID: companyID, UserID: userID, Reason: "v2", NewVersion: v2, PreviousVersion: &v1, AddedFiles: added})
+		require.NoError(t, err)
+
+		// when: verify v2 as a genesis version (nil previousVersion) although it
+		// was stored with v1 as its previousVersion.
+		assumeCtx := pgstore.ContextWithMetadataStoreVersionsExist(ctx)
+		_, err = store.CreateDocumentVersion(assumeCtx, storeconn.CreateDocumentVersionInput{DocID: docID, CompanyID: companyID, UserID: userID, Reason: "v2", NewVersion: v2, AddedFiles: added})
+
+		// then
+		require.ErrorContains(t, err, "does not match")
+	})
+
+	t.Run("Returns error when the added files differ", func(t *testing.T) {
+		// given
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		docID := uu.IDv7()
+		companyID := uu.IDv7()
+		userID := uu.IDv7()
+		version := docdb.NewVersionTime()
+
+		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "reason", NewVersion: version,
+			AddedFiles: []*docdb.FileInfo{fileInfo("a.pdf", "a"), fileInfo("b.pdf", "b")},
+		})
+		require.NoError(t, err)
+
+		// when: the same version is verified with a smaller set of added files
+		assumeCtx := pgstore.ContextWithMetadataStoreVersionsExist(ctx)
+		_, err = store.CreateDocumentVersion(assumeCtx, storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "reason", NewVersion: version,
+			AddedFiles: []*docdb.FileInfo{fileInfo("a.pdf", "a")},
+		})
+
+		// then
+		require.ErrorContains(t, err, "does not match")
+	})
+
+	t.Run("Returns error when the modified files differ", func(t *testing.T) {
+		// given: a genesis version, then a second version that modifies a.pdf.
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		docID := uu.IDv7()
+		companyID := uu.IDv7()
+		userID := uu.IDv7()
+		v1 := docdb.NewVersionTime()
+		v2 := docdb.VersionTimeFrom(time.Now().Add(time.Second))
+
+		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "v1", NewVersion: v1,
+			AddedFiles: []*docdb.FileInfo{fileInfo("a.pdf", "a")},
+		})
+		require.NoError(t, err)
+
+		_, err = store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "v2", NewVersion: v2, PreviousVersion: &v1,
+			ModifiedFiles: []*docdb.FileInfo{fileInfo("a.pdf", "a2")},
+		})
+		require.NoError(t, err)
+
+		// when: verify v2 without recording a.pdf as modified
+		assumeCtx := pgstore.ContextWithMetadataStoreVersionsExist(ctx)
+		_, err = store.CreateDocumentVersion(assumeCtx, storeconn.CreateDocumentVersionInput{DocID: docID, CompanyID: companyID, UserID: userID, Reason: "v2", NewVersion: v2, PreviousVersion: &v1})
+
+		// then
+		require.ErrorContains(t, err, "does not match")
+	})
+
+	t.Run("Returns error when the removed files differ", func(t *testing.T) {
+		// given: a genesis version with two files, then a second version that
+		// removes b.pdf.
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		docID := uu.IDv7()
+		companyID := uu.IDv7()
+		userID := uu.IDv7()
+		v1 := docdb.NewVersionTime()
+		v2 := docdb.VersionTimeFrom(time.Now().Add(time.Second))
+
+		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "v1", NewVersion: v1,
+			AddedFiles: []*docdb.FileInfo{fileInfo("a.pdf", "a"), fileInfo("b.pdf", "b")},
+		})
+		require.NoError(t, err)
+
+		_, err = store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "v2", NewVersion: v2, PreviousVersion: &v1,
+			RemovedFiles: []string{"b.pdf"},
+		})
+		require.NoError(t, err)
+
+		// when: verify v2 without recording b.pdf as removed
+		assumeCtx := pgstore.ContextWithMetadataStoreVersionsExist(ctx)
+		_, err = store.CreateDocumentVersion(assumeCtx, storeconn.CreateDocumentVersionInput{DocID: docID, CompanyID: companyID, UserID: userID, Reason: "v2", NewVersion: v2, PreviousVersion: &v1})
+
+		// then
+		require.ErrorContains(t, err, "does not match")
+	})
+
+	t.Run("Returns error when the assumed version does not exist", func(t *testing.T) {
+		// given
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+
+		// when
+		assumeCtx := pgstore.ContextWithMetadataStoreVersionsExist(ctx)
+		_, err := store.CreateDocumentVersion(assumeCtx, storeconn.CreateDocumentVersionInput{
+			DocID: uu.IDv7(), CompanyID: uu.IDv7(), UserID: uu.IDv7(), Reason: "reason",
+			NewVersion: docdb.NewVersionTime(), AddedFiles: []*docdb.FileInfo{fileInfo("a.pdf", "a")},
+		})
+
+		// then
+		require.ErrorIs(t, err, sql.ErrNoRows)
+	})
+}
+
+func TestCreateDocumentVersionMissingPreviousVersion(t *testing.T) {
+	t.Parallel()
+	ctx := pgfixtures.FixtureCtxWithTestTx(t)
+	docID := uu.IDv7()
+	companyID := uu.IDv7()
+	userID := uu.IDv7()
+
+	// previousVersion points to a version that was never stored. Building the
+	// carried-forward file set must fail explicitly rather than silently treat
+	// the missing previous version as having zero files (which would persist a
+	// new version missing its carried-forward files).
+	missingPrev := docdb.NewVersionTime()
+	newVersion := docdb.VersionTimeFrom(time.Now().Add(time.Second))
+
+	_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+		DocID: docID, CompanyID: companyID, UserID: userID, Reason: "reason",
+		NewVersion: newVersion, PreviousVersion: &missingPrev,
+		AddedFiles: []*docdb.FileInfo{{Name: "b.pdf", Size: 1, Hash: docdb.ContentHash([]byte("b"))}},
+	})
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, errs.ErrNotFound)
+	require.ErrorContains(t, err, "carry files forward")
+}
+
+func TestCreateDocumentVersionWithExplicitFiles(t *testing.T) {
+	t.Parallel()
+	ctx := pgfixtures.FixtureCtxWithTestTx(t)
+	docID := uu.IDv7()
+	companyID := uu.IDv7()
+	userID := uu.IDv7()
+
+	// Passing the resolved Files set must make CreateDocumentVersion store it
+	// directly and skip the predecessor lookup: a previousVersion that was never
+	// stored (which would otherwise fail with a carry-files-forward not-found
+	// error, see TestCreateDocumentVersionMissingPreviousVersion) is not queried.
+	missingPrev := docdb.NewVersionTime()
+	newVersion := docdb.VersionTimeFrom(time.Now().Add(time.Second))
+	fileA := docdb.FileInfo{Name: "a.pdf", Size: 1, Hash: docdb.ContentHash([]byte("a"))}
+	fileB := docdb.FileInfo{Name: "b.pdf", Size: 1, Hash: docdb.ContentHash([]byte("b"))}
+	wantFiles := map[string]docdb.FileInfo{fileA.Name: fileA, fileB.Name: fileB}
+
+	info, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+		DocID: docID, CompanyID: companyID, UserID: userID, Reason: "reason",
+		NewVersion: newVersion, PreviousVersion: &missingPrev,
+		// Only b.pdf is a delta, but Files is the full set (a.pdf carried forward).
+		AddedFiles: []*docdb.FileInfo{&fileB},
+		Files:      wantFiles,
+	})
+	require.NoError(t, err)
+	require.Equal(t, wantFiles, info.Files)
+
+	// The stored document_version_file rows must match the provided Files set,
+	// not just the AddedFiles delta.
+	stored, err := store.DocumentVersionInfo(ctx, docID, newVersion)
+	require.NoError(t, err)
+	require.Equal(t, wantFiles, stored.Files)
+}
+
+func TestCreateDocumentVersionDuplicate(t *testing.T) {
+	addedFiles := []*docdb.FileInfo{{Name: "a.pdf", Size: 1, Hash: docdb.ContentHash([]byte("a"))}}
+
+	t.Run("Genesis duplicate maps the unique violation to ErrDocumentAlreadyExists", func(t *testing.T) {
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		docID := uu.IDv7()
+		companyID := uu.IDv7()
+		userID := uu.IDv7()
+		version := docdb.NewVersionTime()
+
+		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "reason", NewVersion: version, AddedFiles: addedFiles,
+		})
+		require.NoError(t, err)
+
+		// Re-inserting the same genesis (document_id, version) hits the unique
+		// constraint, which must surface as ErrDocumentAlreadyExists.
+		_, err = store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "reason", NewVersion: version, AddedFiles: addedFiles,
+		})
+		require.ErrorIs(t, err, docdb.NewErrDocumentAlreadyExists(docID))
+	})
+
+	t.Run("Second genesis with a different version maps to ErrDocumentAlreadyExists", func(t *testing.T) {
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		docID := uu.IDv7()
+		companyID := uu.IDv7()
+		userID := uu.IDv7()
+		v1 := docdb.NewVersionTime()
+		v2 := docdb.VersionTimeFrom(time.Now().Add(time.Second))
+
+		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "reason", NewVersion: v1, AddedFiles: addedFiles,
+		})
+		require.NoError(t, err)
+
+		// A second genesis (prev_version NULL) with a DIFFERENT version must be
+		// rejected by the single-genesis partial unique index, not silently
+		// inserted as a duplicate genesis.
+		_, err = store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "second genesis", NewVersion: v2, AddedFiles: addedFiles,
+		})
+		require.ErrorIs(t, err, docdb.NewErrDocumentAlreadyExists(docID))
+	})
+
+	t.Run("Appended-version duplicate maps the unique violation to ErrVersionAlreadyExists", func(t *testing.T) {
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		docID := uu.IDv7()
+		companyID := uu.IDv7()
+		userID := uu.IDv7()
+		v1 := docdb.NewVersionTime()
+		v2 := docdb.VersionTimeFrom(time.Now().Add(time.Second))
+
+		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "v1", NewVersion: v1, AddedFiles: addedFiles,
+		})
+		require.NoError(t, err)
+
+		added := []*docdb.FileInfo{{Name: "b.pdf", Size: 1, Hash: docdb.ContentHash([]byte("b"))}}
+		_, err = store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "v2", NewVersion: v2, PreviousVersion: &v1, AddedFiles: added,
+		})
+		require.NoError(t, err)
+
+		// Re-inserting an appended version maps the same constraint to the
+		// version-scoped error instead of the document-scoped one.
+		_, err = store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "v2", NewVersion: v2, PreviousVersion: &v1, AddedFiles: added,
+		})
+		require.ErrorIs(t, err, docdb.NewErrVersionAlreadyExists(docID, v2))
 	})
 }
 
@@ -554,6 +1039,40 @@ func TestDeleteDocument(t *testing.T) {
 		// then
 		require.ErrorIs(t, err, sql.ErrNoRows)
 	})
+
+	t.Run("In versions-exist mode verifies without deleting", func(t *testing.T) {
+		// given
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		populator := pgfixtures.FixturePopulator(t)
+		docVersion := populator.DocumentVersion()
+
+		// when: versions-exist mode must not delete, only confirm existence
+		versionsExistCtx := pgstore.ContextWithMetadataStoreVersionsExist(ctx)
+		err := store.DeleteDocument(versionsExistCtx, docVersion.DocumentID)
+
+		// then
+		require.NoError(t, err)
+		count, err := db.QueryRowAs[int](ctx,
+			/* sql */ `select count(*) from docdb.document_version where document_id = $1`,
+			docVersion.DocumentID,
+		)
+		require.NoError(t, err)
+		require.Equal(t, 1, count) // still present, not deleted
+	})
+
+	t.Run("In versions-exist mode returns not found for a missing document", func(t *testing.T) {
+		// given
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+
+		// when
+		versionsExistCtx := pgstore.ContextWithMetadataStoreVersionsExist(ctx)
+		err := store.DeleteDocument(versionsExistCtx, uu.IDv7())
+
+		// then
+		require.ErrorIs(t, err, sql.ErrNoRows)
+	})
 }
 
 func TestDeleteDocumentVersion(t *testing.T) {
@@ -655,5 +1174,63 @@ func TestDeleteDocumentVersion(t *testing.T) {
 		require.NoError(t, err)
 		require.Empty(t, hashesToDelete)
 		require.Equal(t, []docdb.VersionTime{docVersion2.Version}, leftVersions)
+	})
+
+	t.Run("In versions-exist mode reports left versions and hashes without deleting", func(t *testing.T) {
+		// given
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		populator := pgfixtures.FixturePopulator(t)
+		versionFile1 := populator.DocumentVersionFile(map[string]any{
+			"Hash": docdb.ContentHash([]byte("b")),
+		})
+		versionFile2 := populator.DocumentVersionFile(map[string]any{
+			"DocumentVersion": versionFile1.DocumentVersion,
+			"Hash":            docdb.ContentHash([]byte("a")),
+		})
+		docVersion2 := populator.DocumentVersion(map[string]any{
+			"DocumentID": versionFile1.DocumentVersion.DocumentID,
+			"Version":    docdb.VersionTimeFrom(time.Now().Add(time.Second)),
+		})
+		versionFile3 := populator.DocumentVersionFile(map[string]any{
+			"DocumentVersion": docVersion2,
+		})
+
+		// when: versions-exist mode returns the same leftVersions/hashesToDelete a
+		// real delete would, but must not delete the version row.
+		versionsExistCtx := pgstore.ContextWithMetadataStoreVersionsExist(ctx)
+		leftVersions, hashesToDelete, err := store.DeleteDocumentVersion(
+			versionsExistCtx,
+			versionFile1.DocumentVersion.DocumentID,
+			versionFile1.DocumentVersion.Version,
+		)
+
+		// then
+		require.NoError(t, err)
+		require.Equal(t, []string{versionFile1.Hash, versionFile2.Hash}, hashesToDelete)
+		require.Equal(t, []docdb.VersionTime{versionFile3.DocumentVersion.Version}, leftVersions)
+
+		// the targeted version row must still be present
+		count, err := db.QueryRowAs[int](ctx,
+			/* sql */ `select count(*) from docdb.document_version where document_id = $1 and version = $2`,
+			versionFile1.DocumentVersion.DocumentID,
+			versionFile1.DocumentVersion.Version,
+		)
+		require.NoError(t, err)
+		require.Equal(t, 1, count)
+	})
+
+	t.Run("In versions-exist mode returns not found for a missing version", func(t *testing.T) {
+		// given
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		docID := uu.IDv7()
+
+		// when
+		versionsExistCtx := pgstore.ContextWithMetadataStoreVersionsExist(ctx)
+		_, _, err := store.DeleteDocumentVersion(versionsExistCtx, docID, docdb.VersionTimeFrom(time.Now()))
+
+		// then
+		require.ErrorIs(t, err, docdb.NewErrDocumentNotFound(docID))
 	})
 }

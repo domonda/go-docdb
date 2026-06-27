@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	fs "github.com/ungerik/go-fs"
 
@@ -97,4 +98,54 @@ func (vi *VersionInfo) EqualFiles(other *VersionInfo) bool {
 		}
 	}
 	return true
+}
+
+// Equal reports whether vi and other describe the same committed version:
+// identical scalar metadata (company, document, version, previous version,
+// commit user and reason), the same added/removed/modified filename sets
+// (compared order-insensitively, since callers derive them from map
+// iteration), and the same resolved file set (see EqualFiles).
+//
+// Keeping the full comparison here means a field added to VersionInfo is
+// compared by every caller, instead of being silently missed by a hand-rolled
+// field-by-field check elsewhere.
+func (vi *VersionInfo) Equal(other *VersionInfo) bool {
+	if vi == other {
+		return true
+	}
+	if vi == nil || other == nil {
+		return false
+	}
+	if vi.CompanyID != other.CompanyID ||
+		vi.DocID != other.DocID ||
+		!vi.Version.Equal(other.Version) ||
+		!equalVersionTimePtr(vi.PrevVersion, other.PrevVersion) ||
+		vi.CommitUserID != other.CommitUserID ||
+		vi.CommitReason != other.CommitReason {
+		return false
+	}
+	if !equalStringSets(vi.AddedFiles, other.AddedFiles) ||
+		!equalStringSets(vi.RemovedFiles, other.RemovedFiles) ||
+		!equalStringSets(vi.ModifiedFiles, other.ModifiedFiles) {
+		return false
+	}
+	return vi.EqualFiles(other)
+}
+
+// equalVersionTimePtr reports whether two optional VersionTimes are equal,
+// treating two nil pointers as equal.
+func equalVersionTimePtr(a, b *VersionTime) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Equal(*b)
+}
+
+// equalStringSets reports whether a and b contain the same strings regardless
+// of order. The input slices are not modified.
+func equalStringSets(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	return slices.Equal(slices.Sorted(slices.Values(a)), slices.Sorted(slices.Values(b)))
 }
