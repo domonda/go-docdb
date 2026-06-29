@@ -180,6 +180,7 @@ Initial release.
 - `ProxyConn` and `DeprecatedConn` (holding deprecated check-out/in methods).
 - `VersionInfo` with `CompanyID`, `LatestDocumentVersionInfo`, and `VersionTime.SetNull`.
 
+[v0.8.1]: https://github.com/domonda/go-docdb/releases/tag/v0.8.1
 [v0.8.0]: https://github.com/domonda/go-docdb/releases/tag/v0.8.0
 [v0.7.0]: https://github.com/domonda/go-docdb/releases/tag/v0.7.0
 [v0.6.3]: https://github.com/domonda/go-docdb/releases/tag/v0.6.3
