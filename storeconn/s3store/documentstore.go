@@ -11,12 +11,14 @@ import (
 	"io"
 	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/ungerik/go-fs"
 
 	"github.com/domonda/go-docdb"
 	"github.com/domonda/go-docdb/storeconn"
+	"github.com/domonda/go-errs"
 	"github.com/domonda/go-types/uu"
 )
 
@@ -57,16 +59,41 @@ func (s *docStore) DocumentExists(ctx context.Context, docID uu.ID) (exists bool
 
 // EnumDocumentIDs iterates every object in the bucket, extracts the docID from
 // each key, and calls callback once per unique docID. Pagination is handled
-// internally via continuation tokens. If callback returns an error, the
+// internally by the ListObjectsV2 paginator. If callback returns an error, the
 // enumeration stops and the error is returned.
-func (s *docStore) EnumDocumentIDs(ctx context.Context, callback func(context.Context, uu.ID) error) (err error) {
-	enumerator := newDocumentEnumerator(
-		s.client,
-		s.bucketName,
-		callback,
-	)
+func (s *docStore) EnumDocumentIDs(ctx context.Context, callback func(context.Context, uu.ID) error) error {
+	paginator := awss3.NewListObjectsV2Paginator(s.client, &awss3.ListObjectsV2Input{
+		Bucket: &s.bucketName,
+	})
 
-	return enumerator.Run(ctx)
+	processedIDs := make(map[uu.ID]struct{})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return err
+		}
+		for _, object := range page.Contents {
+			if object.Key == nil {
+				return errs.New("nil object key")
+			}
+
+			id := idFromKey(*object.Key)
+			if id.IsNil() {
+				return errs.Errorf("can't parse ID from `%s`", *object.Key)
+			}
+
+			if _, ok := processedIDs[id]; ok {
+				continue
+			}
+			processedIDs[id] = struct{}{}
+
+			if err := callback(ctx, id); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 // CreateDocumentVersion uploads each of the passed files as a separate S3 object
@@ -107,34 +134,19 @@ func (s *docStore) CreateDocumentVersion(ctx context.Context, docID uu.ID, versi
 // them by the passed content hashes, and returns a FileProvider over the
 // matching keys. If hashes is empty an emptyFileProvider is returned.
 //
-// Note: the underlying List call caps at 1000 objects, so this assumes a
-// document version has at most 1000 files.
+// All objects are listed across as many paginated List calls as needed, so
+// document versions with more than 1000 files are handled correctly.
 func (s *docStore) DocumentHashFileProvider(ctx context.Context, docID uu.ID, hashes []string) (docdb.FileProvider, error) {
 	if len(hashes) == 0 {
 		return &emptyFileProvider{docID: docID}, nil
 	}
 
-	// assume a version has max 1000 files
-	response, err := s.client.ListObjectsV2(
-		ctx,
-		&awss3.ListObjectsV2Input{
-			Bucket: &s.bucketName,
-			Prefix: new(docID.String() + "/"),
-		},
-	)
-
+	allKeys, err := s.listObjectKeys(ctx, docID.String()+"/")
 	if err != nil {
 		return nil, err
 	}
 
-	keys := []string{}
-	for _, obj := range response.Contents {
-		for _, hash := range hashes {
-			if hashFromKey(*obj.Key) == hash {
-				keys = append(keys, *obj.Key)
-			}
-		}
-	}
+	keys := filterKeysByHash(allKeys, hashes)
 
 	return FileProviderFromKeys(s.client, s.bucketName, docID, keys), nil
 }
@@ -161,40 +173,22 @@ func (s *docStore) ReadDocumentHashFile(ctx context.Context, docID uu.ID, filena
 	return io.ReadAll(res.Body)
 }
 
-// DeleteDocument removes every object under the docID prefix in a single
-// bulk DeleteObjects call. Returns docdb.ErrDocumentNotFound if no objects
-// are found for the docID.
+// DeleteDocument removes every object under the docID prefix.
+// Returns docdb.ErrDocumentNotFound if no objects are found for the docID.
 //
-// Note: the underlying List call caps at 1000 objects.
+// Objects are listed and deleted one page at a time following ListObjectsV2
+// continuation tokens, so documents with more than 1000 objects are handled
+// correctly without holding every key in memory at once.
 func (s *docStore) DeleteDocument(ctx context.Context, docID uu.ID) error {
-	// assuming there are max 1000 objects
-	response, err := s.client.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{
-		Bucket: &s.bucketName,
-		Prefix: new(docID.String() + "/"),
-	})
+	deleted, err := s.deletePrefix(ctx, docID.String()+"/")
 	if err != nil {
 		return err
 	}
-	if len(response.Contents) == 0 {
+	if deleted == 0 {
 		return docdb.NewErrDocumentNotFound(docID)
 	}
 
-	objectsToDelete := make([]types.ObjectIdentifier, len(response.Contents))
-	for i, obj := range response.Contents {
-		objectsToDelete[i] = types.ObjectIdentifier{Key: obj.Key}
-	}
-
-	_, err = s.client.DeleteObjects(
-		ctx,
-		&awss3.DeleteObjectsInput{
-			Bucket: new(s.bucketName),
-			Delete: &types.Delete{
-				Objects: objectsToDelete,
-			},
-		},
-	)
-
-	return err
+	return nil
 }
 
 // DeleteDocumentHashes removes objects under the docID prefix whose content
@@ -202,142 +196,144 @@ func (s *docStore) DeleteDocument(ctx context.Context, docID uu.ID) error {
 // Returns docdb.ErrDocumentNotFound if the document has no objects at all.
 // Hashes that do not match any stored object are silently ignored.
 //
-// Note: the underlying List call caps at 1000 objects.
+// All objects are listed across as many paginated List calls as needed and
+// deleted in batches, so documents with more than 1000 objects are handled
+// correctly.
 func (s *docStore) DeleteDocumentHashes(ctx context.Context, docID uu.ID, hashes []string) error {
-	// assuming there are max 1000 objects
-	response, err := s.client.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{
-		Bucket: &s.bucketName,
-		Prefix: new(docID.String() + "/"),
-	})
+	keys, err := s.listObjectKeys(ctx, docID.String()+"/")
 	if err != nil {
 		return err
 	}
-	if len(response.Contents) == 0 {
+	if len(keys) == 0 {
 		return docdb.NewErrDocumentNotFound(docID)
 	}
 
-	objectsToDelete := []types.ObjectIdentifier{}
-	for _, obj := range response.Contents {
-		for _, hash := range hashes {
-			if hashFromKey(*obj.Key) == hash {
-				objectsToDelete = append(objectsToDelete, types.ObjectIdentifier{Key: obj.Key})
-			}
-		}
-	}
+	objectsToDelete := filterKeysByHash(keys, hashes)
 	if len(objectsToDelete) == 0 {
 		return nil
 	}
 
-	_, err = s.client.DeleteObjects(
-		ctx,
-		&awss3.DeleteObjectsInput{
-			Bucket: new(s.bucketName),
-			Delete: &types.Delete{
-				Objects: objectsToDelete,
-			},
-		},
-	)
+	return s.deleteObjectKeys(ctx, objectsToDelete)
+}
 
-	return err
+// maxDeleteObjectsPerRequest is the maximum number of objects AWS S3 accepts
+// in a single DeleteObjects request.
+const maxDeleteObjectsPerRequest = 1000
+
+// listObjectKeys returns every object key under the given prefix in the bucket,
+// following ListObjectsV2 continuation tokens so the result is not capped at the
+// 1000-keys-per-call S3 limit.
+func (s *docStore) listObjectKeys(ctx context.Context, prefix string) ([]string, error) {
+	paginator := awss3.NewListObjectsV2Paginator(s.client, &awss3.ListObjectsV2Input{
+		Bucket: &s.bucketName,
+		Prefix: &prefix,
+	})
+
+	var keys []string
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, obj := range page.Contents {
+			if obj.Key != nil {
+				keys = append(keys, *obj.Key)
+			}
+		}
+	}
+
+	return keys, nil
+}
+
+// deletePrefix deletes every object under the given prefix, listing and deleting
+// one page at a time following ListObjectsV2 continuation tokens. Each page is
+// capped at 1000 objects by S3 and so fits in a single DeleteObjects request, so
+// prefixes with more than 1000 objects are handled without ever holding more
+// than one page of keys in memory. It returns the number of objects deleted.
+func (s *docStore) deletePrefix(ctx context.Context, prefix string) (int, error) {
+	paginator := awss3.NewListObjectsV2Paginator(s.client, &awss3.ListObjectsV2Input{
+		Bucket: &s.bucketName,
+		Prefix: &prefix,
+	})
+
+	deleted := 0
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return deleted, err
+		}
+		if len(page.Contents) == 0 {
+			continue
+		}
+
+		objects := make([]types.ObjectIdentifier, len(page.Contents))
+		for i, obj := range page.Contents {
+			objects[i] = types.ObjectIdentifier{Key: obj.Key}
+		}
+		if err := s.deleteObjectBatch(ctx, objects); err != nil {
+			return deleted, err
+		}
+		deleted += len(objects)
+	}
+
+	return deleted, nil
+}
+
+// deleteObjectKeys deletes the given object keys from the bucket, splitting the
+// work into batches because S3 DeleteObjects accepts at most
+// maxDeleteObjectsPerRequest keys per call.
+func (s *docStore) deleteObjectKeys(ctx context.Context, keys []string) error {
+	for start := 0; start < len(keys); start += maxDeleteObjectsPerRequest {
+		end := min(start+maxDeleteObjectsPerRequest, len(keys))
+
+		objects := make([]types.ObjectIdentifier, end-start)
+		for i, key := range keys[start:end] {
+			objects[i] = types.ObjectIdentifier{Key: new(key)}
+		}
+		if err := s.deleteObjectBatch(ctx, objects); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// deleteObjectBatch issues a single DeleteObjects request for the given objects
+// and returns an error if the request itself failed or S3 reported per-object
+// failures. The caller must keep len(objects) within maxDeleteObjectsPerRequest.
+func (s *docStore) deleteObjectBatch(ctx context.Context, objects []types.ObjectIdentifier) error {
+	out, err := s.client.DeleteObjects(ctx, &awss3.DeleteObjectsInput{
+		Bucket: &s.bucketName,
+		Delete: &types.Delete{Objects: objects},
+	})
+	if err != nil {
+		return err
+	}
+	return DeleteObjectsErr(out)
+}
+
+// DeleteObjectsErr returns a non-nil error describing the per-object failures
+// that S3 reports inside an otherwise successful (HTTP 200) DeleteObjects
+// response via its Errors field. S3 does not surface these as a transport error,
+// so callers must check them explicitly to avoid silently leaving objects
+// behind. It returns nil when no per-object failures occurred, including for a
+// nil output (a nil response carries no per-object failures to report).
+func DeleteObjectsErr(out *awss3.DeleteObjectsOutput) error {
+	if out == nil || len(out.Errors) == 0 {
+		return nil
+	}
+	first := out.Errors[0]
+	return errs.Errorf(
+		"DeleteObjects reported %d per-object failure(s); first: key=%q code=%q message=%q",
+		len(out.Errors),
+		aws.ToString(first.Key), aws.ToString(first.Code), aws.ToString(first.Message),
+	)
 }
 
 // Key returns the S3 object key used by this package for a single
 // document file in the form "<docID>/<filename>/<hash>".
 func Key(docID uu.ID, filename string, hash string) string {
 	return strings.Join([]string{docID.String(), filename, hash}, "/")
-}
-
-// documentEnumerator walks every object in the bucket, groups them by docID,
-// and invokes a callback once per unique docID. Pagination state is carried
-// across List calls via nextContinuationToken.
-type documentEnumerator struct {
-	client                *awss3.Client
-	nextContinuationToken *string
-	bucketName            string
-	processedIDs          map[uu.ID]struct{}
-	callback              func(context.Context, uu.ID) error
-}
-
-// newDocumentEnumerator constructs a documentEnumerator for the given bucket
-// and callback with an empty set of processed IDs.
-func newDocumentEnumerator(client *awss3.Client, bucketName string, callback func(context.Context, uu.ID) error) *documentEnumerator {
-	return &documentEnumerator{
-		client:       client,
-		bucketName:   bucketName,
-		processedIDs: map[uu.ID]struct{}{},
-		callback:     callback,
-	}
-}
-
-// Run executes one or more List cycles until all pages have been consumed
-// or a cycle returns an error.
-func (e *documentEnumerator) Run(ctx context.Context) error {
-	if err := e.runCycle(ctx); err != nil {
-		return err
-	}
-
-	for e.nextContinuationToken != nil {
-		if err := e.runCycle(ctx); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// runCycle performs one List call and invokes the callback for every new
-// docID found in the returned page.
-func (e *documentEnumerator) runCycle(ctx context.Context) error {
-	resp, err := e.getResponse(ctx)
-	if err != nil {
-		return err
-	}
-
-	return e.runCallbacks(ctx, resp)
-}
-
-// getResponse issues a single ListObjectsV2 call using the current
-// continuation token and updates nextContinuationToken from the response.
-func (e *documentEnumerator) getResponse(ctx context.Context) (*awss3.ListObjectsV2Output, error) {
-	response, err := e.client.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{
-		Bucket:            &e.bucketName,
-		ContinuationToken: e.nextContinuationToken,
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	e.nextContinuationToken = response.NextContinuationToken
-	return response, nil
-}
-
-// runCallbacks iterates the objects of a List response, skips docIDs already
-// seen in previous pages, records newly seen IDs, and invokes the callback
-// once per new ID. A malformed or unparsable key aborts the enumeration.
-func (e *documentEnumerator) runCallbacks(ctx context.Context, response *awss3.ListObjectsV2Output) error {
-	for _, object := range response.Contents {
-		if object.Key == nil {
-			return errors.New("nil object key")
-		}
-
-		id := idFromKey(*object.Key)
-		if id.IsNil() {
-			return fmt.Errorf("can't parse ID from `%s`", *object.Key)
-		}
-
-		if _, ok := e.processedIDs[id]; ok {
-			continue
-		}
-
-		e.processedIDs[id] = struct{}{}
-
-		if err := e.callback(ctx, id); err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 // idFromKey parses the docID component (parts[0]) out of an S3 key in the
@@ -350,6 +346,26 @@ func idFromKey(key string) uu.ID {
 	}
 
 	return uu.IDFrom(parts[0])
+}
+
+// filterKeysByHash returns the subset of keys whose content-hash component
+// matches any of the passed hashes. The hashes are collected into a set and
+// hashFromKey is computed once per key, so the cost is O(len(keys)+len(hashes))
+// rather than the O(len(keys)*len(hashes)) of a nested scan. Each matching key
+// is returned at most once even if hashes contains duplicates.
+func filterKeysByHash(keys, hashes []string) []string {
+	hashSet := make(map[string]struct{}, len(hashes))
+	for _, hash := range hashes {
+		hashSet[hash] = struct{}{}
+	}
+
+	var matched []string
+	for _, key := range keys {
+		if _, ok := hashSet[hashFromKey(key)]; ok {
+			matched = append(matched, key)
+		}
+	}
+	return matched
 }
 
 // hashFromKey parses the content-hash component (parts[2]) out of an S3 key
