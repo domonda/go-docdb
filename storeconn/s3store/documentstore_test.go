@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/stretchr/testify/require"
 	"github.com/ungerik/go-fs"
 
@@ -264,6 +267,35 @@ func TestDocumentHashFileProvider(t *testing.T) {
 		require.ErrorIs(t, err, docdb.NewErrDocumentFileNotFound(docID1, "imaginary file"))
 	})
 
+	t.Run("Returns all files of a version with more than 1000 files", func(t *testing.T) {
+		// given
+		createDocument := s3fixtures.FixtureCreateDocument(t)
+		documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
+		docID := uu.IDv7()
+		content := []byte("content")
+		hash := docdb.ContentHash(content)
+		const numObjects = 1001 // one more than the S3 list page size of 1000
+		want := make([]string, numObjects)
+		for i := range numObjects {
+			// Same content (one hash) under distinct filenames yields distinct
+			// keys, so the single hash matches all numObjects objects. The count
+			// must stay above 1000 to force multi-page listing; the pre-fix code
+			// capped at a single 1000-object List and silently dropped the rest.
+			name := fmt.Sprintf("doc%04d.pdf", i)
+			createDocument(docID, name, content)
+			want[i] = name
+		}
+
+		// when
+		fileProvider, err := documentStore.DocumentHashFileProvider(t.Context(), docID, []string{hash})
+
+		// then
+		require.NoError(t, err)
+		filenames, err := fileProvider.ListFiles(t.Context())
+		require.NoError(t, err)
+		require.ElementsMatch(t, want, filenames, "all >1000 matching files must be returned, proving the 1000-object cap is gone")
+	})
+
 	t.Run("Empty provider when no hashes", func(t *testing.T) {
 		// given
 		documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
@@ -348,6 +380,38 @@ func TestDeleteDocument(t *testing.T) {
 		require.True(t, exists(docID2, filename1, hash))
 	})
 
+	t.Run("Deletes all objects of a document with more than 1000 objects", func(t *testing.T) {
+		// given
+		createDocument := s3fixtures.FixtureCreateDocument(t)
+		documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
+		docID := uu.IDv7()
+		otherID := uu.IDv7()
+		const numObjects = 1001 // one more than the S3 list/delete page size of 1000
+		// Each file shares the same content (and therefore the same content
+		// hash) but has a unique filename, so the keys
+		// "<docID>/doc0000.pdf/<hash>" … "<docID>/doc1000.pdf/<hash>" are all
+		// distinct. The count must stay above 1000 to force multi-page listing
+		// and batched deletion; collapsing the filenames to a constant would
+		// silently reduce this to a single object and pass without exercising
+		// the pagination path under test.
+		for i := range numObjects {
+			createDocument(docID, fmt.Sprintf("doc%04d.pdf", i), []byte("content"))
+		}
+		createDocument(otherID, "keep.pdf", []byte("content")) // shouldn't be deleted
+
+		// when
+		err := documentStore.DeleteDocument(t.Context(), docID)
+
+		// then
+		require.NoError(t, err)
+		exists, err := documentStore.DocumentExists(t.Context(), docID)
+		require.NoError(t, err)
+		require.False(t, exists, "all objects of the document should be deleted")
+		otherExists, err := documentStore.DocumentExists(t.Context(), otherID)
+		require.NoError(t, err)
+		require.True(t, otherExists, "other documents must not be affected")
+	})
+
 	t.Run("Returns ErrDocumentNotFound if document does not exist", func(t *testing.T) {
 		// given
 		s3fixtures.FixtureCleanBucket(t)
@@ -371,7 +435,7 @@ func TestDeleteDocument(t *testing.T) {
 	})
 }
 
-func TestDeleteDocumentVersion(t *testing.T) {
+func TestDeleteDocumentHashes(t *testing.T) {
 	t.Run("Deletes all objects belonging to a document version", func(t *testing.T) {
 		// given
 		createDocument := s3fixtures.FixtureCreateDocument(t)
@@ -429,5 +493,64 @@ func TestDeleteDocumentVersion(t *testing.T) {
 
 		// then
 		require.Error(t, err)
+	})
+
+	t.Run("Deletes all matching objects of a document with more than 1000 objects", func(t *testing.T) {
+		// given
+		createDocument := s3fixtures.FixtureCreateDocument(t)
+		documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
+		docID := uu.IDv7()
+		otherID := uu.IDv7()
+		content := []byte("content")
+		hash := docdb.ContentHash(content)
+		const numObjects = 1001 // one more than the S3 list/delete page size of 1000
+		for i := range numObjects {
+			// Same content (one hash) under distinct filenames yields distinct
+			// keys, so a single hash matches all numObjects objects to delete.
+			createDocument(docID, fmt.Sprintf("doc%04d.pdf", i), content)
+		}
+		createDocument(otherID, "keep.pdf", content) // shouldn't be deleted
+
+		// when
+		err := documentStore.DeleteDocumentHashes(t.Context(), docID, []string{hash})
+
+		// then
+		require.NoError(t, err)
+		exists, err := documentStore.DocumentExists(t.Context(), docID)
+		require.NoError(t, err)
+		require.False(t, exists, "all matching objects of the document should be deleted")
+		otherExists, err := documentStore.DocumentExists(t.Context(), otherID)
+		require.NoError(t, err)
+		require.True(t, otherExists, "other documents must not be affected")
+	})
+}
+
+// TestDeleteObjectsErr is a pure unit test (no S3 backend needed): S3 reports
+// per-object delete failures inside an HTTP-200 DeleteObjects response via the
+// Errors field rather than as a transport error, so DeleteObjectsErr must turn
+// a non-empty Errors slice into an error and an empty one into nil.
+func TestDeleteObjectsErr(t *testing.T) {
+	t.Run("Returns nil when no per-object failures", func(t *testing.T) {
+		require.NoError(t, s3store.DeleteObjectsErr(nil))
+		require.NoError(t, s3store.DeleteObjectsErr(&awss3.DeleteObjectsOutput{}))
+		require.NoError(t, s3store.DeleteObjectsErr(&awss3.DeleteObjectsOutput{
+			Errors: []types.Error{},
+		}))
+	})
+
+	t.Run("Returns error describing per-object failures", func(t *testing.T) {
+		out := &awss3.DeleteObjectsOutput{
+			Errors: []types.Error{
+				{Key: aws.String("doc/file.pdf/hash"), Code: aws.String("AccessDenied"), Message: aws.String("nope")},
+				{Key: aws.String("doc/other.pdf/hash"), Code: aws.String("InternalError"), Message: aws.String("boom")},
+			},
+		}
+		err := s3store.DeleteObjectsErr(out)
+		require.Error(t, err)
+		// Reports the total count and identifies the first failing object so the
+		// caller can act on it instead of silently leaving objects behind.
+		require.Contains(t, err.Error(), "2 per-object failure")
+		require.Contains(t, err.Error(), "doc/file.pdf/hash")
+		require.Contains(t, err.Error(), "AccessDenied")
 	})
 }

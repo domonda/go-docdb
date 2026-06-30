@@ -371,7 +371,7 @@ Document: 0c4e8f2a-…  Company: 7b1d…  Versions: 2
 | Package             | Description                                        |
 | ------------------- | -------------------------------------------------- |
 | `localfsdb`         | Filesystem-based `Conn` storing files and metadata together (see [localfsdb/README.md](localfsdb/README.md)) |
-| `storeconn`         | Split-store `Conn` composing a `DocumentStore` and `MetadataStore` |
+| `storeconn`         | Split-store `Conn` composing a `DocumentStore` and `MetadataStore` (see [storeconn/README.md](storeconn/README.md)) |
 | `storeconn/s3store` | `DocumentStore` implementation backed by AWS S3    |
 | `storeconn/pgstore` | `MetadataStore` backed by PostgreSQL; supports an immutable versions-exist mode via `ContextWithMetadataStoreVersionsExist` |
 | `routerconn`        | Routing `Conn` selecting a backend per document via a callback |

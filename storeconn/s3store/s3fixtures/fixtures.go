@@ -181,36 +181,50 @@ var FixtureBucketName = newFixture(func(t *testing.T) string {
 })
 
 // deleteBucket empties the bucket and then removes it. A "NoSuchBucket" error
-// from either step is treated as success because the desired post-condition
-// is that the bucket does not exist.
+// from any step is treated as success because the desired post-condition is
+// that the bucket does not exist. The listing follows continuation tokens and
+// each page (capped at 1000 objects by S3) is deleted in its own DeleteObjects
+// call, so buckets with more than 1000 objects are emptied correctly.
 func deleteBucket(ctx context.Context, client *awss3.Client, bucketName *string) error {
-	resp, err := client.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{Bucket: bucketName})
-	if err != nil && strings.Contains(err.Error(), "NoSuchBucket") {
-		return nil
-	}
-
-	if err != nil {
-		return err
-	}
-
-	if len(resp.Contents) > 0 {
-		objectsToDelete := []types.ObjectIdentifier{}
-		for _, obj := range resp.Contents {
-			objectsToDelete = append(objectsToDelete, types.ObjectIdentifier{Key: obj.Key})
+	paginator := awss3.NewListObjectsV2Paginator(client, &awss3.ListObjectsV2Input{Bucket: bucketName})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			if strings.Contains(err.Error(), "NoSuchBucket") {
+				return nil
+			}
+			return err
+		}
+		if len(page.Contents) == 0 {
+			continue
 		}
 
-		_, err = client.DeleteObjects(ctx, &awss3.DeleteObjectsInput{
+		objectsToDelete := make([]types.ObjectIdentifier, len(page.Contents))
+		for i, obj := range page.Contents {
+			objectsToDelete[i] = types.ObjectIdentifier{Key: obj.Key}
+		}
+
+		out, err := client.DeleteObjects(ctx, &awss3.DeleteObjectsInput{
 			Bucket: bucketName,
 			Delete: &types.Delete{
 				Objects: objectsToDelete,
 			},
 		})
-		if err != nil && !strings.Contains(err.Error(), "NoSuchBucket") {
+		if err != nil {
+			if strings.Contains(err.Error(), "NoSuchBucket") {
+				return nil
+			}
+			return err
+		}
+		// DeleteObjects returns HTTP 200 with per-object failures reported in
+		// out.Errors rather than as err; surface them so teardown doesn't fail
+		// later with a confusing BucketNotEmpty from DeleteBucket.
+		if err := s3store.DeleteObjectsErr(out); err != nil {
 			return err
 		}
 	}
 
-	_, err = client.DeleteBucket(ctx, &awss3.DeleteBucketInput{Bucket: bucketName})
+	_, err := client.DeleteBucket(ctx, &awss3.DeleteBucketInput{Bucket: bucketName})
 	if err != nil && !strings.Contains(err.Error(), "NoSuchBucket") {
 		return err
 	}

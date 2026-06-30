@@ -5,6 +5,20 @@ All notable changes to `github.com/domonda/go-docdb` are documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.8.1] - 2026-06-29
+
+### Fixed
+- `s3store` no longer silently caps document operations at 1000 objects. `DeleteDocument`, `DeleteDocumentHashes`, and `DocumentHashFileProvider` each previously issued a single `ListObjectsV2` call — which AWS S3 limits to 1000 keys per response — so a document with more than 1000 stored objects had its extra files silently skipped: a delete would leave objects behind, and a hash lookup would miss files. All three now page through every object under the document prefix via the AWS SDK `ListObjectsV2` paginator, and deletes are split into batches of at most 1000 keys to stay within the `DeleteObjects` limit. `DeleteDocument` lists and deletes one page at a time, so memory stays bounded by a single page even for very large documents.
+- `s3store` delete paths now surface the per-object failures S3 reports inside an otherwise-successful (HTTP 200) `DeleteObjects` response instead of ignoring them. S3 does not return these as a transport error, so a partial delete failure was previously swallowed and could leave objects behind without any error; the delete now fails loudly. The same check is applied to the test bucket teardown so a failed cleanup no longer surfaces later as a confusing `BucketNotEmpty`.
+
+### Added
+- `s3store.DeleteObjectsErr`: exported helper that converts the per-object `Errors` of an `awss3.DeleteObjectsOutput` into a Go error (and returns nil for a nil output or no failures), so callers performing their own `DeleteObjects` calls can detect the silent per-object failures S3 hides in a 200 response.
+- `storeconn/README.md`: documents the split-store `Conn` — how `New` composes a `DocumentStore` and `MetadataStore`, how the content hash joins them, and how the orchestration layer keeps the two backends consistent (ordering and compensating rollback) without a distributed transaction.
+
+### Changed
+- `s3store.EnumDocumentIDs` is reimplemented on top of the AWS SDK `ListObjectsV2` paginator, replacing the hand-rolled continuation-token enumerator. Behavior is unchanged: every object in the bucket is scanned across all pages and each unique document ID is reported to the callback exactly once.
+- Updated `aws-sdk-go-v2` (`service/s3` to v1.104.0, core to v1.42.0) and the remaining module dependencies to their current releases.
+
 ## [v0.8.0] - 2026-06-26
 
 ### Added
@@ -166,6 +180,7 @@ Initial release.
 - `ProxyConn` and `DeprecatedConn` (holding deprecated check-out/in methods).
 - `VersionInfo` with `CompanyID`, `LatestDocumentVersionInfo`, and `VersionTime.SetNull`.
 
+[v0.8.1]: https://github.com/domonda/go-docdb/releases/tag/v0.8.1
 [v0.8.0]: https://github.com/domonda/go-docdb/releases/tag/v0.8.0
 [v0.7.0]: https://github.com/domonda/go-docdb/releases/tag/v0.7.0
 [v0.6.3]: https://github.com/domonda/go-docdb/releases/tag/v0.6.3
