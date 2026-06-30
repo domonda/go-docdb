@@ -60,7 +60,7 @@ func DebugPrintDocument(ctx context.Context, conn Conn, docID uu.ID, linePrefix,
 
 // DebugPrintCompanyDocuments prints a human-readable tree of all documents of a
 // company to the standard output: a company header followed by every document
-// (with all its versions and files) enumerated via conn.EnumCompanyDocumentIDs.
+// (with all its versions and files) listed via conn.CompanyDocumentIDs.
 //
 // The layout is indented like this (linePrefix="", indent="  "):
 //
@@ -70,13 +70,20 @@ func DebugPrintDocument(ctx context.Context, conn Conn, docID uu.ID, linePrefix,
 //	      File: invoice.pdf  Size: 12345  Hash: 1f8ac...
 //
 // Every line is prefixed with linePrefix, and each deeper level of the tree is
-// indented by one additional indent string. Documents are printed in
-// enumeration order. See DebugPrintDocument for the per-document layout.
+// indented by one additional indent string. Documents are printed sorted by
+// ID. See DebugPrintDocument for the per-document layout.
 //
 // It returns the first error encountered while reading from conn.
 func DebugPrintCompanyDocuments(ctx context.Context, conn Conn, companyID uu.ID, linePrefix, indent string) error {
 	fmt.Printf("%sCompany: %s\n", linePrefix, companyID)
-	return conn.EnumCompanyDocumentIDs(ctx, companyID, func(ctx context.Context, docID uu.ID) error {
-		return DebugPrintDocument(ctx, conn, docID, linePrefix+indent, indent)
-	})
+	docIDs, err := conn.CompanyDocumentIDs(ctx, companyID)
+	if err != nil {
+		return err
+	}
+	for _, docID := range docIDs {
+		if err := DebugPrintDocument(ctx, conn, docID, linePrefix+indent, indent); err != nil {
+			return err
+		}
+	}
+	return nil
 }

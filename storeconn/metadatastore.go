@@ -65,8 +65,15 @@ type MetadataStore interface {
 	// LatestDocumentVersion returns the latest VersionTime of a document.
 	LatestDocumentVersion(ctx context.Context, docID uu.ID) (docdb.VersionTime, error)
 
-	// EnumCompanyDocumentIDs calls the passed callback with the ID of every document of a company in the database.
-	EnumCompanyDocumentIDs(ctx context.Context, companyID uu.ID, callback func(context.Context, uu.ID) error) error
+	// CompanyIDs returns the IDs of all companies that have documents in the
+	// database, sorted by ID for a consistent order.
+	// Returns nil if there are no companies.
+	CompanyIDs(ctx context.Context) (uu.IDSlice, error)
+
+	// CompanyDocumentIDs returns the IDs of all documents of a company in the
+	// database, sorted by ID for a consistent order.
+	// Returns nil if the company has no documents.
+	CompanyDocumentIDs(ctx context.Context, companyID uu.ID) (uu.IDSlice, error)
 
 	// DocumentVersionInfo returns the VersionInfo for a specific version of a document.
 	DocumentVersionInfo(ctx context.Context, docID uu.ID, version docdb.VersionTime) (*docdb.VersionInfo, error)

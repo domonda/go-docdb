@@ -202,13 +202,26 @@ func SyncDocument(ctx context.Context, srcConn, destConn Conn, docID uu.ID, recr
 	return destConn.RestoreDocument(ctx, doc, recreate)
 }
 
+// DocProgressCallback is called by bulk operations like SyncAllCompanyDocuments
+// and CopyAllCompanyDocumentFiles before processing each document so callers
+// can log the progress of a running operation.
+//
+// docID is the document about to be processed, index is its zero-based position
+// in the list of documents, and total is the number of documents to process.
+type DocProgressCallback func(ctx context.Context, docID uu.ID, index, total int)
+
 // SyncAllCompanyDocuments copies all documents of a company
 // from srcConn to destConn by calling SyncDocument for every document
-// enumerated via srcConn.EnumCompanyDocumentIDs.
+// returned by srcConn.CompanyDocumentIDs.
+//
+// All document IDs are collected first via srcConn.CompanyDocumentIDs, then
+// synced one after another in that order. This makes the total number of
+// documents known up-front so it can be reported via onProgress.
 //
 // The recreate flag is passed through to SyncDocument for every document.
 //
-// Documents are synced one after another in enumeration order.
+// If onProgress is not nil it is called before syncing each document with the
+// document's zero-based index and the total number of documents to sync.
 //
 // If continueOnError is false the sync stops at the first failing
 // document and returns that error.
@@ -219,26 +232,30 @@ func SyncDocument(ctx context.Context, srcConn, destConn Conn, docID uu.ID, recr
 //
 // syncedDocIDs always contains the IDs of the documents
 // that were synced successfully.
-func SyncAllCompanyDocuments(ctx context.Context, srcConn, destConn Conn, companyID uu.ID, recreate, continueOnError bool) (syncedDocIDs uu.IDSlice, err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, srcConn, destConn, companyID, recreate, continueOnError)
+func SyncAllCompanyDocuments(ctx context.Context, srcConn, destConn Conn, companyID uu.ID, recreate, continueOnError bool, onProgress DocProgressCallback) (syncedDocIDs uu.IDSlice, err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, srcConn, destConn, companyID, recreate, continueOnError, onProgress)
 
-	var stop = errors.New("stop")
-	enumErr := srcConn.EnumCompanyDocumentIDs(ctx, companyID, func(ctx context.Context, docID uu.ID) error {
+	docIDs, err := srcConn.CompanyDocumentIDs(ctx, companyID)
+	if err != nil {
+		return nil, err
+	}
+
+	total := len(docIDs)
+	for index, docID := range docIDs {
+		if onProgress != nil {
+			onProgress(ctx, docID, index, total)
+		}
 		syncErr := SyncDocument(ctx, srcConn, destConn, docID, recreate)
 		if syncErr != nil {
 			err = errors.Join(err, syncErr)
-			if continueOnError {
-				return nil
+			if !continueOnError {
+				return syncedDocIDs, err
 			}
-			return stop // Don't return syncErr, it's already collected in err
+			continue
 		}
 		syncedDocIDs = append(syncedDocIDs, docID)
-		return nil
-	})
-	if errors.Is(enumErr, stop) {
-		enumErr = nil
 	}
-	return syncedDocIDs, errors.Join(enumErr, err)
+	return syncedDocIDs, err
 }
 
 // VersionTimes returns the version timestamps of the document sorted in ascending order.

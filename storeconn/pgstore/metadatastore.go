@@ -252,34 +252,30 @@ func (store *postgresMetadataStore) LatestDocumentVersion(ctx context.Context, d
 	)
 }
 
-func (store *postgresMetadataStore) EnumCompanyDocumentIDs(ctx context.Context, companyID uu.ID, callback func(context.Context, uu.ID) error) error {
-	// Aggregate all IDs into a single row before invoking the callback: the
-	// callback typically reads the document from the same Conn (see
-	// SyncAllCompanyDocuments, DebugPrintCompanyDocuments). With lib/pq a
-	// streaming query holds the connection's cursor open, so a read on the same
-	// connection (e.g. inside a transaction) would desync the protocol. Reading
-	// the full ID set first frees the connection before any callback runs.
-	// array_agg over no rows returns NULL, which uu.IDSlice scans as nil.
-	ids, err := db.QueryRowAs[uu.IDSlice](ctx,
+func (store *postgresMetadataStore) CompanyIDs(ctx context.Context) (uu.IDSlice, error) {
+	// distinct because a company has one row per document version; ordered by
+	// company_id for a consistent order across calls.
+	return db.QueryRowsAsSlice[uu.ID](ctx,
 		/* sql */ `
-			select array_agg(distinct document_id order by document_id)
+			select distinct company_id
+			from docdb.document_version
+			order by company_id
+		`,
+	)
+}
+
+func (store *postgresMetadataStore) CompanyDocumentIDs(ctx context.Context, companyID uu.ID) (uu.IDSlice, error) {
+	// distinct because a document has one row per version; ordered by
+	// document_id for a consistent order across calls.
+	return db.QueryRowsAsSlice[uu.ID](ctx,
+		/* sql */ `
+			select distinct document_id
 			from docdb.document_version
 			where company_id = $1
+			order by document_id
 		`,
 		companyID, // $1
 	)
-	if err != nil {
-		return err
-	}
-
-	for _, id := range ids {
-		err = callback(ctx, id)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 func (store *postgresMetadataStore) DocumentVersionInfo(ctx context.Context, docID uu.ID, version docdb.VersionTime) (*docdb.VersionInfo, error) {

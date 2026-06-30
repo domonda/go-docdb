@@ -2,6 +2,8 @@ package docdb
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/uuiddir"
@@ -17,18 +19,20 @@ func DocumentExists(ctx context.Context, docID uu.ID) (exists bool, err error) {
 	return GetConn().DocumentExists(ctx, docID)
 }
 
-// EnumDocumentIDs calls the passed callback with the ID of every document in the database
-func EnumDocumentIDs(ctx context.Context, callback func(context.Context, uu.ID) error) (err error) {
+// CompanyIDs returns the IDs of all companies that have documents,
+// sorted by ID for a consistent order.
+func CompanyIDs(ctx context.Context) (companyIDs uu.IDSlice, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx)
 
-	return GetConn().EnumDocumentIDs(ctx, callback)
+	return GetConn().CompanyIDs(ctx)
 }
 
-// EnumCompanyDocumentIDs calls the passed callback with the ID of every document of a company in the database
-func EnumCompanyDocumentIDs(ctx context.Context, companyID uu.ID, callback func(context.Context, uu.ID) error) (err error) {
+// CompanyDocumentIDs returns the IDs of all documents of a company,
+// sorted by ID for a consistent order.
+func CompanyDocumentIDs(ctx context.Context, companyID uu.ID) (docIDs uu.IDSlice, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, companyID)
 
-	return GetConn().EnumCompanyDocumentIDs(ctx, companyID, callback)
+	return GetConn().CompanyDocumentIDs(ctx, companyID)
 }
 
 // DocumentCompanyID returns the companyID for a docID
@@ -381,16 +385,90 @@ func CopyDocumentFiles(ctx context.Context, conn Conn, docID uu.ID, backupDir fs
 //
 // If true is passed for overwrite then existing files will be overwritten
 // else an error is returned when docDir already exists.
-func CopyAllCompanyDocumentFiles(ctx context.Context, conn Conn, companyID uu.ID, backupDir fs.File, overwrite bool) (docDirs []fs.File, err error) {
-	defer errs.WrapWithFuncParams(&err, ctx, companyID, backupDir, overwrite)
+//
+// If onProgress is not nil it is called before copying each document with the
+// document's zero-based index and the total number of documents to copy.
+func CopyAllCompanyDocumentFiles(ctx context.Context, conn Conn, companyID uu.ID, backupDir fs.File, overwrite bool, onProgress DocProgressCallback) (docDirs []fs.File, err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, companyID, backupDir, overwrite, onProgress)
 
-	err = conn.EnumCompanyDocumentIDs(ctx, companyID, func(ctx context.Context, docID uu.ID) error {
+	docIDs, err := conn.CompanyDocumentIDs(ctx, companyID)
+	if err != nil {
+		return docDirs, err
+	}
+	total := len(docIDs)
+	for index, docID := range docIDs {
+		if onProgress != nil {
+			onProgress(ctx, docID, index, total)
+		}
 		docDir, err := CopyDocumentFiles(ctx, conn, docID, backupDir, overwrite)
 		if err != nil {
-			return err
+			return docDirs, err
 		}
 		docDirs = append(docDirs, docDir)
-		return nil
-	})
-	return docDirs, err
+	}
+	return docDirs, nil
+}
+
+// AddMultiDocumentVersionImpl adds a new version to each document in docIDs
+// by calling conn.AddDocumentVersion for each one sequentially.
+//
+// It is the shared implementation for Conn.AddMultiDocumentVersion.
+// Conn implementations that can't provide native multi-document atomicity
+// should delegate to this function.
+//
+// Documents with no file changes (ErrNoChanges from AddDocumentVersion) are skipped.
+// Returns ErrNoChanges only if no document was changed at all.
+//
+// Atomicity is achieved by tracking each successfully created version and,
+// on any error, rolling back all of them via conn.DeleteDocumentVersion.
+// Any rollback errors are joined to the returned error.
+func AddMultiDocumentVersionImpl(ctx context.Context, conn Conn, docIDs uu.IDSlice, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) (err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, docIDs, userID, reason, createVersion, onNewVersion)
+
+	type createdVersion struct {
+		docID   uu.ID
+		version VersionTime
+	}
+	var created []createdVersion
+
+	defer func() {
+		if r := recover(); r != nil {
+			err = errs.AsErrorWithDebugStack(r)
+		}
+		if err != nil {
+			for _, cv := range created {
+				_, deleteErr := conn.DeleteDocumentVersion(ctx, cv.docID, cv.version)
+				if deleteErr != nil {
+					err = errors.Join(err,
+						fmt.Errorf("failed to undo new document version of atomic multi-document operation: %w", deleteErr),
+					)
+				}
+			}
+		}
+	}()
+
+	for _, docID := range docIDs {
+		err = conn.AddDocumentVersion(ctx, docID, userID, reason, createVersion, func(ctx context.Context, versionInfo *VersionInfo) error {
+			cbErr := onNewVersion(ctx, versionInfo)
+			if cbErr == nil {
+				created = append(created, createdVersion{
+					docID:   versionInfo.DocID,
+					version: versionInfo.Version,
+				})
+			}
+			return cbErr
+		})
+		if err != nil {
+			// Skip documents that have no changes,
+			// only return ErrNoChanges if no document was changed at all.
+			if errors.Is(err, ErrNoChanges) {
+				continue
+			}
+			return err
+		}
+	}
+	if len(created) == 0 {
+		return ErrNoChanges
+	}
+	return nil
 }

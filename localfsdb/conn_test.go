@@ -634,6 +634,81 @@ func TestRestoreDocument(t *testing.T) {
 	})
 }
 
+func TestCompanyIDs(t *testing.T) {
+	ctx := t.Context()
+	conn := localfsdb.NewTestConn(t)
+	userID := uu.IDFrom("ce6f0867-0172-4ffc-a0c0-c5878b921171")
+	version := docdb.MustVersionTimeFromString("2023-01-01_00-00-00.000")
+	noopOnNew := func(context.Context, *docdb.VersionInfo) error { return nil }
+
+	t.Run("returns nil when no documents exist", func(t *testing.T) {
+		companyIDs, err := conn.CompanyIDs(ctx)
+		require.NoError(t, err)
+		require.Nil(t, companyIDs)
+	})
+
+	t.Run("returns all companies sorted by ID", func(t *testing.T) {
+		companyA := uu.IDFrom("11111111-1111-4111-8111-111111111111")
+		companyB := uu.IDFrom("22222222-2222-4222-8222-222222222222")
+		companyC := uu.IDFrom("33333333-3333-4333-8333-333333333333")
+		// Create companies out of sorted order; companyB gets two documents to
+		// prove each company is reported once regardless of document count.
+		create := func(companyID uu.ID) {
+			require.NoError(t, conn.CreateDocument(
+				ctx, companyID, uu.IDv7(), userID, "init", version,
+				newTestMemFiles("a.txt"), noopOnNew,
+			))
+		}
+		create(companyC)
+		create(companyA)
+		create(companyB)
+		create(companyB)
+
+		companyIDs, err := conn.CompanyIDs(ctx)
+		require.NoError(t, err)
+		require.Equal(t, uu.IDSlice{companyA, companyB, companyC}, companyIDs)
+	})
+}
+
+func TestCompanyDocumentIDs(t *testing.T) {
+	ctx := t.Context()
+	conn := localfsdb.NewTestConn(t)
+	userID := uu.IDFrom("ce6f0867-0172-4ffc-a0c0-c5878b921171")
+	version := docdb.MustVersionTimeFromString("2023-01-01_00-00-00.000")
+	noopOnNew := func(context.Context, *docdb.VersionInfo) error { return nil }
+
+	t.Run("returns nil for company without documents", func(t *testing.T) {
+		// The company directory never existed, so enumeration must not error.
+		docIDs, err := conn.CompanyDocumentIDs(ctx, uu.IDv7())
+		require.NoError(t, err)
+		require.Nil(t, docIDs)
+	})
+
+	t.Run("returns all documents sorted by ID", func(t *testing.T) {
+		companyID := uu.IDFrom("6f296458-24cd-4146-ac3a-33ca885a993e")
+		idA := uu.IDFrom("11111111-1111-4111-8111-111111111111")
+		idB := uu.IDFrom("22222222-2222-4222-8222-222222222222")
+		idC := uu.IDFrom("33333333-3333-4333-8333-333333333333")
+		// Create out of sorted order to prove the result is sorted by ID.
+		for _, docID := range []uu.ID{idC, idA, idB} {
+			require.NoError(t, conn.CreateDocument(
+				ctx, companyID, docID, userID, "init", version,
+				newTestMemFiles("a.txt"), noopOnNew,
+			))
+		}
+		// A document of a different company must not be included.
+		otherCompanyID := uu.IDFrom("9f8e7d6c-5b4a-4210-bedc-ba9876543210")
+		require.NoError(t, conn.CreateDocument(
+			ctx, otherCompanyID, uu.IDv7(), userID, "init", version,
+			newTestMemFiles("a.txt"), noopOnNew,
+		))
+
+		docIDs, err := conn.CompanyDocumentIDs(ctx, companyID)
+		require.NoError(t, err)
+		require.Equal(t, uu.IDSlice{idA, idB, idC}, docIDs)
+	})
+}
+
 func newTestMemFiles(filenames ...string) []fs.FileReader {
 	files := make([]fs.FileReader, len(filenames))
 	for i, filename := range filenames {

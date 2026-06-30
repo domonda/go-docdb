@@ -37,10 +37,6 @@ func (c *conn) DocumentExists(ctx context.Context, docID uu.ID) (exists bool, er
 	return c.documentStore.DocumentExists(ctx, docID)
 }
 
-func (c *conn) EnumDocumentIDs(ctx context.Context, callback func(context.Context, uu.ID) error) error {
-	return c.documentStore.EnumDocumentIDs(ctx, callback)
-}
-
 func (c *conn) DocumentVersionFileProvider(ctx context.Context, docID uu.ID, version docdb.VersionTime) (docdb.FileProvider, error) {
 	versionInfo, err := c.metadataStore.DocumentVersionInfo(ctx, docID, version)
 	if err != nil {
@@ -85,8 +81,12 @@ func (c *conn) LatestDocumentVersion(ctx context.Context, docID uu.ID) (docdb.Ve
 	return c.metadataStore.LatestDocumentVersion(ctx, docID)
 }
 
-func (c *conn) EnumCompanyDocumentIDs(ctx context.Context, companyID uu.ID, callback func(context.Context, uu.ID) error) error {
-	return c.metadataStore.EnumCompanyDocumentIDs(ctx, companyID, callback)
+func (c *conn) CompanyIDs(ctx context.Context) (uu.IDSlice, error) {
+	return c.metadataStore.CompanyIDs(ctx)
+}
+
+func (c *conn) CompanyDocumentIDs(ctx context.Context, companyID uu.ID) (uu.IDSlice, error) {
+	return c.metadataStore.CompanyDocumentIDs(ctx, companyID)
 }
 
 func (c *conn) DocumentVersionInfo(ctx context.Context, docID uu.ID, version docdb.VersionTime) (*docdb.VersionInfo, error) {
@@ -151,9 +151,9 @@ func (c *conn) CreateDocument(
 	// documentStore, not the metadataStore, so copying a document into a fresh
 	// documentStore that reuses an already-populated metadataStore
 	// (ContextWithMetadataStoreVersionsExist) is still allowed.
-	exists, err := c.documentStore.DocumentExists(ctx, docID)
-	if err != nil {
-		return err
+	exists, existsErr := c.documentStore.DocumentExists(ctx, docID)
+	if existsErr != nil {
+		return existsErr
 	}
 	if exists {
 		return docdb.NewErrDocumentAlreadyExists(docID)
@@ -185,7 +185,8 @@ func (c *conn) CreateDocument(
 		// stored some objects — is cleaned up instead of orphaned. A not-found
 		// result (nothing was written yet) is expected and ignored.
 		if !errors.As(err, &docdb.ErrDocumentAlreadyExists{}) {
-			if delErr := c.documentStore.DeleteDocument(ctx, docID); delErr != nil && !errors.Is(delErr, os.ErrNotExist) {
+			delErr := c.documentStore.DeleteDocument(ctx, docID)
+			if delErr != nil && !errors.Is(delErr, os.ErrNotExist) {
 				err = errors.Join(err, delErr)
 			}
 		}
@@ -200,7 +201,8 @@ func (c *conn) CreateDocument(
 		// when it succeeded. A not-found result is ignored so a spurious
 		// not-found is never joined onto the real cause.
 		if versionInfo != nil {
-			if _, _, delErr := c.metadataStore.DeleteDocumentVersion(ctx, docID, version); delErr != nil && !errors.Is(delErr, os.ErrNotExist) {
+			_, _, delErr := c.metadataStore.DeleteDocumentVersion(ctx, docID, version)
+			if delErr != nil && !errors.Is(delErr, os.ErrNotExist) {
 				err = errors.Join(err, delErr)
 			}
 		}
@@ -281,7 +283,7 @@ func (c *conn) AddDocumentVersion(
 	if err != nil {
 		return err
 	}
-	if err := result.Validate(); err != nil {
+	if err = result.Validate(); err != nil {
 		return err
 	}
 	if !result.Version.After(latestVersionInfo.Version) {
@@ -293,8 +295,9 @@ func (c *conn) AddDocumentVersion(
 	addedFiles := []*docdb.FileInfo{}
 	modifiedFiles := []*docdb.FileInfo{}
 
+	var data []byte
 	for _, file := range result.WriteFiles {
-		data, err := file.ReadAll()
+		data, err = file.ReadAll()
 		if err != nil {
 			return err
 		}
@@ -365,7 +368,8 @@ func (c *conn) AddDocumentVersion(
 			return errors.Join(cause, pgErr)
 		}
 		if len(hashesToDelete) > 0 {
-			if s3Err := c.documentStore.DeleteDocumentHashes(ctx, docID, hashesToDelete); s3Err != nil {
+			s3Err := c.documentStore.DeleteDocumentHashes(ctx, docID, hashesToDelete)
+			if s3Err != nil {
 				cause = errors.Join(cause, s3Err)
 			}
 		}
@@ -460,7 +464,8 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 			return
 		}
 		for i := len(createdVersions) - 1; i >= 0; i-- {
-			if _, delErr := c.DeleteDocumentVersion(ctx, doc.ID, createdVersions[i]); delErr != nil {
+			_, delErr := c.DeleteDocumentVersion(ctx, doc.ID, createdVersions[i])
+			if delErr != nil {
 				err = errors.Join(err, delErr)
 			}
 		}
@@ -474,7 +479,8 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		files := hashedVersionFiles(doc, hv)
 
 		if !docExists {
-			if err = c.CreateDocument(ctx, doc.CompanyID, doc.ID, hv.CommitUserID, hv.CommitReason, v, files, noopOnNew); err != nil {
+			err = c.CreateDocument(ctx, doc.CompanyID, doc.ID, hv.CommitUserID, hv.CommitReason, v, files, noopOnNew)
+			if err != nil {
 				return err
 			}
 			docExists = true
@@ -543,7 +549,8 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		createdVersions = append(createdVersions, v)
 		// The metadata version was already written above, so the FileInfos
 		// returned by the blob write are not needed here.
-		if _, err = c.documentStore.CreateDocumentVersion(ctx, doc.ID, v, files); err != nil {
+		_, err = c.documentStore.CreateDocumentVersion(ctx, doc.ID, v, files)
+		if err != nil {
 			return err
 		}
 	}

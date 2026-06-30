@@ -24,12 +24,12 @@ func (c errConn) DocumentExists(context.Context, uu.ID) (bool, error) {
 	return false, c.err
 }
 
-func (c errConn) EnumDocumentIDs(context.Context, func(context.Context, uu.ID) error) error {
-	return c.err
+func (c errConn) CompanyIDs(context.Context) (uu.IDSlice, error) {
+	return nil, c.err
 }
 
-func (c errConn) EnumCompanyDocumentIDs(context.Context, uu.ID, func(context.Context, uu.ID) error) error {
-	return c.err
+func (c errConn) CompanyDocumentIDs(context.Context, uu.ID) (uu.IDSlice, error) {
+	return nil, c.err
 }
 
 func (c errConn) DocumentCompanyID(context.Context, uu.ID) (uu.ID, error) {

@@ -12,8 +12,8 @@ import (
 // for each method, intended for use in unit tests.
 type MockConn struct {
 	DocumentExistsMock              func(ctx context.Context, docID uu.ID) (exists bool, err error)
-	EnumDocumentIDsMock             func(ctx context.Context, callback func(context.Context, uu.ID) error) error
-	EnumCompanyDocumentIDsMock      func(ctx context.Context, companyID uu.ID, callback func(context.Context, uu.ID) error) error
+	CompanyIDsMock                  func(ctx context.Context) (uu.IDSlice, error)
+	CompanyDocumentIDsMock          func(ctx context.Context, companyID uu.ID) (uu.IDSlice, error)
 	DocumentCompanyIDMock           func(ctx context.Context, docID uu.ID) (companyID uu.ID, err error)
 	SetDocumentCompanyIDMock        func(ctx context.Context, docID, companyID uu.ID) error
 	DocumentVersionsMock            func(ctx context.Context, docID uu.ID) ([]VersionTime, error)
@@ -33,12 +33,12 @@ type MockConn struct {
 func (mock *MockConn) DocumentExists(ctx context.Context, docID uu.ID) (exists bool, err error) {
 	return mock.DocumentExistsMock(ctx, docID)
 }
-func (mock *MockConn) EnumDocumentIDs(ctx context.Context, callback func(context.Context, uu.ID) error) error {
-	return mock.EnumDocumentIDsMock(ctx, callback)
+func (mock *MockConn) CompanyIDs(ctx context.Context) (uu.IDSlice, error) {
+	return mock.CompanyIDsMock(ctx)
 }
 
-func (mock *MockConn) EnumCompanyDocumentIDs(ctx context.Context, companyID uu.ID, callback func(context.Context, uu.ID) error) error {
-	return mock.EnumCompanyDocumentIDsMock(ctx, companyID, callback)
+func (mock *MockConn) CompanyDocumentIDs(ctx context.Context, companyID uu.ID) (uu.IDSlice, error) {
+	return mock.CompanyDocumentIDsMock(ctx, companyID)
 }
 
 func (mock *MockConn) DocumentCompanyID(ctx context.Context, docID uu.ID) (companyID uu.ID, err error) {

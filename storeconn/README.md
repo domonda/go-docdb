@@ -88,8 +88,8 @@ The pass-through methods map directly onto this table:
 
 ```go
 func (c *conn) DocumentExists(ctx, docID)        { return c.documentStore.DocumentExists(...) }
-func (c *conn) EnumDocumentIDs(ctx, cb)          { return c.documentStore.EnumDocumentIDs(...) }
 
+func (c *conn) CompanyIDs(ctx)                   { return c.metadataStore.CompanyIDs(...) }
 func (c *conn) DocumentCompanyID(ctx, docID)     { return c.metadataStore.DocumentCompanyID(...) }
 func (c *conn) DocumentVersions(ctx, docID)      { return c.metadataStore.DocumentVersions(...) }
 func (c *conn) LatestDocumentVersionInfo(ctx, …) { return c.metadataStore.LatestDocumentVersionInfo(...) }

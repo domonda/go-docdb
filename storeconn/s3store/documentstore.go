@@ -57,45 +57,6 @@ func (s *docStore) DocumentExists(ctx context.Context, docID uu.ID) (exists bool
 	return false, err
 }
 
-// EnumDocumentIDs iterates every object in the bucket, extracts the docID from
-// each key, and calls callback once per unique docID. Pagination is handled
-// internally by the ListObjectsV2 paginator. If callback returns an error, the
-// enumeration stops and the error is returned.
-func (s *docStore) EnumDocumentIDs(ctx context.Context, callback func(context.Context, uu.ID) error) error {
-	paginator := awss3.NewListObjectsV2Paginator(s.client, &awss3.ListObjectsV2Input{
-		Bucket: &s.bucketName,
-	})
-
-	processedIDs := make(map[uu.ID]struct{})
-	for paginator.HasMorePages() {
-		page, err := paginator.NextPage(ctx)
-		if err != nil {
-			return err
-		}
-		for _, object := range page.Contents {
-			if object.Key == nil {
-				return errs.New("nil object key")
-			}
-
-			id := idFromKey(*object.Key)
-			if id.IsNil() {
-				return errs.Errorf("can't parse ID from `%s`", *object.Key)
-			}
-
-			if _, ok := processedIDs[id]; ok {
-				continue
-			}
-			processedIDs[id] = struct{}{}
-
-			if err := callback(ctx, id); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
-}
-
 // CreateDocumentVersion uploads each of the passed files as a separate S3 object
 // keyed by "<docID>/<filename>/<contentHash>". Filenames containing "/"
 // are rejected because "/" is the key separator. The version argument is
@@ -270,7 +231,8 @@ func (s *docStore) deletePrefix(ctx context.Context, prefix string) (int, error)
 		for i, obj := range page.Contents {
 			objects[i] = types.ObjectIdentifier{Key: obj.Key}
 		}
-		if err := s.deleteObjectBatch(ctx, objects); err != nil {
+		err = s.deleteObjectBatch(ctx, objects)
+		if err != nil {
 			return deleted, err
 		}
 		deleted += len(objects)
@@ -290,7 +252,8 @@ func (s *docStore) deleteObjectKeys(ctx context.Context, keys []string) error {
 		for i, key := range keys[start:end] {
 			objects[i] = types.ObjectIdentifier{Key: new(key)}
 		}
-		if err := s.deleteObjectBatch(ctx, objects); err != nil {
+		err := s.deleteObjectBatch(ctx, objects)
+		if err != nil {
 			return err
 		}
 	}
@@ -334,18 +297,6 @@ func DeleteObjectsErr(out *awss3.DeleteObjectsOutput) error {
 // document file in the form "<docID>/<filename>/<hash>".
 func Key(docID uu.ID, filename string, hash string) string {
 	return strings.Join([]string{docID.String(), filename, hash}, "/")
-}
-
-// idFromKey parses the docID component (parts[0]) out of an S3 key in the
-// "<docID>/<filename>/<hash>" form. Returns uu.IDNil if the key has an
-// unexpected structure or an unparsable ID.
-func idFromKey(key string) uu.ID {
-	parts := strings.Split(key, "/")
-	if len(parts) != 3 {
-		return uu.IDNil
-	}
-
-	return uu.IDFrom(parts[0])
 }
 
 // filterKeysByHash returns the subset of keys whose content-hash component
