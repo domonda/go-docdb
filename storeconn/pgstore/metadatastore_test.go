@@ -1,9 +1,7 @@
 package pgstore_test
 
 import (
-	"context"
 	"database/sql"
-	"errors"
 	"testing"
 	"time"
 
@@ -701,8 +699,8 @@ func TestDocumentVersions(t *testing.T) {
 	})
 }
 
-func TestEnumCompanyDocumentIDs(t *testing.T) {
-	t.Run("Iterates over all company related documents", func(t *testing.T) {
+func TestCompanyDocumentIDs(t *testing.T) {
+	t.Run("Returns all company documents sorted by ID", func(t *testing.T) {
 		// given
 		t.Parallel()
 		populator := pgfixtures.FixturePopulator(t)
@@ -722,57 +720,69 @@ func TestEnumCompanyDocumentIDs(t *testing.T) {
 		populator.DocumentVersion()
 
 		// when
-		processedDocumentIDs := []uu.ID{}
-		store.EnumCompanyDocumentIDs(
-			ctx,
-			doc1Version1.CompanyID,
-			func(ctx context.Context, i uu.ID) error {
-				processedDocumentIDs = append(processedDocumentIDs, i)
-				return nil
-			},
-		)
+		docIDs, err := store.CompanyDocumentIDs(ctx, doc1Version1.CompanyID)
 
 		// then
-		require.Equal(t, 2, len(processedDocumentIDs))
-		require.Equal(t, doc1Version1.DocumentID, processedDocumentIDs[0])
-		require.Equal(t, doc2Version1.DocumentID, processedDocumentIDs[1])
+		require.NoError(t, err)
+		// a3c6... sorts before c7e6..., and each document appears once
+		// despite doc1 having two versions.
+		require.Equal(t, uu.IDSlice{doc1Version1.DocumentID, doc2Version1.DocumentID}, docIDs)
 	})
 
-	t.Run("Returns no error if no versions", func(t *testing.T) {
+	t.Run("Returns nil if no versions", func(t *testing.T) {
 		// given
 		t.Parallel()
 		ctx := pgfixtures.FixtureCtxWithTestTx(t)
 
 		// when
-		err := store.EnumCompanyDocumentIDs(
-			ctx,
-			uu.IDv7(),
-			func(ctx context.Context, i uu.ID) error { return nil },
-		)
+		docIDs, err := store.CompanyDocumentIDs(ctx, uu.IDv7())
 
 		// then
 		require.NoError(t, err)
+		require.Nil(t, docIDs)
 	})
+}
 
-	t.Run("Returns error from callback", func(t *testing.T) {
+func TestCompanyIDs(t *testing.T) {
+	t.Run("Returns all companies sorted by ID", func(t *testing.T) {
 		// given
 		t.Parallel()
 		populator := pgfixtures.FixturePopulator(t)
 		ctx := pgfixtures.FixtureCtxWithTestTx(t)
-		docVersion := populator.DocumentVersion()
+		companyA := uu.IDFrom("a3c60853-022c-403d-85cc-6ea146ec6a4a")
+		companyC := uu.IDFrom("c7e67e60-9548-43c6-83be-55cb736a5761")
+		// companyA gets two documents (one with two versions) to prove each
+		// company is reported once regardless of document/version count.
+		doc1 := populator.DocumentVersion(map[string]any{"CompanyID": companyA})
+		populator.DocumentVersion(map[string]any{
+			"DocumentID": doc1.DocumentID,
+			"CompanyID":  companyA,
+			"Version":    docdb.VersionTimeFrom(time.Now().Add(time.Second)),
+		})
+		populator.DocumentVersion(map[string]any{"CompanyID": companyA})
+		populator.DocumentVersion(map[string]any{"CompanyID": companyC})
 
 		// when
-		expectedErr := errors.New("bug")
-		err := store.EnumCompanyDocumentIDs(
-			ctx,
-			docVersion.CompanyID,
-			func(ctx context.Context, i uu.ID) error {
-				return expectedErr
-			},
-		)
+		companyIDs, err := store.CompanyIDs(ctx)
 
 		// then
-		require.ErrorIs(t, err, expectedErr)
+		require.NoError(t, err)
+		// a3c6... sorts before c7e6..., and companyA appears once despite
+		// owning multiple documents and versions.
+		require.Equal(t, uu.IDSlice{companyA, companyC}, companyIDs)
+	})
+
+	t.Run("Returns nil if no documents", func(t *testing.T) {
+		// given
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+
+		// when
+		companyIDs, err := store.CompanyIDs(ctx)
+
+		// then
+		require.NoError(t, err)
+		require.Nil(t, companyIDs)
 	})
 }
 

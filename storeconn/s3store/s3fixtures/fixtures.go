@@ -157,7 +157,8 @@ var globalS3Client = sync.OnceValues(func() (*awss3.Client, error) {
 		o.UsePathStyle = true
 	})
 
-	if _, err := client.ListBuckets(ctx, &awss3.ListBucketsInput{}); err != nil {
+	_, err = client.ListBuckets(ctx, &awss3.ListBucketsInput{})
+	if err != nil {
 		return nil, err
 	}
 	return client, nil

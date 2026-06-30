@@ -232,8 +232,8 @@ func TestFileReaderProvider_Integration(t *testing.T) {
 
 	// Check each file exists
 	for _, filename := range fileList {
-		exists, err := provider.HasFile(filename)
-		require.NoError(t, err)
+		exists, hasErr := provider.HasFile(filename)
+		require.NoError(t, hasErr)
 		assert.True(t, exists, "file %s should exist", filename)
 	}
 
@@ -601,8 +601,8 @@ func TestDirFileProvider_Integration(t *testing.T) {
 
 	// Check each file exists
 	for _, filename := range fileList {
-		exists, err := provider.HasFile(filename)
-		require.NoError(t, err)
+		exists, hasErr := provider.HasFile(filename)
+		require.NoError(t, hasErr)
 		assert.True(t, exists, "file %s should exist", filename)
 	}
 

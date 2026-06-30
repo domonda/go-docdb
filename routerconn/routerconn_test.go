@@ -118,75 +118,69 @@ func TestRouterConn(t *testing.T) {
 		require.True(t, called)
 	})
 
-	t.Run("routes EnumCompanyDocumentIDs by company ID", func(t *testing.T) {
+	t.Run("routes CompanyDocumentIDs by company ID", func(t *testing.T) {
 		companyID := uu.IDv7()
+		docID := uu.IDv7()
 		called := false
 		backend := &docdb.MockConn{
-			EnumCompanyDocumentIDsMock: func(ctx context.Context, id uu.ID, callback func(context.Context, uu.ID) error) error {
+			CompanyDocumentIDsMock: func(ctx context.Context, id uu.ID) (uu.IDSlice, error) {
 				called = true
 				require.Equal(t, companyID, id)
-				return nil
+				return uu.IDSlice{docID}, nil
 			},
 		}
 		conn := routerconn.New(connFor(companyID, backend), unusedConn(t), backend)
 
-		err := conn.EnumCompanyDocumentIDs(t.Context(), companyID, nil)
+		docIDs, err := conn.CompanyDocumentIDs(t.Context(), companyID)
 		require.NoError(t, err)
 		require.True(t, called)
+		require.Equal(t, uu.IDSlice{docID}, docIDs)
 	})
 
-	t.Run("EnumDocumentIDs fans out across all backends", func(t *testing.T) {
-		docA := uu.IDv7()
-		docB := uu.IDv7()
+	t.Run("CompanyIDs fans out across all backends", func(t *testing.T) {
+		companyA := uu.IDv7()
+		companyB := uu.IDv7()
 		backendA := &docdb.MockConn{
-			EnumDocumentIDsMock: func(ctx context.Context, cb func(context.Context, uu.ID) error) error {
-				return cb(ctx, docA)
+			CompanyIDsMock: func(ctx context.Context) (uu.IDSlice, error) {
+				return uu.IDSlice{companyA}, nil
 			},
 		}
 		backendB := &docdb.MockConn{
-			EnumDocumentIDsMock: func(ctx context.Context, cb func(context.Context, uu.ID) error) error {
-				return cb(ctx, docB)
+			CompanyIDsMock: func(ctx context.Context) (uu.IDSlice, error) {
+				return uu.IDSlice{companyB}, nil
 			},
 		}
 		conn := routerconn.New(unusedConn(t), unusedConn(t), backendA, backendB)
 
-		var got []uu.ID
-		err := conn.EnumDocumentIDs(t.Context(), func(_ context.Context, id uu.ID) error {
-			got = append(got, id)
-			return nil
-		})
+		got, err := conn.CompanyIDs(t.Context())
 		require.NoError(t, err)
-		require.ElementsMatch(t, []uu.ID{docA, docB}, got)
+		require.ElementsMatch(t, uu.IDSlice{companyA, companyB}, got)
 	})
 
-	t.Run("EnumDocumentIDs reports each document once across backends", func(t *testing.T) {
+	t.Run("CompanyIDs reports each company once across backends", func(t *testing.T) {
 		dup := uu.IDv7()
-		enumDup := func(ctx context.Context, cb func(context.Context, uu.ID) error) error {
-			return cb(ctx, dup)
+		companyIDs := func(ctx context.Context) (uu.IDSlice, error) {
+			return uu.IDSlice{dup}, nil
 		}
-		backendA := &docdb.MockConn{EnumDocumentIDsMock: enumDup}
-		backendB := &docdb.MockConn{EnumDocumentIDsMock: enumDup}
+		backendA := &docdb.MockConn{CompanyIDsMock: companyIDs}
+		backendB := &docdb.MockConn{CompanyIDsMock: companyIDs}
 		conn := routerconn.New(unusedConn(t), unusedConn(t), backendA, backendB)
 
-		var got []uu.ID
-		err := conn.EnumDocumentIDs(t.Context(), func(_ context.Context, id uu.ID) error {
-			got = append(got, id)
-			return nil
-		})
+		got, err := conn.CompanyIDs(t.Context())
 		require.NoError(t, err)
-		require.Equal(t, []uu.ID{dup}, got)
+		require.Equal(t, uu.IDSlice{dup}, got)
 	})
 
-	t.Run("EnumDocumentIDs propagates a backend error", func(t *testing.T) {
-		wantErr := errors.New("backend enum failed")
+	t.Run("CompanyIDs propagates a backend error", func(t *testing.T) {
+		wantErr := errors.New("backend companyIDs failed")
 		backend := &docdb.MockConn{
-			EnumDocumentIDsMock: func(ctx context.Context, cb func(context.Context, uu.ID) error) error {
-				return wantErr
+			CompanyIDsMock: func(ctx context.Context) (uu.IDSlice, error) {
+				return nil, wantErr
 			},
 		}
 		conn := routerconn.New(unusedConn(t), unusedConn(t), backend)
 
-		err := conn.EnumDocumentIDs(t.Context(), func(context.Context, uu.ID) error { return nil })
+		_, err := conn.CompanyIDs(t.Context())
 		require.ErrorIs(t, err, wantErr)
 	})
 

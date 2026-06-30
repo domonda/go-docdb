@@ -5,6 +5,20 @@ All notable changes to `github.com/domonda/go-docdb` are documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.0.0] - 2026-06-30
+
+### Added
+- `CompanyIDs(ctx) (uu.IDSlice, error)` on `docdb.Conn` and `storeconn.MetadataStore`, with a package-level `docdb.CompanyIDs` wrapper: returns the IDs of all companies that have documents, sorted by ID for a consistent order. `pgstore` selects `distinct company_id`; `localfsdb` lists the per-company sub-directories; `routerconn` fans out across all backends and deduplicates. Together with `CompanyDocumentIDs` this fully replaces the removed `EnumDocumentIDs` (iterate companies, then documents per company).
+- `docdb.DocProgressCallback`: `func(ctx context.Context, docID uu.ID, index, total int)`, the progress callback type accepted by `SyncAllCompanyDocuments` and `CopyAllCompanyDocumentFiles`.
+
+### Changed
+- The callback-based `EnumCompanyDocumentIDs` is replaced by `CompanyDocumentIDs(ctx, companyID) (uu.IDSlice, error)`, which returns all of a company's document IDs as a slice sorted by ID for a consistent order, instead of invoking a per-document callback. This affects `docdb.Conn`, the package-level `docdb.EnumCompanyDocumentIDs` function (now `docdb.CompanyDocumentIDs`), `storeconn.MetadataStore`, and every implementation (`localfsdb`, `storeconn`/`pgstore`, `routerconn`, `MockConn`, `errConn`). The result is `nil` for a company with no documents. Unlike the previous unbounded enumeration this materializes the full ID slice, matching the existing usage which already buffered every ID before reading documents.
+- `docdb.SyncAllCompanyDocuments` gains a trailing `onProgress docdb.DocProgressCallback` parameter. It fetches the document IDs via `srcConn.CompanyDocumentIDs`, then syncs them one after another. The known total lets `onProgress` (when not nil) be called before syncing each document with the document's zero-based index and the total to sync, letting callers log progress. Pass `nil` to keep the previous behavior. The `continueOnError` and `recreate` semantics and the returned `syncedDocIDs` are unchanged.
+- `docdb.CopyAllCompanyDocumentFiles` gains a trailing `onProgress docdb.DocProgressCallback` parameter, mirroring `SyncAllCompanyDocuments`. It now collects the document IDs via `conn.CompanyDocumentIDs` up front and calls `onProgress` (when not nil) before copying each document with its zero-based index and the total count. Pass `nil` to keep the previous behavior.
+
+### Removed
+- `EnumDocumentIDs` is removed from `docdb.Conn`, the package-level `docdb.EnumDocumentIDs` wrapper, and `storeconn.DocumentStore` (and its `s3store` implementation). It enumerated every document across all companies via a callback; the new `CompanyIDs` + `CompanyDocumentIDs` slice methods cover the same need without a callback. No production code called it; the `routerconn` cross-backend fan-out and dedup it provided now lives in `CompanyIDs`.
+
 ## [v0.8.1] - 2026-06-29
 
 ### Fixed
@@ -180,6 +194,7 @@ Initial release.
 - `ProxyConn` and `DeprecatedConn` (holding deprecated check-out/in methods).
 - `VersionInfo` with `CompanyID`, `LatestDocumentVersionInfo`, and `VersionTime.SetNull`.
 
+[v1.0.0]: https://github.com/domonda/go-docdb/releases/tag/v1.0.0
 [v0.8.1]: https://github.com/domonda/go-docdb/releases/tag/v0.8.1
 [v0.8.0]: https://github.com/domonda/go-docdb/releases/tag/v0.8.0
 [v0.7.0]: https://github.com/domonda/go-docdb/releases/tag/v0.7.0

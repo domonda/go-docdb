@@ -2,11 +2,8 @@ package s3store_test
 
 import (
 	"bytes"
-	"context"
-	"errors"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
@@ -90,71 +87,6 @@ func TestDocumentExists(t *testing.T) {
 			scenario.compareResult(t, exists)
 		})
 	}
-}
-
-func TestEnumDocumentIDs(t *testing.T) {
-	t.Run("Iterates over fetched keys", func(t *testing.T) {
-		// given
-		timeout := time.AfterFunc(10*time.Second, func() {
-			panic("TIMEOUT")
-		})
-
-		t.Cleanup(func() { timeout.Stop() })
-
-		createDocument := s3fixtures.FixtureCreateDocument(t)
-		documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
-
-		// max keys = 1000, this ensures pagination works correctly, because 501 * 2 = 1002
-		numDocuments := 501
-		for range numDocuments {
-			id := uu.IDv4()
-
-			for _, filename := range []string{"doc.pdf", "doc1.pdf"} {
-				createDocument(id, filename, []byte("asd"))
-			}
-		}
-
-		// when
-		returnedIDs := uu.IDSlice{}
-		err := documentStore.EnumDocumentIDs(t.Context(), func(ctx context.Context, i uu.ID) error {
-			returnedIDs = append(returnedIDs, i)
-			return nil
-		})
-
-		// then
-		require.NoError(t, err)
-		require.Equal(t, numDocuments, len(returnedIDs))
-	})
-
-	t.Run("Returns error from callback", func(t *testing.T) {
-		// given
-		documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
-		filename := "doc.pdf"
-		docID := uu.IDv7()
-		createDocument := s3fixtures.FixtureCreateDocument(t)
-		createDocument(docID, filename, []byte("asd"))
-
-		// when
-		expectedErr := errors.New("bug")
-		err := documentStore.EnumDocumentIDs(t.Context(), func(ctx context.Context, i uu.ID) error {
-			return expectedErr
-		})
-
-		// then
-		require.ErrorIs(t, err, expectedErr)
-	})
-
-	t.Run("Returns error if bucket does not exist", func(t *testing.T) {
-		// when
-		documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
-
-		err := documentStore.EnumDocumentIDs(t.Context(), func(ctx context.Context, i uu.ID) error {
-			return nil
-		})
-
-		// then
-		require.Error(t, err)
-	})
 }
 
 func TestCreateDocumentVersion(t *testing.T) {

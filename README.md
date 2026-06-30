@@ -105,8 +105,8 @@ Helper constructors:
 ```go
 type Conn interface {
     DocumentExists(ctx, docID) (bool, error)
-    EnumDocumentIDs(ctx, callback) error
-    EnumCompanyDocumentIDs(ctx, companyID, callback) error
+    CompanyIDs(ctx) (uu.IDSlice, error)
+    CompanyDocumentIDs(ctx, companyID) (uu.IDSlice, error)
 
     DocumentCompanyID(ctx, docID) (companyID, error)
     SetDocumentCompanyID(ctx, docID, companyID) error
@@ -259,11 +259,16 @@ To copy a document directly from one `Conn` to another, `SyncDocument` combines 
 // Copy a document with all versions and file content from srcConn to destConn
 err := docdb.SyncDocument(ctx, srcConn, destConn, docID, recreate)
 
-// Copy all documents of a company from srcConn to destConn
-syncedDocIDs, err := docdb.SyncAllCompanyDocuments(ctx, srcConn, destConn, companyID, recreate, continueOnError)
+// Copy all documents of a company from srcConn to destConn.
+// Pass nil for the progress callback, or a func to log progress.
+syncedDocIDs, err := docdb.SyncAllCompanyDocuments(ctx, srcConn, destConn, companyID, recreate, continueOnError,
+	func(ctx context.Context, docID uu.ID, index, total int) {
+		log.Printf("syncing document %d/%d: %s", index+1, total, docID)
+	},
+)
 ```
 
-The `recreate` flag has the same meaning as for `RestoreDocument`. When `continueOnError` is true, `SyncAllCompanyDocuments` collects per-document errors and keeps going instead of stopping at the first failure; `syncedDocIDs` always lists the documents that synced successfully.
+The `recreate` flag has the same meaning as for `RestoreDocument`. When `continueOnError` is true, `SyncAllCompanyDocuments` collects per-document errors and keeps going instead of stopping at the first failure; `syncedDocIDs` always lists the documents that synced successfully. `SyncAllCompanyDocuments` first fetches all document IDs via `srcConn.CompanyDocumentIDs`, then syncs them one after another; the optional `DocProgressCallback` is called before each document with its zero-based `index` and the `total` count so callers can log progress (pass `nil` to skip).
 
 Sync works across any pair of `Conn` implementations, including `localfsdb` and split-store `storeconn` in either direction. Document and company IDs of any UUID version 1-8 are supported on both sides — in particular time-ordered v7 IDs (`uu.IDv7`) are correctly enumerated by `localfsdb`.
 
@@ -285,7 +290,7 @@ Stores and retrieves file content, keyed by content hash so identical content is
 CreateDocumentVersion(ctx, docID, version, files) ([]*docdb.FileInfo, error)
 ```
 
-It also implements `DocumentExists`, `DocumentHashFileProvider`, `ReadDocumentHashFile`, `DeleteDocument`, `DeleteDocumentHashes`, and `EnumDocumentIDs`. `storeconn/s3store` is the reference implementation; uniqueness of the document ID is enforced by the `MetadataStore`, not here.
+It also implements `DocumentExists`, `DocumentHashFileProvider`, `ReadDocumentHashFile`, `DeleteDocument`, and `DeleteDocumentHashes`. `storeconn/s3store` is the reference implementation; uniqueness of the document ID is enforced by the `MetadataStore`, not here.
 
 ### `MetadataStore` — version metadata
 
@@ -349,7 +354,7 @@ err := docdb.DebugPrintDocument(ctx, conn, docID, "", "  ")
 err := docdb.DebugPrintCompanyDocuments(ctx, conn, companyID, "", "  ")
 ```
 
-`linePrefix` is prepended to every line and `indent` is added once per tree level (document → version → file). Within each version, files are printed sorted by name. `DebugPrintCompanyDocuments` prints documents in `EnumCompanyDocumentIDs` enumeration order, which is not necessarily sorted. Example layout:
+`linePrefix` is prepended to every line and `indent` is added once per tree level (document → version → file). Within each version, files are printed sorted by name. `DebugPrintCompanyDocuments` prints documents in `CompanyDocumentIDs` order, which is sorted by ID. Example layout:
 
 ```
 Document: 0c4e8f2a-…  Company: 7b1d…  Versions: 2

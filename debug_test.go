@@ -37,8 +37,8 @@ func newDummyDocumentConn(docID, companyID, userID uu.ID) *MockConn {
 	}
 
 	return &MockConn{
-		EnumCompanyDocumentIDsMock: func(ctx context.Context, _ uu.ID, callback func(context.Context, uu.ID) error) error {
-			return callback(ctx, docID)
+		CompanyDocumentIDsMock: func(ctx context.Context, _ uu.ID) (uu.IDSlice, error) {
+			return uu.IDSlice{docID}, nil
 		},
 		DocumentCompanyIDMock: func(ctx context.Context, _ uu.ID) (uu.ID, error) {
 			return companyID, nil

@@ -60,9 +60,9 @@ func NewTestConn(t *testing.T) *Conn {
 	}
 
 	t.Cleanup(func() {
-		err := dir.RemoveDirContentsRecursive()
-		if err != nil {
-			t.Errorf("can't clean up docdb test-dir %s because of: %s", dir.Path(), err)
+		cleanupErr := dir.RemoveDirContentsRecursive()
+		if cleanupErr != nil {
+			t.Errorf("can't clean up docdb test-dir %s because of: %s", dir.Path(), cleanupErr)
 		}
 	})
 
@@ -122,26 +122,65 @@ func (c *Conn) DocumentExists(ctx context.Context, docID uu.ID) (exists bool, er
 	return c.documentDir(docID).IsDir(), nil
 }
 
-func (c *Conn) EnumDocumentIDs(ctx context.Context, callback func(context.Context, uu.ID) error) error {
-	return uuiddir.Enum(ctx, c.documentsDir, func(docDir fs.File, id [16]byte) error {
-		if docDir.IsEmptyDir() {
-			log.Debugf("Empty document directory: %s", docDir.AbsPath()).Log()
+func (c *Conn) CompanyIDs(ctx context.Context) (companyIDs uu.IDSlice, err error) {
+	defer errs.WrapWithFuncParams(&err, ctx)
+
+	// companiesDir holds one sub-directory per company, named by the company's
+	// UUID. List those directory names and parse each back into a company ID.
+	err = c.companiesDir.ListDirInfoContext(ctx, func(info *fs.FileInfo) error {
+		if !info.IsDir || info.IsHidden {
 			return nil
 		}
-		return callback(ctx, id)
+		companyID, e := uu.IDFromString(info.Name)
+		if e != nil {
+			log.ErrorCtx(ctx, "companies directory contains a sub-directory that is not a company UUID, skipping and continuing...").
+				Str("dirName", info.Name).
+				Str("dirPath", info.File.Path()).
+				Err(e).
+				Log()
+			return nil
+		}
+		companyIDs = append(companyIDs, companyID)
+		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	companyIDs.Sort() // Sort by ID for a consistent order
+	return companyIDs, nil
 }
 
-func (c *Conn) EnumCompanyDocumentIDs(ctx context.Context, companyID uu.ID, callback func(context.Context, uu.ID) error) (err error) {
+func (c *Conn) CompanyDocumentIDs(ctx context.Context, companyID uu.ID) (docIDs uu.IDSlice, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, companyID)
 
-	return uuiddir.Enum(
+	companyDir := c.companiesDir.Join(companyID.String())
+	info := companyDir.Info()
+	switch {
+	case !info.Exists:
+		// No documents have ever been stored for this company, so the company
+		// directory does not exist. Return nil instead of enumerating a missing
+		// directory (which would error), matching the empty-result behavior of
+		// other backends.
+		return nil, nil
+	case !info.IsDir:
+		// The path exists but is not a directory: surface this on-disk
+		// inconsistency instead of silently reporting the company as empty.
+		return nil, errs.Errorf("company path %s exists but is not a directory", companyDir.Path())
+	}
+
+	err = uuiddir.Enum(
 		ctx,
-		c.companiesDir.Join(companyID.String()),
+		companyDir,
 		func(docDir fs.File, id [16]byte) error {
-			return callback(ctx, id)
+			docIDs = append(docIDs, id)
+			return nil
 		},
 	)
+	if err != nil {
+		return nil, err
+	}
+	docIDs.Sort() // Sort by ID for a consistent order
+	return docIDs, nil
 }
 
 func (c *Conn) makeCompanyDocumentDir(companyID, docID uu.ID) error {
@@ -354,7 +393,7 @@ func enumVersionDirs(ctx context.Context, docDir fs.File, docID uu.ID, callback 
 func (c *Conn) documentVersionInfo(ctx context.Context, docID uu.ID, version docdb.VersionTime) (versionInfo *docdb.VersionInfo, docDir fs.File, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, version)
 
-	if err := version.Validate(); err != nil {
+	if err = version.Validate(); err != nil {
 		return nil, "", err
 	}
 
@@ -515,9 +554,7 @@ func (c *Conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version d
 
 	versionInfoFile := docDir.Joinf("%s.json", version)
 	if versionInfoFile.Exists() {
-		if removeErr := versionInfoFile.Remove(); removeErr != nil {
-			err = errors.Join(err, removeErr)
-		}
+		err = errors.Join(err, versionInfoFile.Remove())
 	}
 
 	leftVersions, lErr := c.documentVersions(ctx, docID)
@@ -615,7 +652,7 @@ func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.I
 	if err = userID.Validate(); err != nil {
 		return err
 	}
-	if err := newVersion.Validate(); err != nil {
+	if err = newVersion.Validate(); err != nil {
 		return err
 	}
 	if onNewVersion == nil {
@@ -750,7 +787,7 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 	if err != nil {
 		return err
 	}
-	if err := result.Validate(); err != nil {
+	if err = result.Validate(); err != nil {
 		return err
 	}
 	if !result.Version.After(prevVersionInfo.Version) {
@@ -955,10 +992,12 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		if e != nil {
 			return e
 		}
-		if e := uuiddir.Remove(c.companiesDir.Join(currCompanyID.String()), doc.ID); e != nil {
+		e = uuiddir.Remove(c.companiesDir.Join(currCompanyID.String()), doc.ID)
+		if e != nil {
 			return e
 		}
-		if e := uuiddir.RemoveDir(c.documentsDir, docDir); e != nil {
+		e = uuiddir.RemoveDir(c.documentsDir, docDir)
+		if e != nil {
 			return e
 		}
 	}
@@ -992,13 +1031,16 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		// ones), so the earliest missing version is correctly diffed against
 		// its real predecessor (or none) rather than the latest on-disk version.
 	} else {
-		if err = docDir.MakeAllDirs(); err != nil {
+		err = docDir.MakeAllDirs()
+		if err != nil {
 			return err
 		}
-		if err = docDir.Join("company.id").WriteAll(doc.CompanyID.StringBytes()); err != nil {
+		err = docDir.Join("company.id").WriteAll(doc.CompanyID.StringBytes())
+		if err != nil {
 			return err
 		}
-		if err = c.makeCompanyDocumentDir(doc.CompanyID, doc.ID); err != nil {
+		err = c.makeCompanyDocumentDir(doc.CompanyID, doc.ID)
+		if err != nil {
 			return err
 		}
 	}
@@ -1012,15 +1054,11 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 			return
 		}
 		for _, d := range createdVersionDirs {
-			if rmErr := d.RemoveRecursive(); rmErr != nil {
-				err = errors.Join(err, rmErr)
-			}
+			err = errors.Join(err, d.RemoveRecursive())
 		}
 		for _, f := range createdInfoFiles {
 			if f.Exists() {
-				if rmErr := f.Remove(); rmErr != nil {
-					err = errors.Join(err, rmErr)
-				}
+				err = errors.Join(err, f.Remove())
 			}
 		}
 		if !docExisted {
@@ -1040,7 +1078,8 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		}
 
 		versionDir := docDir.Join(v.String())
-		if err = versionDir.MakeDir(); err != nil {
+		err = versionDir.MakeDir()
+		if err != nil {
 			return err
 		}
 		createdVersionDirs = append(createdVersionDirs, versionDir)

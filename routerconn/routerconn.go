@@ -5,11 +5,11 @@
 //
 //   - connForCompanyID maps a company ID to the backend that stores its
 //     documents. It routes the operations keyed by a company:
-//     EnumCompanyDocumentIDs, CreateDocument (the document does not exist yet)
+//     CompanyDocumentIDs, CreateDocument (the document does not exist yet)
 //     and RestoreDocument.
 //   - connForDocID maps a document ID to the backend that stores it. It routes
 //     every operation keyed by an existing document.
-//   - allConns is the complete list of backend connections; EnumDocumentIDs
+//   - allConns is the complete list of backend connections; CompanyIDs
 //     fans out across all of them.
 //
 // A document lives entirely on one backend; routerconn never splits a document
@@ -30,10 +30,10 @@ import (
 // New returns a docdb.Conn that routes every operation to one of the backend
 // connections in allConns.
 //
-// Operations keyed by a company - EnumCompanyDocumentIDs, CreateDocument and
+// Operations keyed by a company - CompanyDocumentIDs, CreateDocument and
 // RestoreDocument - are routed through connForCompanyID. Operations keyed by an
 // existing document are routed through connForDocID. Both callbacks must return
-// one of the allConns connections. EnumDocumentIDs fans out across all of them.
+// one of the allConns connections. CompanyIDs fans out across all of them.
 //
 // New panics if either callback is nil or allConns is empty. An error from
 // either callback aborts the operation and is returned unchanged.
@@ -61,7 +61,7 @@ func New(
 type routerConn struct {
 	connForCompanyID func(ctx context.Context, companyID uu.ID) (docdb.Conn, error)
 	connForDocID     func(ctx context.Context, docID uu.ID) (docdb.Conn, error)
-	allConns         []docdb.Conn // Used for EnumDocumentIDs
+	allConns         []docdb.Conn // Used for CompanyIDs
 }
 
 var _ docdb.Conn = (*routerConn)(nil)
@@ -74,39 +74,34 @@ func (r *routerConn) DocumentExists(ctx context.Context, docID uu.ID) (exists bo
 	return conn.DocumentExists(ctx, docID)
 }
 
-// EnumDocumentIDs enumerates the documents of every backend in allConns, in the
-// order the backends were passed to New.
+// CompanyIDs returns the company IDs of every backend in allConns, deduplicated
+// and sorted by ID.
 //
-// A document normally lives on a single backend, but EnumDocumentIDs does not
-// rely on that: it records every document ID already seen in a uu.IDSet and
-// invokes callback at most once per ID, even when more than one backend reports
-// the same ID. The set of seen IDs is held in memory until the call returns.
-//
-// Enumeration stops and returns the error if any backend, or callback itself,
-// returns an error.
-func (r *routerConn) EnumDocumentIDs(ctx context.Context, callback func(context.Context, uu.ID) error) error {
-	docIDs := make(uu.IDSet)
+// A company normally lives on a single backend, but CompanyIDs does not rely on
+// that: a company ID reported by more than one backend is returned only once.
+// Returns nil if no backend has any companies, and the error of the first
+// backend that fails.
+func (r *routerConn) CompanyIDs(ctx context.Context) (uu.IDSlice, error) {
+	companyIDs := make(uu.IDSet)
 	for _, conn := range r.allConns {
-		err := conn.EnumDocumentIDs(ctx, func(ctx context.Context, docID uu.ID) error {
-			if docIDs.Contains(docID) {
-				return nil
-			}
-			docIDs.Add(docID)
-			return callback(ctx, docID)
-		})
+		ids, err := conn.CompanyIDs(ctx)
 		if err != nil {
-			return err
+			return nil, err
 		}
+		companyIDs.AddSlice(ids)
 	}
-	return nil
+	if companyIDs.IsEmpty() {
+		return nil, nil
+	}
+	return companyIDs.AsSortedSlice(), nil
 }
 
-func (r *routerConn) EnumCompanyDocumentIDs(ctx context.Context, companyID uu.ID, callback func(context.Context, uu.ID) error) error {
+func (r *routerConn) CompanyDocumentIDs(ctx context.Context, companyID uu.ID) (uu.IDSlice, error) {
 	conn, err := r.connForCompanyID(ctx, companyID)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return conn.EnumCompanyDocumentIDs(ctx, companyID, callback)
+	return conn.CompanyDocumentIDs(ctx, companyID)
 }
 
 func (r *routerConn) DocumentCompanyID(ctx context.Context, docID uu.ID) (companyID uu.ID, err error) {

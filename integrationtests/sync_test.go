@@ -224,9 +224,29 @@ func TestSyncAllCompanyDocuments(t *testing.T) {
 					otherDocID := uu.IDv7()
 					createSyncTestDoc(t, ctx, srcConn, otherCompanyID, otherDocID, userID, "other-company")
 
-					synced, err := docdb.SyncAllCompanyDocuments(ctx, srcConn, dstConn, companyID, true, true)
+					// Record the progress callbacks to assert they report
+					// every document with a correct index and total.
+					type progress struct {
+						docID        uu.ID
+						index, total int
+					}
+					var progressCalls []progress
+					synced, err := docdb.SyncAllCompanyDocuments(ctx, srcConn, dstConn, companyID, true, true,
+						func(_ context.Context, docID uu.ID, index, total int) {
+							progressCalls = append(progressCalls, progress{docID, index, total})
+						},
+					)
 					require.NoError(t, err)
 					require.ElementsMatch(t, companyDocIDs, synced)
+
+					require.Len(t, progressCalls, len(companyDocIDs))
+					var progressDocIDs uu.IDSlice
+					for i, p := range progressCalls {
+						require.Equal(t, i, p.index)
+						require.Equal(t, len(companyDocIDs), p.total)
+						progressDocIDs = append(progressDocIDs, p.docID)
+					}
+					require.ElementsMatch(t, companyDocIDs, progressDocIDs)
 
 					for _, docID := range companyDocIDs {
 						want, err := docdb.ReadHashedDocument(ctx, srcConn, docID)
@@ -276,7 +296,7 @@ func TestSyncAllCompanyDocuments(t *testing.T) {
 				companyID := uu.IDv7()
 				good, conflicting := seedCompanyDocsWithConflicts(t, ctx, srcConn, dstConn, companyID, 2, 1)
 
-				synced, err := docdb.SyncAllCompanyDocuments(ctx, srcConn, dstConn, companyID, false, true)
+				synced, err := docdb.SyncAllCompanyDocuments(ctx, srcConn, dstConn, companyID, false, true, nil)
 				require.Error(t, err)
 				require.ElementsMatch(t, good, synced)
 				require.NotContains(t, synced, conflicting[0])
@@ -302,7 +322,7 @@ func TestSyncAllCompanyDocuments(t *testing.T) {
 				companyID := uu.IDv7()
 				_, conflicting := seedCompanyDocsWithConflicts(t, ctx, srcConn, dstConn, companyID, 0, 3)
 
-				synced, err := docdb.SyncAllCompanyDocuments(ctx, srcConn, dstConn, companyID, false, true)
+				synced, err := docdb.SyncAllCompanyDocuments(ctx, srcConn, dstConn, companyID, false, true, nil)
 				require.Error(t, err)
 				require.Empty(t, synced)
 				require.Equal(t, 3, countDocIDsInError(err, conflicting),
@@ -323,7 +343,7 @@ func TestSyncAllCompanyDocuments(t *testing.T) {
 				companyID := uu.IDv7()
 				_, conflicting := seedCompanyDocsWithConflicts(t, ctx, srcConn, dstConn, companyID, 0, 3)
 
-				synced, err := docdb.SyncAllCompanyDocuments(ctx, srcConn, dstConn, companyID, false, false)
+				synced, err := docdb.SyncAllCompanyDocuments(ctx, srcConn, dstConn, companyID, false, false, nil)
 				require.Error(t, err)
 				require.Empty(t, synced)
 				require.Equal(t, 1, countDocIDsInError(err, conflicting),

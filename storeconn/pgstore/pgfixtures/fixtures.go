@@ -34,7 +34,8 @@ var globalConn = sync.OnceValues(func() (sqldb.Connection, error) {
 // CloseGlobalConn closes the process-wide test database connection
 // if one was successfully opened.
 func CloseGlobalConn() {
-	if conn, err := globalConn(); err == nil {
+	conn, err := globalConn()
+	if err == nil {
 		conn.Close() //#nosec G104
 	}
 }
@@ -176,7 +177,8 @@ func connectFromEnv(ctx context.Context) (sqldb.Connection, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := conn.Ping(ctx, 5*time.Second); err != nil {
+	err = conn.Ping(ctx, 5*time.Second)
+	if err != nil {
 		return nil, errors.Join(err, conn.Close())
 	}
 	return conn, nil

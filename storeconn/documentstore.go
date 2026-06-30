@@ -29,10 +29,6 @@ type DocumentStore interface {
 	// DocumentExists returns true if a document with the passed docID exists in the store.
 	DocumentExists(ctx context.Context, docID uu.ID) (exists bool, err error)
 
-	// EnumDocumentIDs calls the passed callback with the ID of every document in the store.
-	// If the callback returns an error, enumeration stops and the error is returned.
-	EnumDocumentIDs(ctx context.Context, callback func(context.Context, uu.ID) error) error
-
 	// DocumentHashFileProvider returns a FileProvider that can read files
 	// identified by the given content hashes for a document.
 	// The returned FileProvider returns ErrDocumentFileNotFound from ReadFile
