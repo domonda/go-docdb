@@ -5,6 +5,11 @@ All notable changes to `github.com/domonda/go-docdb` are documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.0.1] - 2026-07-03
+
+### Fixed
+- `IdenticalDocumentVersionsOfDrivers` no longer reports two identical versions as different because of change-list ordering. It compared the drivers' `VersionInfo`s with `reflect.DeepEqual`, which compares the `AddedFiles`/`RemovedFiles`/`ModifiedFiles` slices positionally — yet those lists derive from non-deterministic map iteration, so identical versions whose lists happened to be in a different order were reported as different. `reflect.DeepEqual` also treated a nil slice/map as different from an empty one and compared version timestamps at nanosecond rather than the stored millisecond precision. It now uses `VersionInfo.Equal`, which compares the change-list sets order-insensitively and the timestamps at millisecond precision — the same comparison the Postgres versions-exist check already uses.
+
 ## [v1.0.0] - 2026-06-30
 
 ### Added
@@ -194,6 +199,7 @@ Initial release.
 - `ProxyConn` and `DeprecatedConn` (holding deprecated check-out/in methods).
 - `VersionInfo` with `CompanyID`, `LatestDocumentVersionInfo`, and `VersionTime.SetNull`.
 
+[v1.0.1]: https://github.com/domonda/go-docdb/releases/tag/v1.0.1
 [v1.0.0]: https://github.com/domonda/go-docdb/releases/tag/v1.0.0
 [v0.8.1]: https://github.com/domonda/go-docdb/releases/tag/v0.8.1
 [v0.8.0]: https://github.com/domonda/go-docdb/releases/tag/v0.8.0

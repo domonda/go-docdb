@@ -3,7 +3,6 @@ package docdb
 import (
 	"bytes"
 	"context"
-	"reflect"
 
 	"github.com/ungerik/go-fs"
 
@@ -13,20 +12,27 @@ import (
 
 // IdenticalDocumentVersionsOfDrivers returns true if the specified versions
 // of a document have identical VersionInfo across two different Conn implementations.
+//
+// Identity is determined by VersionInfo.Equal, which compares the
+// added/removed/modified filename sets order-insensitively (they derive from
+// non-deterministic map iteration) and the version timestamps at millisecond
+// precision. A positional comparison like reflect.DeepEqual must not be
+// substituted here: it would report equal versions as different whenever those
+// slices happen to be in a different order.
 func IdenticalDocumentVersionsOfDrivers(ctx context.Context, docID uu.ID, driverA Conn, versionA VersionTime, driverB Conn, versionB VersionTime) (identical bool, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, driverA, versionA, driverB, versionB)
 
-	fileInfosA, err := driverA.DocumentVersionInfo(ctx, docID, versionA)
+	infoA, err := driverA.DocumentVersionInfo(ctx, docID, versionA)
 	if err != nil {
 		return false, err
 	}
 
-	fileInfosB, err := driverB.DocumentVersionInfo(ctx, docID, versionB)
+	infoB, err := driverB.DocumentVersionInfo(ctx, docID, versionB)
 	if err != nil {
 		return false, err
 	}
 
-	return reflect.DeepEqual(fileInfosA, fileInfosB), nil
+	return infoA.Equal(infoB), nil
 }
 
 // LatestDocumentVersionFileProvider returns a FileProvider for the files
