@@ -438,46 +438,31 @@ func (store *postgresMetadataStore) DeleteDocumentVersion(
 	err error,
 ) {
 	// In versions-exist mode the MetadataStore is immutable: do not delete the
-	// version, only verify it exists (deleted_ids then counts the still-present
+	// version, only verify it exists (deleted_row then counts the still-present
 	// target row instead of the deleted ones) and report the same leftVersions
 	// and blob hashes a real delete would, so the caller can still clean up the
 	// DocumentStore. See ContextWithMetadataStoreVersionsExist.
-	var deletedPrevVersion *docdb.VersionTime
-	if !metadataStoreVersionsExist(ctx) {
-		deletedPrevVersion, err = db.QueryRowAs[*docdb.VersionTime](ctx,
-			/* sql */ `
-				select prev_version
-				from docdb.document_version
-				where document_id = $1 and version = $2
-			`,
-			docID,   // $1
-			version, // $2
-		)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
 	targetVersionCTE := /*sql*/ `
-		deleted_ids as (
+		deleted_row as (
 			delete from docdb.document_version
 				where document_id = $1
 				and version = $2
-			returning id
+			returning id, prev_version
 		)`
 	if metadataStoreVersionsExist(ctx) {
 		targetVersionCTE = /*sql*/ `
-		deleted_ids as (
-			select id from docdb.document_version
+		deleted_row as (
+			select id, prev_version from docdb.document_version
 			where document_id = $1
 			and version = $2
 		)`
 	}
 
 	type Res struct {
-		DeletedIDs     int      `db:"deleted_ids"`
-		LeftVersions   []string `db:"left_versions"`
-		HashesToDelete []string `db:"hashes_to_delete"`
+		DeletedIDs         int                `db:"deleted_ids"`
+		DeletedPrevVersion *docdb.VersionTime `db:"deleted_prev_version"`
+		LeftVersions       []string           `db:"left_versions"`
+		HashesToDelete     []string           `db:"hashes_to_delete"`
 	}
 	res, err := db.QueryRowAs[Res](ctx,
 		/* sql */ `
@@ -519,7 +504,8 @@ func (store *postgresMetadataStore) DeleteDocumentVersion(
 			select
 				coalesce((select array_agg(distinct version::text) from left_versions), '{}'::text[]) as left_versions,
 				coalesce((select array_agg(distinct hash) from hashes_to_delete), '{}'::text[]) as hashes_to_delete,
-				(select count(*)::int from deleted_ids) as deleted_ids
+				(select count(*)::int from deleted_row) as deleted_ids,
+				(select prev_version from deleted_row limit 1) as deleted_prev_version
 		`,
 		docID,   // $1
 		version, // $2
@@ -544,16 +530,21 @@ func (store *postgresMetadataStore) DeleteDocumentVersion(
 		hashesToDelete = append(hashesToDelete, hash)
 	}
 
-	if !metadataStoreVersionsExist(ctx) {
+	if !metadataStoreVersionsExist(ctx) && res.DeletedPrevVersion != nil {
+		// Relink successors only when a non-genesis version was deleted. Skipping
+		// relink for a genesis delete leaves successors pointing at the removed
+		// version so merge-restore (RestoreDocument with recreate=false) can
+		// re-insert the earliest version without hitting the one-genesis-per-document
+		// unique index.
 		err = db.Exec(ctx,
 			/* sql */ `
 				update docdb.document_version
 				set prev_version = $3
 				where document_id = $1 and prev_version = $2
 			`,
-			docID,              // $1
-			version,            // $2
-			deletedPrevVersion, // $3
+			docID,                  // $1
+			version,                // $2
+			res.DeletedPrevVersion, // $3
 		)
 		if err != nil {
 			return nil, nil, err
