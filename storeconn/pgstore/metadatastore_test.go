@@ -219,6 +219,39 @@ func TestCreateDocumentVersionVersionsExistMode(t *testing.T) {
 		require.NoError(t, err)
 	})
 
+	t.Run("Normalizes commit user ID before comparing when configured", func(t *testing.T) {
+		// given
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		docID := uu.IDv7()
+		companyID := uu.IDv7()
+		storedUserID := uu.IDv7()
+		alternateUserID := uu.IDv7()
+		version := docdb.NewVersionTime()
+		addedFiles := []*docdb.FileInfo{fileInfo("a.pdf", "a")}
+
+		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: storedUserID, Reason: "reason", NewVersion: version, AddedFiles: addedFiles,
+		})
+		require.NoError(t, err)
+
+		assumeCtx := pgstore.ContextWithMetadataStoreVersionsExist(ctx)
+		assumeCtx = pgstore.ContextWithCommitUserIDNormalizer(assumeCtx, func(userID uu.ID) uu.ID {
+			if userID == alternateUserID {
+				return storedUserID
+			}
+			return userID
+		})
+
+		// when: file-store user differs but normalizes to the stored Postgres user
+		_, err = store.CreateDocumentVersion(assumeCtx, storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: alternateUserID, Reason: "reason", NewVersion: version, AddedFiles: addedFiles,
+		})
+
+		// then
+		require.NoError(t, err)
+	})
+
 	t.Run("Returns error when a scalar field differs", func(t *testing.T) {
 		// given
 		t.Parallel()

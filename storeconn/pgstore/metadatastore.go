@@ -16,6 +16,33 @@ import (
 
 type metadataStoreVersionsExistCtxKey struct{}
 
+type commitUserIDNormalizerCtxKey struct{}
+
+// CommitUserIDNormalizer maps a commit user ID to the value stored in Postgres.
+// Importers use this during versions-exist sync when the file store still
+// records a user ID that no longer exists in public.user.
+type CommitUserIDNormalizer func(userID uu.ID) uu.ID
+
+// ContextWithCommitUserIDNormalizer returns a context that normalizes
+// CommitUserID on both sides before versions-exist metadata comparison.
+func ContextWithCommitUserIDNormalizer(parent context.Context, normalize CommitUserIDNormalizer) context.Context {
+	return context.WithValue(parent, commitUserIDNormalizerCtxKey{}, normalize)
+}
+
+func commitUserIDNormalizerFromContext(ctx context.Context) CommitUserIDNormalizer {
+	normalize, _ := ctx.Value(commitUserIDNormalizerCtxKey{}).(CommitUserIDNormalizer)
+	return normalize
+}
+
+func versionInfoWithNormalizedCommitUserID(vi *docdb.VersionInfo, normalize CommitUserIDNormalizer) *docdb.VersionInfo {
+	if normalize == nil {
+		return vi
+	}
+	normalized := *vi
+	normalized.CommitUserID = normalize(vi.CommitUserID)
+	return &normalized
+}
+
 // ContextWithMetadataStoreVersionsExist returns a context that switches the
 // postgresMetadataStore into versions-exist mode.
 //
@@ -169,12 +196,16 @@ func (store *postgresMetadataStore) CreateDocumentVersion(ctx context.Context, i
 // Equality is defined by docdb.VersionInfo.Equal: the scalar metadata and the
 // resolved file set are compared exactly, while the added/modified/removed
 // filename lists are compared order-insensitively (callers derive them from map
-// iteration, so their order is not significant).
+// iteration, so their order is not significant). When the context carries a
+// CommitUserIDNormalizer, both sides are normalized before comparison.
 func (store *postgresMetadataStore) assertStoredVersionEquals(ctx context.Context, expected *docdb.VersionInfo) error {
 	stored, err := store.DocumentVersionInfo(ctx, expected.DocID, expected.Version)
 	if err != nil {
 		return errs.Errorf("assumed document %s version %s to exist in the MetadataStore: %w", expected.DocID, expected.Version, err)
 	}
+	normalize := commitUserIDNormalizerFromContext(ctx)
+	stored = versionInfoWithNormalizedCommitUserID(stored, normalize)
+	expected = versionInfoWithNormalizedCommitUserID(expected, normalize)
 	if !stored.Equal(expected) {
 		return errs.Errorf(
 			"stored document %s version %s does not match what would have been inserted:\n\tstored:   %#v\n\texpected: %#v",
