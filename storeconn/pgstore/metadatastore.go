@@ -442,6 +442,22 @@ func (store *postgresMetadataStore) DeleteDocumentVersion(
 	// target row instead of the deleted ones) and report the same leftVersions
 	// and blob hashes a real delete would, so the caller can still clean up the
 	// DocumentStore. See ContextWithMetadataStoreVersionsExist.
+	var deletedPrevVersion *docdb.VersionTime
+	if !metadataStoreVersionsExist(ctx) {
+		deletedPrevVersion, err = db.QueryRowAs[*docdb.VersionTime](ctx,
+			/* sql */ `
+				select prev_version
+				from docdb.document_version
+				where document_id = $1 and version = $2
+			`,
+			docID,   // $1
+			version, // $2
+		)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
 	targetVersionCTE := /*sql*/ `
 		deleted_ids as (
 			delete from docdb.document_version
@@ -526,6 +542,22 @@ func (store *postgresMetadataStore) DeleteDocumentVersion(
 
 	for _, hash := range res.HashesToDelete {
 		hashesToDelete = append(hashesToDelete, hash)
+	}
+
+	if !metadataStoreVersionsExist(ctx) {
+		err = db.Exec(ctx,
+			/* sql */ `
+				update docdb.document_version
+				set prev_version = $3
+				where document_id = $1 and prev_version = $2
+			`,
+			docID,              // $1
+			version,            // $2
+			deletedPrevVersion, // $3
+		)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	return leftVersions, hashesToDelete, nil
