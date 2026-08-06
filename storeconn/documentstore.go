@@ -31,15 +31,17 @@ type DocumentStore interface {
 
 	// DocumentHashFilesExist reports for every passed file whether the store
 	// holds a file with that name and content hash for the document. The result
-	// has one element per passed file in the same order, and is empty for no
-	// passed files. Only the Name and Hash of a FileInfo are used, never Size.
+	// maps every passed file to that answer and is empty for no passed files.
+	// Only the Name and Hash of a FileInfo are matched, never Size, but the
+	// result is keyed by the passed values, so a caller looks an answer up with
+	// the same FileInfo it passed.
 	//
 	// A store does not track versions — files are addressed by name and content
 	// hash — so this is how a caller determines whether a complete version is
 	// present: a version is stored if and only if all of its files are. The
 	// batch shape exists so that check costs one round trip for a whole
 	// document instead of one per file.
-	DocumentHashFilesExist(ctx context.Context, docID uu.ID, files []docdb.FileInfo) (exist []bool, err error)
+	DocumentHashFilesExist(ctx context.Context, docID uu.ID, files []docdb.FileInfo) (exist map[docdb.FileInfo]bool, err error)
 
 	// DocumentHashFileProvider returns a FileProvider that can read files
 	// identified by the given content hashes for a document.

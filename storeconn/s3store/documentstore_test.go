@@ -513,16 +513,21 @@ func TestDocumentHashFilesExist(t *testing.T) {
 		{Name: "missing.pdf", Hash: otherHash},
 	})
 
-	// then the answers come back in the order asked
+	// then every passed file is answered under the key it was passed as
 	require.NoError(t, err)
-	require.Equal(t, []bool{true, false, false, false}, exist)
+	require.Equal(t, map[docdb.FileInfo]bool{
+		{Name: "stored.pdf", Hash: storedHash}:  true,
+		{Name: "stored.pdf", Hash: otherHash}:   false,
+		{Name: "renamed.pdf", Hash: storedHash}: false,
+		{Name: "missing.pdf", Hash: otherHash}:  false,
+	}, exist)
 
 	// a document with no objects has none of the files
 	exist, err = documentStore.DocumentHashFilesExist(t.Context(), uu.IDv7(), []docdb.FileInfo{
 		{Name: "stored.pdf", Hash: storedHash},
 	})
 	require.NoError(t, err)
-	require.Equal(t, []bool{false}, exist)
+	require.Equal(t, map[docdb.FileInfo]bool{{Name: "stored.pdf", Hash: storedHash}: false}, exist)
 
 	// no files asked about is not an error and needs no answer
 	exist, err = documentStore.DocumentHashFilesExist(t.Context(), documentID, nil)

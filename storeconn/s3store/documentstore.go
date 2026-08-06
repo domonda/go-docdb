@@ -64,8 +64,8 @@ func (s *docStore) DocumentExists(ctx context.Context, docID uu.ID) (exists bool
 // listing, instead of issuing a HeadObject per file: the caller asks about the
 // files of a whole document at once, and a document's objects fit into few
 // paginated List calls, while a per-file check would be one round trip each.
-func (s *docStore) DocumentHashFilesExist(ctx context.Context, docID uu.ID, files []docdb.FileInfo) ([]bool, error) {
-	exist := make([]bool, len(files))
+func (s *docStore) DocumentHashFilesExist(ctx context.Context, docID uu.ID, files []docdb.FileInfo) (map[docdb.FileInfo]bool, error) {
+	exist := make(map[docdb.FileInfo]bool, len(files))
 	if len(files) == 0 {
 		return exist, nil
 	}
@@ -79,8 +79,8 @@ func (s *docStore) DocumentHashFilesExist(ctx context.Context, docID uu.ID, file
 		keySet[key] = struct{}{}
 	}
 
-	for i, file := range files {
-		_, exist[i] = keySet[Key(docID, file.Name, file.Hash)]
+	for _, file := range files {
+		_, exist[file] = keySet[Key(docID, file.Name, file.Hash)]
 	}
 
 	return exist, nil

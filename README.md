@@ -253,7 +253,7 @@ err = conn.RestoreDocument(ctx, backup, recreate)
 `recreate` controls how an existing document on the target conn is handled:
 
 - `recreate=true` — replace: if the document already exists it is deleted first, then recreated entirely from the backup. The on-disk `CompanyID` after the call equals `backup.CompanyID`.
-- `recreate=false` — additive merge: the document is created if missing, otherwise existing versions are kept and only the backup versions whose `VersionTime` is not already on disk are added. The on-disk `CompanyID` must equal `backup.CompanyID`, otherwise the call fails without changing anything.
+- `recreate=false` — additive merge: the document is created if missing; otherwise a backup version is kept as-is only when it is already stored **with all of its files**, and anything missing is written. An implementation split into a metadata and a file store must not decide this from the metadata alone — existing version metadata does not prove the files were ever written. The on-disk `CompanyID` must equal `backup.CompanyID`, otherwise the call fails without changing anything.
 
 Backends without restore support return wrapped `ErrNotImplemented`.
 
@@ -294,7 +294,7 @@ Stores and retrieves file content, keyed by content hash so identical content is
 CreateDocumentVersion(ctx, docID, version, files) ([]*docdb.FileInfo, error)
 ```
 
-It also implements `DocumentExists`, `DocumentHashFilesExist`, `DocumentHashFileProvider`, `ReadDocumentHashFile`, `DeleteDocument`, and `DeleteDocumentHashes`. `DocumentHashFilesExist(ctx, docID, files)` reports per file whether the store holds it under that name and content hash; because the store does not track versions, that batch check is how a caller finds out whether a whole version is present. `storeconn/s3store` is the reference implementation; uniqueness of the document ID is enforced by the `MetadataStore`, not here.
+It also implements `DocumentExists`, `DocumentHashFilesExist`, `DocumentHashFileProvider`, `ReadDocumentHashFile`, `DeleteDocument`, and `DeleteDocumentHashes`. `DocumentHashFilesExist(ctx, docID, files)` reports per file, as a map keyed by the passed `FileInfo`s, whether the store holds it under that name and content hash; because the store does not track versions, that batch check is how a caller finds out whether a whole version is present. `storeconn/s3store` is the reference implementation; uniqueness of the document ID is enforced by the `MetadataStore`, not here.
 
 ### `MetadataStore` — version metadata
 
