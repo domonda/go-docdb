@@ -49,6 +49,14 @@ type MetadataStore interface {
 	// to an existing document, carrying that version's files forward before
 	// applying the added/modified/removed deltas.
 	//
+	// A version that is already stored must be reported as
+	// docdb.ErrVersionAlreadyExists, a duplicate genesis version as
+	// docdb.ErrDocumentAlreadyExists. RestoreDocument relies on that to resume a
+	// copy whose metadata was written but whose file content was not: it calls
+	// this for such a version and treats the rejection as the expected answer.
+	// An implementation may instead verify the passed input against the stored
+	// version and return that version without inserting.
+	//
 	// Returns the resulting full VersionInfo.
 	CreateDocumentVersion(ctx context.Context, in CreateDocumentVersionInput) (*docdb.VersionInfo, error)
 
