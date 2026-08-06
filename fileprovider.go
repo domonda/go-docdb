@@ -77,15 +77,11 @@ func TempFileCopy(ctx context.Context, provider FileProvider, filename string) (
 // for them. All three are filtered identically so that a filename either
 // belongs to the provider or does not, no matter which method is asked.
 //
-// The filtering lives in this helper rather than in its callers because every
-// call site provides a document version directory, whose files must be exactly
-// the files tracked in the version info: a stray .DS_Store, an interrupted
-// rsync/NFS artifact, or a sub-directory would otherwise be reported as a
-// version file and make readers like ReadHashedDocument reject the whole
-// document as containing an untracked file. localfsdb already skips hidden
-// entries when it enumerates company and version directories, so filtering
-// here makes the file listing consistent with the directory listing for every
-// user of the helper instead of only for one call site.
+// The motivating case is a document version directory, whose files must be
+// exactly the files tracked in the version info: a stray .DS_Store, an
+// interrupted rsync/NFS artifact, or a sub-directory would otherwise be
+// reported as a version file and make readers like ReadHashedDocument reject
+// the whole document as containing an untracked file.
 //
 // This is a behavior change for a consumer that deliberately stored a
 // dot-file in such a directory: that file is no longer visible through the

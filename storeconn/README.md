@@ -37,7 +37,7 @@ use the backend it is best suited to:
 
 The cost of splitting is that a logical operation ("create a version") now spans
 two systems that have no shared transaction. The `conn` type in
-[storeconn.go](storeconn.go) is the layer that pays that cost: it sequences the
+[conn.go](conn.go) is the layer that pays that cost: it sequences the
 two stores and rolls back across them on failure.
 
 ## What `New` returns
@@ -77,7 +77,7 @@ The two interfaces are defined in [documentstore.go](documentstore.go) and
 | Raw file bytes, keyed by content hash     | `DocumentStore` |
 | Deduplication of identical content        | `DocumentStore` |
 | Existence of a document (any blobs?)      | `DocumentStore` |
-| Enumerate all document IDs                | `DocumentStore` |
+| Per-file presence check (name + hash)     | `DocumentStore` |
 | Company ownership + the company index     | `MetadataStore` |
 | Version timestamps and their ordering     | `MetadataStore` |
 | Per-version file list + added/mod/removed | `MetadataStore` |
@@ -153,7 +153,7 @@ design is correct; each write method below is built around them.
 
 ### `CreateDocument` (genesis version)
 
-[storeconn.go](storeconn.go) `CreateDocument`:
+[conn.go](conn.go) `CreateDocument`:
 
 1. **Validate** version, non-empty file set, non-nil callback.
 2. **Existence guard:** `documentStore.DocumentExists(docID)`. If blobs already
@@ -187,7 +187,7 @@ The deferred rollback is deliberately asymmetric about the *already-exists* case
 
 ### `AddDocumentVersion` (append to existing document)
 
-[storeconn.go](storeconn.go) `AddDocumentVersion`:
+[conn.go](conn.go) `AddDocumentVersion`:
 
 1. **Validate** IDs and callbacks; fetch `LatestDocumentVersionInfo` from
    metadata.
@@ -196,11 +196,14 @@ The deferred rollback is deliberately asymmetric about the *already-exists* case
 3. **Run `createVersion`** (wrapped to recover panics) to get the new version's
    `WriteFiles` / `RemoveFiles` / optional new company ID. Enforce the returned
    version is strictly *after* the latest.
-4. Classify each written file as **added** vs **modified** by checking the prior
-   provider, and compute the **resulting full file set** (previous − removed +
-   added/modified). Reject removing *all* files — every version must keep at least
-   one. This full set is passed to the metadata store as `Files` so it does not
-   re-derive the carry-forward set.
+4. Compute the **resulting full file set** (previous − removed + written) and
+   reject removing *all* files — every version must keep at least one. Derive
+   the **added/modified/removed** lists from it with `VersionInfo.SetFileDeltas`
+   against the previous version's file set, so they match every other
+   implementation: a file rewritten with byte-identical content is not a
+   modification, and removing a file the previous version did not have removes
+   nothing. The full set is passed to the metadata store as `Files` so it does
+   not re-derive the carry-forward set.
 5. **Write metadata first**, then **write blobs**. (Note the order is the
    opposite of `CreateDocument`: here the document already exists, so the metadata
    row is the thing that defines the new version, and it is written first.)
@@ -216,7 +219,7 @@ the blobs are intentionally left rather than risk deleting shared content.
 
 ### `RestoreDocument` (rebuild from a `HashedDocument` backup)
 
-[storeconn.go](storeconn.go) `RestoreDocument` replays each version of an
+[conn.go](conn.go) `RestoreDocument` replays each version of an
 in-memory backup. It supports two modes:
 
 - **`recreate=true`** — delete any existing document first, then rebuild. This is
