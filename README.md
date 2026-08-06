@@ -92,7 +92,7 @@ type FileProvider interface {
 ```
 
 Helper constructors:
-- `DirFileProvider(dir)` — backed by a filesystem directory
+- `DirFileProvider(dir)` — backed by a filesystem directory, skipping hidden entries and sub-directories
 - `NewFileProvider(files ...fs.FileReader)` — backed by in-memory file readers
 - `ExtFileProvider(base, extFiles...)` — extends a base provider with additional files
 - `RemoveFileProvider(base, filenames...)` — wraps a base provider and hides named files

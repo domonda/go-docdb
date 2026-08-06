@@ -68,7 +68,28 @@ func TempFileCopy(ctx context.Context, provider FileProvider, filename string) (
 ///////////////////////////////////////////////////////////////////////////////
 // DirFileProvider
 
-// DirFileProvider returns a FileProvider for a fs.File directory
+// DirFileProvider returns a FileProvider for the files directly contained
+// in a fs.File directory.
+//
+// Hidden entries (a dot-prefixed name, plus the hidden attribute on Windows)
+// and sub-directories are not provided files: ListFiles omits them, HasFile
+// reports them as not existing, and ReadFile returns an fs.ErrDoesNotExist
+// for them. All three are filtered identically so that a filename either
+// belongs to the provider or does not, no matter which method is asked.
+//
+// The filtering lives in this helper rather than in its callers because every
+// call site provides a document version directory, whose files must be exactly
+// the files tracked in the version info: a stray .DS_Store, an interrupted
+// rsync/NFS artifact, or a sub-directory would otherwise be reported as a
+// version file and make readers like ReadHashedDocument reject the whole
+// document as containing an untracked file. localfsdb already skips hidden
+// entries when it enumerates company and version directories, so filtering
+// here makes the file listing consistent with the directory listing for every
+// user of the helper instead of only for one call site.
+//
+// This is a behavior change for a consumer that deliberately stored a
+// dot-file in such a directory: that file is no longer visible through the
+// provider and is treated as if it were not there.
 func DirFileProvider(dir fs.File) FileProvider {
 	return dirFileProvider{dir}
 }
@@ -77,13 +98,21 @@ type dirFileProvider struct {
 	dir fs.File
 }
 
+// provides reports whether the directory entry described by info
+// is a file provided by the dirFileProvider.
+func (dirFileProvider) provides(info *fs.FileInfo) bool {
+	return info.Exists && !info.IsDir && !info.IsHidden
+}
+
 func (p dirFileProvider) HasFile(filename string) (bool, error) {
-	return p.dir.Join(filename).Exists(), nil
+	return p.provides(p.dir.Join(filename).Info()), nil
 }
 
 func (p dirFileProvider) ListFiles(ctx context.Context) (filenames []string, err error) {
-	err = p.dir.ListDirContext(ctx, func(file fs.File) error {
-		filenames = append(filenames, file.Name())
+	err = p.dir.ListDirInfoContext(ctx, func(info *fs.FileInfo) error {
+		if p.provides(info) {
+			filenames = append(filenames, info.Name)
+		}
 		return nil
 	})
 	if err != nil {
@@ -94,7 +123,11 @@ func (p dirFileProvider) ListFiles(ctx context.Context) (filenames []string, err
 }
 
 func (p dirFileProvider) ReadFile(ctx context.Context, filename string) ([]byte, error) {
-	return p.dir.Join(filename).ReadAllContext(ctx)
+	file := p.dir.Join(filename)
+	if !p.provides(file.Info()) {
+		return nil, fs.NewErrPathDoesNotExist(file.Path())
+	}
+	return file.ReadAllContext(ctx)
 }
 
 ///////////////////////////////////////////////////////////////////////////////

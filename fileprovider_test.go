@@ -390,6 +390,7 @@ func TestDirFileProvider_HasFile(t *testing.T) {
 	// Create test files
 	dir.Join("file1.txt").WriteAllString("content 1")
 	dir.Join("file2.json").WriteAllString(`{"key": "value"}`)
+	dir.Join(".DS_Store").WriteAllString("hidden")
 	subDir := dir.Join("subdir")
 	subDir.MakeDir()
 
@@ -416,9 +417,19 @@ func TestDirFileProvider_HasFile(t *testing.T) {
 			want:     false,
 		},
 		{
-			name:     "subdirectory exists but not a file",
+			// Consistent with ListFiles, which does not report sub-directories,
+			// so a caller can't ask for a file that will never be listed.
+			name:     "subdirectory is not a file",
 			filename: "subdir",
-			want:     true,
+			want:     false,
+		},
+		{
+			// A hidden file is invisible through the provider, so a version
+			// directory polluted with one is not reported to contain a file
+			// that no version info tracks.
+			name:     "hidden file is not provided",
+			filename: ".DS_Store",
+			want:     false,
 		},
 	}
 
@@ -463,13 +474,38 @@ func TestDirFileProvider_ListFiles(t *testing.T) {
 			wantFiles: []string{"apple.txt", "middle.json", "zebra.txt"},
 		},
 		{
-			name: "files and subdirectories",
+			// A sub-directory is not a file of the directory: reporting it as
+			// one would make it look like an untracked file of a document
+			// version to readers like ReadHashedDocument.
+			name: "subdirectories are not listed",
 			setup: func() {
 				dir.Join("file1.txt").WriteAllString("content")
 				dir.Join("file2.pdf").WriteAllString("content")
 				dir.Join("subdir").MakeDir()
 			},
-			wantFiles: []string{"file1.txt", "file2.pdf", "subdir"},
+			wantFiles: []string{"file1.txt", "file2.pdf"},
+		},
+		{
+			// Filesystem cruft (.DS_Store) and interrupted rsync/NFS artifacts
+			// (.file.txt.RANDOM, .nfs00000000) end up in version directories
+			// without ever being tracked in the version info. Listing them
+			// would make every reader of the document fail.
+			name: "hidden files are not listed",
+			setup: func() {
+				dir.Join("file1.txt").WriteAllString("content")
+				dir.Join(".DS_Store").WriteAllString("cruft")
+				dir.Join(".file1.txt.4Xk9pQ").WriteAllString("interrupted rsync")
+				dir.Join(".hiddendir").MakeDir()
+			},
+			wantFiles: []string{"file1.txt"},
+		},
+		{
+			// Not an empty slice: callers compare the returned lists directly.
+			name: "only hidden files",
+			setup: func() {
+				dir.Join(".DS_Store").WriteAllString("cruft")
+			},
+			wantFiles: nil,
 		},
 	}
 
@@ -502,6 +538,8 @@ func TestDirFileProvider_ReadFile(t *testing.T) {
 	dir.Join("json.json").WriteAllString(`{"data": "value"}`)
 	dir.Join("binary.dat").WriteAll([]byte{0x00, 0xFF, 0xAB, 0xCD})
 	dir.Join("empty.txt").WriteAll([]byte{})
+	dir.Join(".DS_Store").WriteAllString("cruft")
+	dir.Join("subdir").MakeDir()
 
 	provider := DirFileProvider(dir)
 	ctx := context.Background()
@@ -539,6 +577,18 @@ func TestDirFileProvider_ReadFile(t *testing.T) {
 		{
 			name:     "file does not exist",
 			filename: "missing.txt",
+			wantErr:  true,
+		},
+		{
+			// Reading must agree with listing: a file the provider does not
+			// list must not be readable through it either.
+			name:     "hidden file is not readable",
+			filename: ".DS_Store",
+			wantErr:  true,
+		},
+		{
+			name:     "subdirectory is not readable",
+			filename: "subdir",
 			wantErr:  true,
 		},
 	}
@@ -643,12 +693,11 @@ func TestDirFileProvider_NestedPaths(t *testing.T) {
 	provider := DirFileProvider(dir)
 	ctx := context.Background()
 
-	// List should only show immediate children
+	// List should only show the immediate children that are files,
+	// neither the sub-directory nor the file nested in it
 	fileList, err := provider.ListFiles(ctx)
 	require.NoError(t, err)
-	assert.Len(t, fileList, 2)
-	assert.Contains(t, fileList, "root.txt")
-	assert.Contains(t, fileList, "subdir")
+	assert.Equal(t, []string{"root.txt"}, fileList)
 
 	// Can read root level file
 	content, err := provider.ReadFile(ctx, "root.txt")
