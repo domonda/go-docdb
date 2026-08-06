@@ -913,55 +913,48 @@ func newVersionInfo(ctx context.Context, companyID, docID uu.ID, version docdb.V
 		PrevVersion:  prevVersion,
 		CommitUserID: commitUserID,
 		CommitReason: commitReason,
-		Files:        make(map[string]docdb.FileInfo),
 	}
 
-	err = versionDir.ListDir(func(file fs.File) error {
-		filename := file.Name()
-		versionInfo.Files[filename], err = docdb.ReadFileInfo(ctx, file)
-		return err
-	})
+	versionInfo.Files, err = versionDirFileInfos(ctx, versionDir)
 	if err != nil {
 		return nil, err
 	}
 
-	if prevVersionDir == "" {
-		for filename := range versionInfo.Files {
-			versionInfo.AddedFiles = append(versionInfo.AddedFiles, filename)
-		}
-	} else {
-		prevVersionFiles := make(map[string]docdb.FileInfo)
-		err = prevVersionDir.ListDir(func(file fs.File) error {
-			filename := file.Name()
-			prevVersionFiles[filename], err = docdb.ReadFileInfo(ctx, file)
-			return err
-		})
+	// A nil prevVersionFiles for the first version of a document
+	// makes SetFileDeltas report all files as added.
+	var prevVersionFiles map[string]docdb.FileInfo
+	if prevVersionDir != "" {
+		prevVersionFiles, err = versionDirFileInfos(ctx, prevVersionDir)
 		if err != nil {
 			return nil, err
 		}
-
-		for filename, versionFileInfo := range versionInfo.Files {
-			prevVersionFile, prevVersionHasFile := prevVersionFiles[filename]
-			if prevVersionHasFile {
-				if versionFileInfo.Hash != prevVersionFile.Hash {
-					versionInfo.ModifiedFiles = append(versionInfo.ModifiedFiles, filename)
-				}
-			} else {
-				versionInfo.AddedFiles = append(versionInfo.AddedFiles, filename)
-			}
-		}
-		for filename := range prevVersionFiles {
-			if _, versionHasFile := versionInfo.Files[filename]; !versionHasFile {
-				versionInfo.RemovedFiles = append(versionInfo.RemovedFiles, filename)
-			}
-		}
 	}
-
-	slices.Sort(versionInfo.AddedFiles)
-	slices.Sort(versionInfo.RemovedFiles)
-	slices.Sort(versionInfo.ModifiedFiles)
+	versionInfo.SetFileDeltas(prevVersionFiles)
 
 	return versionInfo, nil
+}
+
+// versionDirFileInfos reads the FileInfos of the files in a version directory
+// keyed by filename.
+//
+// It enumerates the directory with docdb.DirFileProvider so that a version's
+// metadata describes exactly the files a reader of that version will get:
+// entries the provider hides (hidden files, sub-directories) must not end up
+// in Files, and must not be reported as removed when they are only present in
+// the previous version's directory.
+func versionDirFileInfos(ctx context.Context, versionDir fs.File) (map[string]docdb.FileInfo, error) {
+	filenames, err := docdb.DirFileProvider(versionDir).ListFiles(ctx)
+	if err != nil {
+		return nil, err
+	}
+	fileInfos := make(map[string]docdb.FileInfo, len(filenames))
+	for _, filename := range filenames {
+		fileInfos[filename], err = docdb.ReadFileInfo(ctx, versionDir.Join(filename))
+		if err != nil {
+			return nil, err
+		}
+	}
+	return fileInfos, nil
 }
 
 func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, recreate bool) (err error) {

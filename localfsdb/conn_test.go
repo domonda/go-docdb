@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
+	"slices"
 	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"github.com/ungerik/go-fs"
+	"github.com/ungerik/go-fs/uuiddir"
 
 	"github.com/domonda/go-docdb"
 	"github.com/domonda/go-docdb/localfsdb"
@@ -894,4 +897,64 @@ func TestCreateDocument_ConcurrentSharedPathPrefix(t *testing.T) {
 		require.NoError(t, err, "doc %s not readable after create", id)
 		require.Equal(t, companyID, gotCompanyID, "doc %s mapped to wrong company", id)
 	}
+}
+
+// TestVersionDirWithHiddenFiles covers a version directory polluted with files
+// that no version info tracks: a .DS_Store left by a Finder visit, the temp
+// file of an interrupted rsync, an NFS silly-rename. Such a file must not be
+// reported as a file of the version — otherwise every reader of the document
+// fails, and a bulk operation over a whole company aborts on it.
+func TestVersionDirWithHiddenFiles(t *testing.T) {
+	// given a document with one version
+	tmp := fs.File(t.TempDir())
+	documentsDir := tmp.Join("documents")
+	companiesDir := tmp.Join("companies")
+	require.NoError(t, documentsDir.MakeDir())
+	require.NoError(t, companiesDir.MakeDir())
+	conn := localfsdb.NewConn(documentsDir, companiesDir)
+
+	var (
+		companyID  = uu.IDFrom("6f296458-24cd-4146-ac3a-33ca885a993e")
+		docID      = uu.IDFrom("c538ac93-2cf0-49a9-8378-22cd48b5ab84")
+		userID     = uu.IDFrom("ce6f0867-0172-4ffc-a0c0-c5878b921171")
+		v0         = docdb.MustVersionTimeFromString("2023-01-01_00-00-00.000")
+		noopOnNew  = func(context.Context, *docdb.VersionInfo) error { return nil }
+		newVersion *docdb.VersionInfo
+	)
+	require.NoError(t, conn.CreateDocument(
+		t.Context(), companyID, docID, userID, "TestVersionDirWithHiddenFiles", v0,
+		newTestMemFiles("a.txt"), noopOnNew,
+	))
+
+	// when hidden files and a sub-directory appear in the version directory
+	versionDir := uuiddir.Join(documentsDir, docID).Join(v0.String())
+	require.True(t, versionDir.IsDir())
+	require.NoError(t, versionDir.Join(".DS_Store").WriteAllString("Finder cruft"))
+	require.NoError(t, versionDir.Join(".a.txt.4Xk9pQ").WriteAllString("interrupted rsync"))
+	require.NoError(t, versionDir.Join("subdir").MakeDir())
+
+	// then they are not files of the version
+	fileProvider, err := conn.DocumentVersionFileProvider(t.Context(), docID, v0)
+	require.NoError(t, err)
+	filenames, err := fileProvider.ListFiles(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []string{"a.txt"}, filenames)
+
+	// and the document is still readable as a whole
+	doc, err := docdb.ReadHashedDocument(t.Context(), conn, docID)
+	require.NoError(t, err)
+	versions := doc.VersionTimes()
+	require.Len(t, versions, 1)
+	require.Equal(t, []string{"a.txt"}, slices.Sorted(maps.Keys(doc.Versions[versions[0]].FileHashes)))
+
+	// and a new version neither adopts them nor reports them as removed
+	require.NoError(t, conn.AddDocumentVersion(
+		t.Context(), docID, userID, "add b.txt",
+		docdb.CreateVersionWriteFiles(newTestMemFiles("b.txt")...),
+		docdb.CaptureNewVersionInfo(&newVersion),
+	))
+	require.Equal(t, []string{"a.txt", "b.txt"}, slices.Sorted(maps.Keys(newVersion.Files)))
+	require.Equal(t, []string{"b.txt"}, newVersion.AddedFiles)
+	require.Empty(t, newVersion.ModifiedFiles)
+	require.Empty(t, newVersion.RemovedFiles)
 }
