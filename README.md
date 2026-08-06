@@ -47,6 +47,8 @@ v.After(other), v.Before(other), v.Equal(other)
 
 Implements `database/sql.Scanner`, `driver.Valuer`, and `encoding.TextMarshaler`/`TextUnmarshaler`.
 
+A version timestamp must only reach SQL as a `VersionTime`: it truncates to milliseconds, while a PostgreSQL `timestamp(3)` column rounds, so inserting the raw `time.Time` a version was derived from can store it one millisecond after the version everywhere else.
+
 ### `VersionInfo`
 
 Metadata for a single document version:

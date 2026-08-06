@@ -22,6 +22,15 @@ const (
 // truncated to millisecond precision.
 // A zero value VersionTime is invalid and will be rejected by Validate.
 // VersionTime implements the database/sql.Scanner and database/sql/driver.Valuer interfaces.
+//
+// A version timestamp must only ever reach SQL as a VersionTime, never as the
+// raw time.Time it was derived from. Every conversion here truncates to
+// milliseconds, but a PostgreSQL timestamp(3) column rounds: a version created
+// at 15:04:52.3875 is truncated to 15:04:52.387 by VersionTimeFrom and stored
+// under that name in the file store, while inserting the untruncated time.Time
+// rounds it to 15:04:52.388 in the database. Nothing reconciles the two at read
+// time, so the same version ends up with two different identities one
+// millisecond apart, and version lists of the two stores no longer match.
 type VersionTime struct {
 	Time time.Time
 }
@@ -155,6 +164,13 @@ func (v *VersionTime) Scan(value any) error {
 }
 
 // Value implements the driver database/sql/driver.Valuer interface.
+//
+// The returned time is truncated to milliseconds, which is what makes a
+// VersionTime round-trip through a PostgreSQL timestamp(3) column unchanged.
+// That column rounds instead of truncating, so passing a version's underlying
+// time.Time to SQL directly, bypassing this method, can store a timestamp one
+// millisecond after the version stored under the truncated value everywhere
+// else (see the VersionTime type documentation).
 func (v VersionTime) Value() (sqldriver.Value, error) {
 	return v.Time.Truncate(time.Millisecond), v.Validate()
 }
