@@ -471,7 +471,14 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		if err == nil {
 			return
 		}
-		cleanupCtx := ctx
+		// Clean up with a context that cannot be cancelled: a cancelled restore
+		// is exactly the case that leaves a half-written document behind, and
+		// cleaning up with the same cancelled context would fail every delete,
+		// so the partial state would survive. WithoutCancel keeps the context
+		// values, so the cleanup still runs against the same transaction and
+		// store configuration. It also drops the deadline, so cleanup after a
+		// timeout is bounded only by the stores themselves.
+		cleanupCtx := context.WithoutCancel(ctx)
 		if createdDoc {
 			err = errors.Join(err, c.DeleteDocument(cleanupCtx, doc.ID))
 			return
