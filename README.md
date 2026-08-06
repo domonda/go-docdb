@@ -67,6 +67,8 @@ type VersionInfo struct {
 }
 ```
 
+`vi.SetFileDeltas(prevFiles map[string]FileInfo)` derives the three change lists by comparing `vi.Files` against the previous version's files (pass `nil` for the first version). Every implementation uses it, so the lists of a document copied from one `Conn` to another match the ones already stored.
+
 ### `FileInfo`
 
 ```go
