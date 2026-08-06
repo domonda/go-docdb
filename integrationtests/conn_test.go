@@ -518,3 +518,77 @@ func TestConn(t *testing.T) {
 		})
 	})
 }
+
+// TestAddDocumentVersion_FileDeltasAgreeAcrossImplementations pins that every
+// Conn derives a version's change lists the same way. The lists are not just
+// reported to the caller, they are persisted and then compared across
+// implementations: copying a document into a store that already holds its
+// metadata verifies the VersionInfo a restore would insert against the stored
+// one, so a divergence here fails no test at build time but a migration
+// halfway through a company's documents.
+//
+// The scenario is the one the derivations used to disagree on. storeconn
+// classified the files a CreateVersionFunc wrote by name and passed its
+// RemoveFiles through verbatim, while localfsdb diffed the resulting file set
+// against the previous one by content hash — so a rewrite with byte-identical
+// content and a removal of a file that was never there were recorded as a
+// modification and a removal by one implementation and by neither the other.
+func TestAddDocumentVersion_FileDeltasAgreeAcrossImplementations(t *testing.T) {
+	backends := syncBackends()
+	ctx := syncTestContext(t, backends...)
+
+	var (
+		userID        = uu.IDv7()
+		sameContent   = []byte("byte-identical across both versions")
+		noopOnNew     = func(context.Context, *docdb.VersionInfo) error { return nil }
+		firstVersion  = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+		secondVersion = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.001")
+		infos         = make(map[string]*docdb.VersionInfo, len(backends))
+	)
+
+	for _, backend := range backends {
+		conn := backend.newConn(t)
+		docID := uu.IDv7()
+
+		err := conn.CreateDocument(
+			ctx, uu.IDv7(), docID, userID, "initial version", firstVersion,
+			[]fs.FileReader{fs.NewMemFile("unchanged.txt", sameContent)},
+			noopOnNew,
+		)
+		require.NoError(t, err)
+
+		var info *docdb.VersionInfo
+		err = conn.AddDocumentVersion(
+			ctx, docID, userID, "rewrite unchanged.txt with the same content",
+			func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+				return &docdb.CreateVersionResult{
+					Version: secondVersion,
+					WriteFiles: []fs.FileReader{
+						fs.NewMemFile("unchanged.txt", sameContent),
+						fs.NewMemFile("added.txt", []byte("added content")),
+					},
+					RemoveFiles: []string{"never-there.txt"},
+				}, nil
+			},
+			docdb.CaptureNewVersionInfo(&info),
+		)
+		require.NoError(t, err)
+
+		require.Equal(t, []string{"added.txt"}, info.AddedFiles, backend.name)
+		require.Empty(t, info.ModifiedFiles,
+			"%s: rewriting a file with byte-identical content does not change it", backend.name)
+		require.Empty(t, info.RemovedFiles,
+			"%s: removing a file the previous version never had removes nothing", backend.name)
+		infos[backend.name] = info
+	}
+
+	// Not just each right on its own — identical, which is what the
+	// cross-implementation comparison of a restore actually requires.
+	want := infos[backends[0].name]
+	for _, backend := range backends[1:] {
+		got := infos[backend.name]
+		require.Equal(t, want.AddedFiles, got.AddedFiles, "%s vs %s", backends[0].name, backend.name)
+		require.Equal(t, want.ModifiedFiles, got.ModifiedFiles, "%s vs %s", backends[0].name, backend.name)
+		require.Equal(t, want.RemovedFiles, got.RemovedFiles, "%s vs %s", backends[0].name, backend.name)
+	}
+}

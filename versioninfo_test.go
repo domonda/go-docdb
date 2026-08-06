@@ -367,9 +367,6 @@ func TestVersionInfo_Equal_ComparesEveryField(t *testing.T) {
 // migration, halfway through a company's documents.
 func TestVersionInfo_SetFileDeltas(t *testing.T) {
 	files := func(nameHash ...string) map[string]FileInfo {
-		if nameHash == nil {
-			return nil
-		}
 		m := make(map[string]FileInfo, len(nameHash)/2)
 		for i := 0; i < len(nameHash); i += 2 {
 			m[nameHash[i]] = FileInfo{Name: nameHash[i], Size: 1, Hash: nameHash[i+1]}
