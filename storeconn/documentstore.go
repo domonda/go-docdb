@@ -29,6 +29,18 @@ type DocumentStore interface {
 	// DocumentExists returns true if a document with the passed docID exists in the store.
 	DocumentExists(ctx context.Context, docID uu.ID) (exists bool, err error)
 
+	// DocumentHashFilesExist reports for every passed file whether the store
+	// holds a file with that name and content hash for the document. The result
+	// has one element per passed file in the same order, and is empty for no
+	// passed files. Only the Name and Hash of a FileInfo are used, never Size.
+	//
+	// A store does not track versions — files are addressed by name and content
+	// hash — so this is how a caller determines whether a complete version is
+	// present: a version is stored if and only if all of its files are. The
+	// batch shape exists so that check costs one round trip for a whole
+	// document instead of one per file.
+	DocumentHashFilesExist(ctx context.Context, docID uu.ID, files []docdb.FileInfo) (exist []bool, err error)
+
 	// DocumentHashFileProvider returns a FileProvider that can read files
 	// identified by the given content hashes for a document.
 	// The returned FileProvider returns ErrDocumentFileNotFound from ReadFile

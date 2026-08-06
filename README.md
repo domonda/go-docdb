@@ -294,7 +294,7 @@ Stores and retrieves file content, keyed by content hash so identical content is
 CreateDocumentVersion(ctx, docID, version, files) ([]*docdb.FileInfo, error)
 ```
 
-It also implements `DocumentExists`, `DocumentHashFileProvider`, `ReadDocumentHashFile`, `DeleteDocument`, and `DeleteDocumentHashes`. `storeconn/s3store` is the reference implementation; uniqueness of the document ID is enforced by the `MetadataStore`, not here.
+It also implements `DocumentExists`, `DocumentHashFilesExist`, `DocumentHashFileProvider`, `ReadDocumentHashFile`, `DeleteDocument`, and `DeleteDocumentHashes`. `DocumentHashFilesExist(ctx, docID, files)` reports per file whether the store holds it under that name and content hash; because the store does not track versions, that batch check is how a caller finds out whether a whole version is present. `storeconn/s3store` is the reference implementation; uniqueness of the document ID is enforced by the `MetadataStore`, not here.
 
 ### `MetadataStore` — version metadata
 

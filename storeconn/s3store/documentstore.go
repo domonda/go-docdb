@@ -57,6 +57,35 @@ func (s *docStore) DocumentExists(ctx context.Context, docID uu.ID) (exists bool
 	return false, err
 }
 
+// DocumentHashFilesExist reports for every passed file whether an object with
+// that filename and content hash exists under the docID prefix.
+//
+// It lists the document's objects once and answers every file from that
+// listing, instead of issuing a HeadObject per file: the caller asks about the
+// files of a whole document at once, and a document's objects fit into few
+// paginated List calls, while a per-file check would be one round trip each.
+func (s *docStore) DocumentHashFilesExist(ctx context.Context, docID uu.ID, files []docdb.FileInfo) ([]bool, error) {
+	exist := make([]bool, len(files))
+	if len(files) == 0 {
+		return exist, nil
+	}
+
+	keys, err := s.listObjectKeys(ctx, docID.String()+"/")
+	if err != nil {
+		return nil, err
+	}
+	keySet := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		keySet[key] = struct{}{}
+	}
+
+	for i, file := range files {
+		_, exist[i] = keySet[Key(docID, file.Name, file.Hash)]
+	}
+
+	return exist, nil
+}
+
 // CreateDocumentVersion uploads each of the passed files as a separate S3 object
 // keyed by "<docID>/<filename>/<contentHash>". Filenames containing "/"
 // are rejected because "/" is the key separator. The version argument is

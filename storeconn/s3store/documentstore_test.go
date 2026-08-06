@@ -486,3 +486,46 @@ func TestDeleteObjectsErr(t *testing.T) {
 		require.Contains(t, err.Error(), "AccessDenied")
 	})
 }
+
+// TestDocumentHashFilesExist covers the per-file presence check a merge-restore
+// uses to decide whether a version was already copied. The store keys objects by
+// filename and content hash, so both must match: a file stored under a different
+// name, or the same name with different content, is not the file being asked
+// about.
+func TestDocumentHashFilesExist(t *testing.T) {
+	documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
+	s3fixtures.FixtureCleanBucket(t)
+	createDocument := s3fixtures.FixtureCreateDocument(t)
+
+	documentID := uu.IDv7()
+	storedData := []byte("stored content")
+	storedHash := docdb.ContentHash(storedData)
+	otherData := []byte("other content")
+	otherHash := docdb.ContentHash(otherData)
+
+	createDocument(documentID, "stored.pdf", storedData)
+
+	// when asked about a mix of present and absent files
+	exist, err := documentStore.DocumentHashFilesExist(t.Context(), documentID, []docdb.FileInfo{
+		{Name: "stored.pdf", Hash: storedHash},
+		{Name: "stored.pdf", Hash: otherHash},   // same name, different content
+		{Name: "renamed.pdf", Hash: storedHash}, // same content, different name
+		{Name: "missing.pdf", Hash: otherHash},
+	})
+
+	// then the answers come back in the order asked
+	require.NoError(t, err)
+	require.Equal(t, []bool{true, false, false, false}, exist)
+
+	// a document with no objects has none of the files
+	exist, err = documentStore.DocumentHashFilesExist(t.Context(), uu.IDv7(), []docdb.FileInfo{
+		{Name: "stored.pdf", Hash: storedHash},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []bool{false}, exist)
+
+	// no files asked about is not an error and needs no answer
+	exist, err = documentStore.DocumentHashFilesExist(t.Context(), documentID, nil)
+	require.NoError(t, err)
+	require.Empty(t, exist)
+}
