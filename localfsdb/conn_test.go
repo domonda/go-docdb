@@ -16,6 +16,7 @@ import (
 
 	"github.com/domonda/go-docdb"
 	"github.com/domonda/go-docdb/localfsdb"
+	"github.com/domonda/go-errs"
 	"github.com/domonda/go-types/uu"
 )
 
@@ -940,6 +941,15 @@ func TestVersionDirWithHiddenFiles(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"a.txt"}, filenames)
 
+	// and reading one by name does not hand it out either: every way of asking
+	// the Conn for the files of a version must give the same answer
+	_, err = conn.ReadDocumentVersionFile(t.Context(), docID, v0, ".DS_Store")
+	require.True(t, errs.Has[docdb.ErrDocumentFileNotFound](err),
+		"a hidden file must not be readable through the Conn, got: %v", err)
+	tracked, err := conn.ReadDocumentVersionFile(t.Context(), docID, v0, "a.txt")
+	require.NoError(t, err)
+	require.Equal(t, []byte("a.txt"), tracked)
+
 	// and the document is still readable as a whole
 	doc, err := docdb.ReadHashedDocument(t.Context(), conn, docID)
 	require.NoError(t, err)
@@ -957,4 +967,36 @@ func TestVersionDirWithHiddenFiles(t *testing.T) {
 	require.Equal(t, []string{"b.txt"}, newVersion.AddedFiles)
 	require.Empty(t, newVersion.ModifiedFiles)
 	require.Empty(t, newVersion.RemovedFiles)
+}
+
+// TestCreateDocumentWithHiddenFiles covers a hidden file passed in as document
+// content. It is not a file of a version, so it is not tracked in the version
+// info — and a document whose files are all hidden would leave a version with
+// no files at all, which is rejected rather than written.
+func TestCreateDocumentWithHiddenFiles(t *testing.T) {
+	var (
+		conn        = localfsdb.NewTestConn(t)
+		companyID   = uu.IDv7()
+		userID      = uu.IDv7()
+		v0          = docdb.MustVersionTimeFromString("2023-01-01_00-00-00.000")
+		noopOnNew   = func(context.Context, *docdb.VersionInfo) error { return nil }
+		versionInfo *docdb.VersionInfo
+	)
+
+	// A hidden file next to a regular one is dropped from the version.
+	docID := uu.IDv7()
+	require.NoError(t, conn.CreateDocument(
+		t.Context(), companyID, docID, userID, "hidden file among regular ones", v0,
+		newTestMemFiles("a.txt", ".DS_Store"),
+		docdb.CaptureNewVersionInfo(&versionInfo),
+	))
+	require.Equal(t, []string{"a.txt"}, slices.Sorted(maps.Keys(versionInfo.Files)))
+	require.Equal(t, []string{"a.txt"}, versionInfo.AddedFiles)
+
+	// Only hidden files would leave the version empty, which no version may be.
+	err := conn.CreateDocument(
+		t.Context(), companyID, uu.IDv7(), userID, "only hidden files", v0,
+		newTestMemFiles(".DS_Store"), noopOnNew,
+	)
+	require.ErrorContains(t, err, "without files")
 }
