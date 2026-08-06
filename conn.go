@@ -131,9 +131,17 @@ type Conn interface {
 	//   - If the document exists, its on-disk CompanyID must equal
 	//     doc.CompanyID. On mismatch the call returns an error and changes
 	//     nothing.
-	//   - For every version v in doc.Versions: if v already exists on disk
-	//     it is kept as-is (no overwrite, no error); otherwise it is added.
+	//   - For every version v in doc.Versions: if v is already stored with all
+	//     of its files it is kept as-is (no overwrite, no error); otherwise
+	//     what is missing is written.
 	//   - Versions on disk that are not in doc.Versions are kept as-is.
+	//
+	// A version counts as already stored only if its file content is actually
+	// there. An implementation split into a metadata and a file store must not
+	// decide this from the metadata alone: the two can be populated
+	// independently, so existing version metadata does not prove that the files
+	// were ever written, and skipping on that basis reports a successful
+	// restore for a document that is missing file content.
 	//
 	// Each version is written as a single unit (file content + per-version
 	// metadata + company marker). On error mid-restore, partial state created

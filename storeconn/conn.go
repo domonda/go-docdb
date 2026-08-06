@@ -426,7 +426,15 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		docExists = false
 	}
 
-	var existingVersions []docdb.VersionTime
+	var (
+		// metadataVersions are the versions the MetadataStore already holds.
+		metadataVersions []docdb.VersionTime
+		// skipVersions are the versions this call has nothing left to do for:
+		// stored in the MetadataStore and with every file present in the
+		// DocumentStore. A version in metadataVersions but not in skipVersions
+		// still needs its files written.
+		skipVersions []docdb.VersionTime
+	)
 	if !recreate && docExists {
 		currCompanyID, err := c.DocumentCompanyID(ctx, doc.ID)
 		if err != nil {
@@ -438,7 +446,11 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 				doc.ID, doc.CompanyID, currCompanyID,
 			)
 		}
-		existingVersions, err = c.DocumentVersions(ctx, doc.ID)
+		metadataVersions, err = c.DocumentVersions(ctx, doc.ID)
+		if err != nil {
+			return err
+		}
+		skipVersions, err = c.versionsFullyStored(ctx, doc, metadataVersions)
 		if err != nil {
 			return err
 		}
@@ -459,12 +471,13 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		if err == nil {
 			return
 		}
+		cleanupCtx := ctx
 		if createdDoc {
-			err = errors.Join(err, c.DeleteDocument(ctx, doc.ID))
+			err = errors.Join(err, c.DeleteDocument(cleanupCtx, doc.ID))
 			return
 		}
 		for i := len(createdVersions) - 1; i >= 0; i-- {
-			_, delErr := c.DeleteDocumentVersion(ctx, doc.ID, createdVersions[i])
+			_, delErr := c.DeleteDocumentVersion(cleanupCtx, doc.ID, createdVersions[i])
 			if delErr != nil {
 				err = errors.Join(err, delErr)
 			}
@@ -472,7 +485,7 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 	}()
 
 	for i, v := range versionTimes {
-		if !recreate && versionTimeIn(existingVersions, v) {
+		if !recreate && versionTimeIn(skipVersions, v) {
 			continue
 		}
 		hv := doc.Versions[v]
@@ -524,6 +537,7 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		// previousVersion is nil for the earliest restored version (i == 0): it
 		// has no predecessor, so prev_version is stored as NULL. Passing a
 		// pointer to the zero VersionTime here would fail VersionTime.Value().
+		versionInMetadata := versionTimeIn(metadataVersions, v)
 		_, err = c.metadataStore.CreateDocumentVersion(ctx, CreateDocumentVersionInput{
 			DocID:           doc.ID,
 			CompanyID:       doc.CompanyID,
@@ -536,20 +550,116 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 			RemovedFiles:    deltas.RemovedFiles,
 			Files:           resultingFiles,
 		})
-		if err != nil {
+		switch {
+		case err == nil:
+			// Record as created right after the metadata commit so the rollback
+			// also covers a failure of the following blob write — but only for a
+			// version this call added to the MetadataStore. A version that was
+			// already stored (a store in versions-exist mode verifies it and
+			// inserts nothing) is not this call's to remove.
+			if !versionInMetadata {
+				createdVersions = append(createdVersions, v)
+			}
+		case versionInMetadata && isAlreadyExistsErr(err):
+			// The version reached this point because its files are missing from
+			// the DocumentStore, not because its metadata is missing. A store
+			// that really inserts rejects the duplicate; that rejection is the
+			// expected answer here, so continue and write the missing files.
+			// The metadata row is not this call's, so it stays out of the
+			// rollback and is left untouched by it.
+			err = nil
+		default:
 			return err
 		}
-		// Record as created right after the metadata commit so the rollback
-		// also covers a failure of the following blob write.
-		createdVersions = append(createdVersions, v)
 		// The metadata version was already written above, so the FileInfos
-		// returned by the blob write are not needed here.
+		// returned by the blob write are not needed here. Writing all files of
+		// the version, including any already present, is idempotent: they are
+		// stored under their content hash.
 		_, err = c.documentStore.CreateDocumentVersion(ctx, doc.ID, v, files)
 		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// isAlreadyExistsErr reports whether err says that what was to be inserted is
+// already stored. A duplicate genesis version is reported as an existing
+// document, any later duplicate as an existing version.
+func isAlreadyExistsErr(err error) bool {
+	return errors.As(err, &docdb.ErrVersionAlreadyExists{}) ||
+		errors.As(err, &docdb.ErrDocumentAlreadyExists{})
+}
+
+// versionsFullyStored returns the versions of doc that a merge-restore has
+// nothing left to do for: held by the MetadataStore and with every file present
+// in the DocumentStore.
+//
+// Presence in the MetadataStore alone does not mean a version was copied. The
+// two stores are not necessarily populated together: a copy into a fresh
+// DocumentStore that reuses a MetadataStore already holding every version of
+// the document (see pgstore.ContextWithMetadataStoreVersionsExist) would
+// otherwise skip every version — including the ones whose files were never
+// written, when an earlier run was interrupted after writing some — and report
+// success for a document whose files are missing.
+//
+// A DocumentStore does not track versions, only files addressed by name and
+// content hash, so a version counts as stored exactly when all of its files
+// are. Every candidate file is checked in a single DocumentStore call, so the
+// common case of a document that is fully present costs one round trip rather
+// than one per version or per file.
+func (c *conn) versionsFullyStored(ctx context.Context, doc *docdb.HashedDocument, metadataVersions []docdb.VersionTime) ([]docdb.VersionTime, error) {
+	var candidates []docdb.VersionTime
+	for _, v := range doc.VersionTimes() {
+		if versionTimeIn(metadataVersions, v) {
+			candidates = append(candidates, v)
+		}
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+
+	// Collect the distinct files of all candidate versions. Only Name and Hash
+	// identify a file in the DocumentStore, so a zero Size makes the FileInfo
+	// usable as the deduplicating map key.
+	var (
+		files     []docdb.FileInfo
+		fileIndex = make(map[docdb.FileInfo]int)
+	)
+	for _, v := range candidates {
+		for filename, hash := range doc.Versions[v].FileHashes {
+			file := docdb.FileInfo{Name: filename, Hash: hash}
+			if _, ok := fileIndex[file]; !ok {
+				fileIndex[file] = len(files)
+				files = append(files, file)
+			}
+		}
+	}
+	exist, err := c.documentStore.DocumentHashFilesExist(ctx, doc.ID, files)
+	if err != nil {
+		return nil, err
+	}
+	if len(exist) != len(files) {
+		return nil, errs.Errorf(
+			"DocumentStore.DocumentHashFilesExist returned %d results for the %d files of document %s",
+			len(exist), len(files), doc.ID,
+		)
+	}
+
+	var stored []docdb.VersionTime
+	for _, v := range candidates {
+		fullyStored := true
+		for filename, hash := range doc.Versions[v].FileHashes {
+			if !exist[fileIndex[docdb.FileInfo{Name: filename, Hash: hash}]] {
+				fullyStored = false
+				break
+			}
+		}
+		if fullyStored {
+			stored = append(stored, v)
+		}
+	}
+	return stored, nil
 }
 
 // fileInfosNamed returns the FileInfos of the passed filenames in that order,

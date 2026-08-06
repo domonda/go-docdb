@@ -225,8 +225,21 @@ in-memory backup. It supports two modes:
   failure leaves the document absent until retried. Safe for the `SyncDocument`
   flow where the source still holds the data.
 - **`recreate=false`** — additive merge: create if missing; otherwise keep
-  existing versions and add only backup versions whose timestamp is not already on
-  disk. CompanyID mismatch aborts without changes.
+  versions that are fully stored and write what is missing. CompanyID mismatch
+  aborts without changes.
+
+A version is only skipped when the `MetadataStore` holds it **and** the
+`DocumentStore` holds every one of its files, which `versionsFullyStored` checks
+with a single `DocumentHashFilesExist` call for all candidate files of the
+document. Skipping on the `MetadataStore`'s version list alone is wrong whenever
+the two stores were not populated together — copying into a fresh `DocumentStore`
+that reuses a `MetadataStore` already holding every version (see
+`pgstore.ContextWithMetadataStoreVersionsExist`) is exactly that case: an
+interrupted copy leaves the document with some files written, and every version
+would look like it had already been restored. A version whose metadata exists but
+whose files do not gets its files written; the duplicate metadata insert that a
+non-verifying store rejects is expected there and does not fail the restore, and
+that version stays out of the rollback because this call did not create it.
 
 For middle versions it calls `metadataStore.CreateDocumentVersion` **directly**
 (not `conn.AddDocumentVersion`) so the strictly-after ordering check is bypassed —

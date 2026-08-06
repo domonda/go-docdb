@@ -352,3 +352,48 @@ func TestSyncAllCompanyDocuments(t *testing.T) {
 		}
 	})
 }
+
+// TestSyncDocument_ResumesInterruptedCopy covers resuming a copy into a
+// storeconn whose MetadataStore already holds every version of the document,
+// which is the state a migration starts from: the version rows are mirrored
+// into Postgres long before any file content is copied to S3, and the copy runs
+// in versions-exist mode precisely because they are already there.
+//
+// A copy interrupted by a Ctrl-C, a network error, or a crash leaves some of the
+// document's objects in S3. Deciding what to skip from the Postgres version list
+// would then skip every version of such a document, return nil, and let the
+// caller count it as fully synced while S3 is missing files — the cutover would
+// route reads to an incomplete copy.
+func TestSyncDocument_ResumesInterruptedCopy(t *testing.T) {
+	ctx := pgfixtures.FixtureCtxWithTestTx(t)
+	srcConn := localfsdb.NewTestConn(t)
+	s3fixtures.FixtureCleanBucket(t)
+	documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
+	dstConn := storeconn.New(documentStore, pgstore.NewMetadataStore())
+
+	companyID := uu.IDv7()
+	docID := uu.IDv7()
+	userID := uu.IDv7()
+	createSyncTestDoc(t, ctx, srcConn, companyID, docID, userID, "doc")
+
+	want, err := docdb.ReadHashedDocument(ctx, srcConn, docID)
+	require.NoError(t, err)
+
+	// Copy the document, then delete the second version's blob again: the
+	// metadata of both versions stays in Postgres while S3 holds only what an
+	// interrupted copy would have written.
+	err = docdb.SyncDocument(ctx, srcConn, dstConn, docID, true)
+	require.NoError(t, err)
+
+	versions := want.VersionTimes()
+	require.Len(t, versions, 2)
+	hashOnlyInV2 := want.Versions[versions[1]].FileHashes["b.txt"]
+	err = documentStore.DeleteDocumentHashes(ctx, docID, []string{hashOnlyInV2})
+	require.NoError(t, err)
+
+	// Resuming must write what is missing instead of trusting the version list.
+	err = docdb.SyncDocument(pgstore.ContextWithMetadataStoreVersionsExist(ctx), srcConn, dstConn, docID, false)
+	require.NoError(t, err)
+
+	assertSyncedDocEqual(t, ctx, dstConn, want)
+}
