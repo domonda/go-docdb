@@ -320,26 +320,18 @@ func (doc *HashedDocument) VersionInfo(versionTime VersionTime) (*VersionInfo, e
 			Size: int64(len(data)),
 			Hash: hash,
 		}
-		if prevVersion == nil {
-			info.AddedFiles = append(info.AddedFiles, filename)
-		} else {
-			prevHash, ok := prevVersion.FileHashes[filename]
-			if !ok {
-				info.AddedFiles = append(info.AddedFiles, filename)
-			} else if prevHash != hash {
-				info.ModifiedFiles = append(info.ModifiedFiles, filename)
-			}
-		}
 	}
+	// SetFileDeltas compares only filenames and hashes, so the previous
+	// version's FileInfos are built without looking its file sizes up in
+	// HashedFiles: a predecessor referencing a hash without content is not
+	// this version's problem to report.
+	var prevFiles map[string]FileInfo
 	if prevVersion != nil {
-		for prevFilename := range prevVersion.FileHashes {
-			if _, ok := version.FileHashes[prevFilename]; !ok {
-				info.RemovedFiles = append(info.RemovedFiles, prevFilename)
-			}
+		prevFiles = make(map[string]FileInfo, len(prevVersion.FileHashes))
+		for filename, hash := range prevVersion.FileHashes {
+			prevFiles[filename] = FileInfo{Name: filename, Hash: hash}
 		}
 	}
-	slices.Sort(info.AddedFiles)
-	slices.Sort(info.ModifiedFiles)
-	slices.Sort(info.RemovedFiles)
+	info.SetFileDeltas(prevFiles)
 	return info, nil
 }

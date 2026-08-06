@@ -502,29 +502,24 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 			prevHashes = doc.Versions[prev].FileHashes
 		}
 
-		var (
-			addedFiles    []*docdb.FileInfo
-			modifiedFiles []*docdb.FileInfo
-			removedFiles  []string
-		)
 		// resultingFiles is this version's complete file set (hv.FileHashes is
 		// authoritative), passed as Files so the store stores it directly without
 		// looking the predecessor up to re-derive the carry-forward set.
 		resultingFiles := make(map[string]docdb.FileInfo, len(hv.FileHashes))
 		for filename, hash := range hv.FileHashes {
-			fi := &docdb.FileInfo{Name: filename, Size: int64(len(doc.HashedFiles[hash])), Hash: hash}
-			resultingFiles[filename] = *fi
-			if prevHash, ok := prevHashes[filename]; !ok {
-				addedFiles = append(addedFiles, fi)
-			} else if prevHash != hash {
-				modifiedFiles = append(modifiedFiles, fi)
-			}
+			resultingFiles[filename] = docdb.FileInfo{Name: filename, Size: int64(len(doc.HashedFiles[hash])), Hash: hash}
 		}
-		for prevFilename := range prevHashes {
-			if _, ok := hv.FileHashes[prevFilename]; !ok {
-				removedFiles = append(removedFiles, prevFilename)
-			}
+		// The change lists are derived by the shared VersionInfo.SetFileDeltas
+		// so this restore path can't drift from the derivation of the Conn the
+		// document was backed up from, which would fail the comparison of a
+		// MetadataStore in versions-exist mode. It compares only filenames and
+		// hashes, so the predecessor's FileInfos need no size lookup.
+		prevFiles := make(map[string]docdb.FileInfo, len(prevHashes))
+		for filename, hash := range prevHashes {
+			prevFiles[filename] = docdb.FileInfo{Name: filename, Hash: hash}
 		}
+		deltas := docdb.VersionInfo{Files: resultingFiles}
+		deltas.SetFileDeltas(prevFiles)
 
 		// previousVersion is nil for the earliest restored version (i == 0): it
 		// has no predecessor, so prev_version is stored as NULL. Passing a
@@ -536,9 +531,9 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 			Reason:          hv.CommitReason,
 			NewVersion:      v,
 			PreviousVersion: previousVersion,
-			AddedFiles:      addedFiles,
-			ModifiedFiles:   modifiedFiles,
-			RemovedFiles:    removedFiles,
+			AddedFiles:      fileInfosNamed(resultingFiles, deltas.AddedFiles),
+			ModifiedFiles:   fileInfosNamed(resultingFiles, deltas.ModifiedFiles),
+			RemovedFiles:    deltas.RemovedFiles,
 			Files:           resultingFiles,
 		})
 		if err != nil {
@@ -555,6 +550,22 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		}
 	}
 	return nil
+}
+
+// fileInfosNamed returns the FileInfos of the passed filenames in that order,
+// or nil if no filename was passed. It turns the filename change lists of
+// docdb.VersionInfo.SetFileDeltas back into the FileInfos that
+// CreateDocumentVersionInput expects.
+func fileInfosNamed(files map[string]docdb.FileInfo, filenames []string) []*docdb.FileInfo {
+	if len(filenames) == 0 {
+		return nil
+	}
+	infos := make([]*docdb.FileInfo, len(filenames))
+	for i, filename := range filenames {
+		info := files[filename]
+		infos[i] = &info
+	}
+	return infos
 }
 
 // hashedVersionFiles materializes the files of a docdb.HashedVersion as in-memory

@@ -282,3 +282,68 @@ func TestHashedDocument_VersionInfo(t *testing.T) {
 		})
 	})
 }
+
+// TestHashedDocument_VersionInfo_FileDeltas covers the change lists a restore
+// derives from a backup. A HashedDocument stores only the file hashes per
+// version, so the deltas are reconstructed by diffing against the predecessor
+// — and the result must match what the source Conn recorded, because a restore
+// into a store that already holds the metadata verifies them against it.
+func TestHashedDocument_VersionInfo_FileDeltas(t *testing.T) {
+	var (
+		v0 = MustVersionTimeFromString("2024-01-01_00-00-00.000")
+		v1 = MustVersionTimeFromString("2024-01-02_00-00-00.000")
+
+		keepData = []byte("keep")
+		goneData = []byte("gone")
+		modData1 = []byte("mod one")
+		modData2 = []byte("mod two")
+		newData  = []byte("new")
+
+		keepHash = ContentHash(keepData)
+		goneHash = ContentHash(goneData)
+		modHash1 = ContentHash(modData1)
+		modHash2 = ContentHash(modData2)
+		newHash  = ContentHash(newData)
+	)
+
+	doc := &HashedDocument{
+		ID:        uu.IDv4(),
+		CompanyID: uu.IDv4(),
+		HashedFiles: map[string][]byte{
+			keepHash: keepData,
+			goneHash: goneData,
+			modHash1: modData1,
+			modHash2: modData2,
+			newHash:  newData,
+		},
+		Versions: map[VersionTime]*HashedVersion{
+			v0: {CommitReason: "init", FileHashes: map[string]string{
+				"keep.txt": keepHash,
+				"gone.txt": goneHash,
+				"mod.txt":  modHash1,
+			}},
+			v1: {CommitReason: "update", FileHashes: map[string]string{
+				"keep.txt": keepHash,
+				"mod.txt":  modHash2,
+				"new.txt":  newHash,
+			}},
+		},
+	}
+
+	info, err := doc.VersionInfo(v1)
+	require.NoError(t, err)
+	require.NotNil(t, info.PrevVersion)
+	require.True(t, info.PrevVersion.Equal(v0))
+	require.Equal(t, []string{"new.txt"}, info.AddedFiles)
+	require.Equal(t, []string{"mod.txt"}, info.ModifiedFiles)
+	require.Equal(t, []string{"gone.txt"}, info.RemovedFiles)
+	// Files stays the complete file set of the version, not just the changes.
+	require.Equal(t,
+		map[string]FileInfo{
+			"keep.txt": {Name: "keep.txt", Size: int64(len(keepData)), Hash: keepHash},
+			"mod.txt":  {Name: "mod.txt", Size: int64(len(modData2)), Hash: modHash2},
+			"new.txt":  {Name: "new.txt", Size: int64(len(newData)), Hash: newHash},
+		},
+		info.Files,
+	)
+}
