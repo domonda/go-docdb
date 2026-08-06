@@ -184,10 +184,12 @@ func ReadHashedDocument(ctx context.Context, conn Conn, docID uu.ID) (doc *Hashe
 //     srcConn is untouched, so the document is missing on destConn only until
 //     the sync is retried.
 //   - recreate=false (additive merge): the document is created on destConn
-//     if missing, otherwise existing versions are kept and only versions
-//     not already present on destConn are added. If the document exists,
-//     its CompanyID on destConn must equal the one on srcConn, otherwise
-//     the call fails without changing anything.
+//     if missing, otherwise versions already present there with all of their
+//     file content are kept as-is and everything else is written — including
+//     the missing files of a version whose metadata destConn already has, so
+//     an interrupted sync is resumed rather than mistaken for a finished one.
+//     If the document exists, its CompanyID on destConn must equal the one on
+//     srcConn, otherwise the call fails without changing anything.
 //
 // Returns wrapped ErrDocumentNotFound if the document does not exist on
 // srcConn, and wrapped ErrNotImplemented if destConn does not support

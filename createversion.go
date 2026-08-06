@@ -45,6 +45,10 @@ type (
 // A filename must not appear in both WriteFiles and RemoveFiles.
 // If an existing file should be rewritten, only add it to WriteFiles;
 // there is no need to remove it first via RemoveFiles.
+//
+// A hidden filename in WriteFiles is not stored as a file of the new version,
+// and one in RemoveFiles removes nothing, because no version has such a file
+// to begin with (see the package documentation).
 type CreateVersionResult struct {
 	Version      VersionTime     // Timestamp of the new version which must be after previous version timestamp
 	WriteFiles   []fs.FileReader // Files to write in the new version (also used to overwrite existing files)
