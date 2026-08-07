@@ -684,6 +684,12 @@ func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.I
 			err = errors.Join(err, e)
 		}
 	}()
+	// Turn a panic into the error the rollback above keys on: registered after
+	// it so it runs first, and deferred directly because recover only recovers
+	// when the deferred function calls it itself — from inside the rollback
+	// closure it would return nil and the panic would escape with the
+	// half-created document left on disk.
+	defer errs.RecoverPanicAsError(&err)
 
 	err = newVersionDir.MakeAllDirs()
 	if err != nil {
@@ -771,6 +777,8 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 			}
 		}
 	}()
+	// See CreateDocument: a panic must reach the rollback above as an error.
+	defer errs.RecoverPanicAsError(&err)
 
 	prevVersionInfo, prevVersionDir, err := c.latestDocumentVersionInfo(ctx, docID)
 	if err != nil {
