@@ -99,11 +99,25 @@ func (c *conn) LatestDocumentVersionInfo(ctx context.Context, docID uu.ID) (*doc
 }
 
 func (c *conn) DeleteDocument(ctx context.Context, docID uu.ID) error {
-	err := c.metadataStore.DeleteDocument(ctx, docID)
-	if err != nil {
-		return err
+	// Both stores are asked, and only a document that neither of them holds is
+	// reported as not found. They are written and deleted one after the other,
+	// so a failure or a cancellation between the two steps leaves a document in
+	// only one of them — file content without metadata, most of the time.
+	// Returning the MetadataStore's not-found before touching the DocumentStore
+	// would orphan that content permanently, because every later delete would
+	// stop at the same not-found.
+	metaErr := c.metadataStore.DeleteDocument(ctx, docID)
+	if metaErr != nil && !errors.Is(metaErr, os.ErrNotExist) {
+		return metaErr
 	}
-	return c.documentStore.DeleteDocument(ctx, docID)
+	blobErr := c.documentStore.DeleteDocument(ctx, docID)
+	if blobErr != nil && !errors.Is(blobErr, os.ErrNotExist) {
+		return blobErr
+	}
+	if metaErr != nil && blobErr != nil {
+		return metaErr
+	}
+	return nil
 }
 
 func (c *conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version docdb.VersionTime) (leftVersions []docdb.VersionTime, err error) {
@@ -163,7 +177,6 @@ func (c *conn) CreateDocument(
 	var versionInfo *docdb.VersionInfo
 
 	defer func() {
-		errs.RecoverPanicAsErrorWithFuncParams(&err, ctx, companyID, docID, userID, reason, version, files, onNewVersion)
 		if err == nil {
 			return
 		}
@@ -210,6 +223,12 @@ func (c *conn) CreateDocument(
 			}
 		}
 	}()
+	// Turn a panic from a store into the error the rollback above keys on:
+	// registered after it so it runs first, and deferred directly because
+	// recover only recovers when the deferred function calls it itself — from
+	// inside the rollback closure it would return nil and the panic would
+	// escape with the partial document left behind.
+	defer errs.RecoverPanicAsErrorWithFuncParams(&err, ctx, companyID, docID, userID, reason, version, files, onNewVersion)
 
 	// Writing the blobs returns a FileInfo (name, size, content hash) per file.
 	// The first version records every file as an added file, so reuse these
@@ -375,11 +394,24 @@ func (c *conn) AddDocumentVersion(
 		return cause
 	}
 
+	// The metadata version is committed from here on, so every remaining
+	// failure has to undo it — including a panic from a store, which reaches
+	// this deferred rollback but not a rollback call written at each failure
+	// site. errs.RecoverPanicAsError is registered after it so it runs first
+	// and turns the panic into the err this keys on, and is deferred directly
+	// because recover only recovers when the deferred function calls it itself.
+	defer func() {
+		if err != nil {
+			err = rollbackNewVersion(err)
+		}
+	}()
+	defer errs.RecoverPanicAsError(&err)
+
 	// The added/modified FileInfos were already computed above to build the
 	// metadata version, so the hashes returned here are not needed again.
 	_, err = c.documentStore.CreateDocumentVersion(ctx, docID, result.Version, result.WriteFiles)
 	if err != nil {
-		return rollbackNewVersion(err)
+		return err
 	}
 
 	safeOnNewVersion := func() (err error) {
@@ -387,12 +419,7 @@ func (c *conn) AddDocumentVersion(
 		return onNewVersion(ctx, newVersionInfo)
 	}
 
-	err = safeOnNewVersion()
-	if err != nil {
-		return rollbackNewVersion(err)
-	}
-
-	return nil
+	return safeOnNewVersion()
 }
 
 func (c *conn) AddMultiDocumentVersion(ctx context.Context, docIDs uu.IDSlice, userID uu.ID, reason string, createVersion docdb.CreateVersionFunc, onNewVersion docdb.OnNewVersionFunc) error {
@@ -506,6 +533,11 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 			}
 		}
 	}()
+	// Turn a panic from a store into the error the rollback above keys on:
+	// registered after it so it runs first, and deferred directly because
+	// recover only recovers when the deferred function calls it itself. The
+	// func params are already added by the WrapWithFuncParams above.
+	defer errs.RecoverPanicAsError(&err)
 
 	for _, v := range versionTimes {
 		if !recreate && versionTimeIn(skipVersions, v) {

@@ -75,9 +75,7 @@ type Conn interface {
 	// onNewVersion must not be nil.
 	//
 	// At least one file must be provided: a document's first version cannot be
-	// empty, so an empty files slice is rejected with an error. A hidden file
-	// is not stored as a file of the version (see the package documentation),
-	// so it does not count towards that either.
+	// empty, so an empty files slice is rejected with an error.
 	//
 	// Returns ErrDocumentAlreadyExists if a document with docID already exists.
 	CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason string, version VersionTime, files []fs.FileReader, onNewVersion OnNewVersionFunc) error

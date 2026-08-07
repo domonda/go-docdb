@@ -1,28 +1,3 @@
-// Package docdb is an immutable versioned document store. Documents are
-// identified by a UUID, owned by a company UUID, and have one or more versions
-// identified by a VersionTime. A committed version is never modified; changing
-// a document creates a new one.
-//
-// # Hidden files
-//
-// A hidden file is never a file of a document version, in either direction: it
-// is neither read as one nor saved as one. Hidden means what the file system
-// means by it — a name beginning with a dot everywhere, plus the hidden
-// attribute on Windows.
-//
-// Such names belong to the storage layer rather than to a document: a .DS_Store
-// left by a Finder visit, the temp file of an interrupted rsync, an NFS
-// silly-rename. A version directory that collects one must still read back as
-// exactly the files its version info tracks, so DirFileProvider — which the
-// directory-backed implementations both read version files through and derive a
-// version's file list from — omits them. A hidden file passed to CreateDocument
-// or written by a CreateVersionFunc is therefore not recorded as a file of the
-// version, and cannot be read back through the Conn.
-//
-// This rests on the assumption that no already stored version tracks a hidden
-// file. Nothing enforced it before, so it is an assumption about existing data
-// rather than an invariant: a version whose metadata does list one fails to
-// read, its file being tracked but no longer provided.
 package docdb
 
 import (

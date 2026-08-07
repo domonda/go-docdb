@@ -481,17 +481,11 @@ func (c *Conn) ReadDocumentVersionFile(ctx context.Context, docID uu.ID, version
 	if err != nil {
 		return nil, err
 	}
-	// Read through the same FileProvider that DocumentVersionFileProvider hands
-	// out, so both agree on which filenames belong to the version: a hidden
-	// file is not a file of a version, no matter which method asks for it.
-	data, err = docdb.DirFileProvider(versionDir).ReadFile(ctx, filename)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, docdb.NewErrDocumentFileNotFound(docID, filename)
-		}
-		return nil, err
+	file := versionDir.Join(filename)
+	if !file.Exists() {
+		return nil, docdb.NewErrDocumentFileNotFound(docID, filename)
 	}
-	return data, nil
+	return file.ReadAllContext(ctx)
 }
 
 func (c *Conn) DocumentVersionFileProvider(ctx context.Context, docID uu.ID, version docdb.VersionTime) (p docdb.FileProvider, err error) {
@@ -728,13 +722,6 @@ func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.I
 	)
 	if err != nil {
 		return err
-	}
-	if len(versionInfo.Files) == 0 {
-		// Every version must contain at least one file. The files argument was
-		// checked to be non-empty, but the version's file list is derived from
-		// what a reader of the version will see, and files this package does
-		// not store as version files — hidden ones — are not in it.
-		return errs.Errorf("cannot create document %s without files that can be stored as version files", docID)
 	}
 	err = versionInfo.WriteJSON(docDir.Joinf("%s.json", newVersion))
 	if err != nil {
