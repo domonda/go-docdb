@@ -143,8 +143,7 @@ var FixtureGlobalDocumentStore = newFixture(func(t *testing.T) storeconn.Documen
 
 // globalS3Client lazily builds the test S3 client once per process and probes
 // it with a ListBuckets call. Build and probe failures are returned rather than
-// fatal, so tests can skip cleanly when no S3 backend is available
-// (e.g. plain `go test ./...`).
+// fatal so that FixtureGlobalS3Client can report them through *testing.T.
 var globalS3Client = sync.OnceValues(func() (*awss3.Client, error) {
 	ctx := context.Background()
 	cfg, err := config.LoadDefaultConfig(ctx)
@@ -166,11 +165,15 @@ var globalS3Client = sync.OnceValues(func() (*awss3.Client, error) {
 
 // FixtureGlobalS3Client returns a process-wide *awss3.Client built from the
 // default AWS config with BaseEndpoint set from AWS_ENDPOINT_URL.
-// The test is skipped if no S3 backend is reachable.
+// An unreachable backend fails the test rather than skipping it: a test built
+// on this fixture verifies nothing without a backend, and a skip is reported
+// as success by both the go test summary and its exit code, so skipping would
+// let a run that exercised none of these tests pass. Start the backend with
+// run_tests.sh.
 var FixtureGlobalS3Client = newFixture(func(t *testing.T) *awss3.Client {
 	client, err := globalS3Client()
 	if err != nil {
-		t.Skipf("S3 test backend not available: %v", err)
+		t.Fatalf("S3 test backend not available, start it with run_tests.sh: %v", err)
 	}
 	return client
 })
