@@ -729,6 +729,19 @@ func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.I
 	if err != nil {
 		return err
 	}
+
+	// The len(files) check above is on what the caller passed, which is not the
+	// same as what the version tracks: newVersionInfo enumerates the written
+	// directory through docdb.DirFileProvider, which does not report hidden
+	// entries as files of a version. A caller passing only hidden files would
+	// otherwise get exactly the empty, change-less first version the check
+	// above exists to reject — created without error and reading back with no
+	// files at all. AddDocumentVersion makes the same check on its resulting
+	// file set.
+	if len(versionInfo.Files) == 0 {
+		return errs.Errorf("cannot create document %s without files: none of the %d passed files is a file of a document version", docID, len(files))
+	}
+
 	err = versionInfo.WriteJSON(docDir.Joinf("%s.json", newVersion))
 	if err != nil {
 		return err

@@ -1087,3 +1087,56 @@ func TestAddDocumentVersion_RollsBackOnPanic(t *testing.T) {
 	))
 	require.Equal(t, []string{"a.txt", "b.txt"}, slices.Sorted(maps.Keys(newVersion.Files)))
 }
+
+// TestCreateDocumentHiddenFilesOnlyRejected covers the gap between the files a
+// caller passes and the files the created version actually tracks.
+//
+// CreateDocument rejects a call with no files, because a document cannot start
+// with an empty, change-less version. But the version's file list is built by
+// enumerating the written directory through docdb.DirFileProvider, which does
+// not report hidden entries as files of a version — so a caller passing only
+// hidden files passed the len(files) check and produced exactly the version
+// that check exists to reject: created without error, tracking nothing, and
+// reading back empty through every reader of the document. The check has to be
+// on the resulting file set, as it already is in AddDocumentVersion.
+func TestCreateDocumentHiddenFilesOnlyRejected(t *testing.T) {
+	conn := localfsdb.NewTestConn(t)
+
+	var (
+		companyID = uu.IDFrom("6f296458-24cd-4146-ac3a-33ca885a993e")
+		docID     = uu.IDFrom("c538ac93-2cf0-49a9-8378-22cd48b5ab84")
+		userID    = uu.IDFrom("ce6f0867-0172-4ffc-a0c0-c5878b921171")
+		v0        = docdb.MustVersionTimeFromString("2023-01-01_00-00-00.000")
+		noopOnNew = func(context.Context, *docdb.VersionInfo) error { return nil }
+	)
+
+	// given a document whose files are all hidden
+	err := conn.CreateDocument(
+		t.Context(), companyID, docID, userID, "hidden files only", v0,
+		[]fs.FileReader{
+			fs.NewMemFile(".env", []byte("SECRET=1")),
+			fs.NewMemFile(".DS_Store", []byte("Finder cruft")),
+		},
+		noopOnNew,
+	)
+
+	// then the document is not created
+	require.ErrorContains(t, err, "without files")
+	exists, existsErr := conn.DocumentExists(t.Context(), docID)
+	require.NoError(t, existsErr)
+	require.False(t, exists, "a rejected CreateDocument must leave no document behind")
+
+	// and a document with one tracked file among hidden ones is still created,
+	// tracking only the file the version has
+	var newVersion *docdb.VersionInfo
+	require.NoError(t, conn.CreateDocument(
+		t.Context(), companyID, docID, userID, "one tracked file", v0,
+		[]fs.FileReader{
+			fs.NewMemFile(".env", []byte("SECRET=1")),
+			fs.NewMemFile("invoice.pdf", []byte("invoice")),
+		},
+		docdb.CaptureNewVersionInfo(&newVersion),
+	))
+	require.Equal(t, []string{"invoice.pdf"}, slices.Sorted(maps.Keys(newVersion.Files)))
+	require.Equal(t, []string{"invoice.pdf"}, newVersion.AddedFiles)
+}
