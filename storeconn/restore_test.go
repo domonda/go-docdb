@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"os"
 	"slices"
 	"testing"
 
@@ -59,8 +60,12 @@ func (d *restoreDocumentStore) DocumentHashFilesExist(_ context.Context, _ uu.ID
 	return exist, nil
 }
 
-func (d *restoreDocumentStore) DeleteDocument(context.Context, uu.ID) error {
+func (d *restoreDocumentStore) DeleteDocument(_ context.Context, docID uu.ID) error {
 	d.deleteDocumentCalls++
+	if len(d.stored) == 0 {
+		// Same as s3store: deleting nothing means the document is not there.
+		return docdb.NewErrDocumentNotFound(docID)
+	}
 	clear(d.stored)
 	return nil
 }
@@ -163,8 +168,12 @@ func (m *restoreMetadataStore) DocumentVersionInfo(_ context.Context, docID uu.I
 	return info, nil
 }
 
-func (m *restoreMetadataStore) DeleteDocument(context.Context, uu.ID) error {
+func (m *restoreMetadataStore) DeleteDocument(_ context.Context, docID uu.ID) error {
 	m.deleteDocumentCalls++
+	if len(m.stored) == 0 {
+		// Same as pgstore: deleting no version means the document is not there.
+		return docdb.NewErrDocumentNotFound(docID)
+	}
 	clear(m.stored)
 	return nil
 }
@@ -396,4 +405,81 @@ func TestConn_RestoreDocument_MergeRejectsDifferentStoredFileSet(t *testing.T) {
 	err := conn.RestoreDocument(t.Context(), doc, false)
 	require.ErrorContains(t, err, "different file set")
 	require.False(t, docs.has(doc, v2), "no file may be written under a version that is not the backup's")
+}
+
+// panicDocumentStore panics instead of writing the files of one version,
+// modelling a store client that panics rather than returning an error.
+type panicDocumentStore struct {
+	*restoreDocumentStore
+	panicOn docdb.VersionTime
+}
+
+func (d *panicDocumentStore) CreateDocumentVersion(ctx context.Context, docID uu.ID, version docdb.VersionTime, files []fs.FileReader) ([]*docdb.FileInfo, error) {
+	if version.Equal(d.panicOn) {
+		panic("document store blew up")
+	}
+	return d.restoreDocumentStore.CreateDocumentVersion(ctx, docID, version, files)
+}
+
+// TestConn_RestoreDocument_RollsBackOnPanic verifies that a panic from a store
+// is rolled back like an error. The rollback runs only when the call ends with
+// an error, so a panic travelling past it would leave behind exactly the
+// committed-metadata-without-file-content state the restore has to repair —
+// and the caller would see a panic instead of an error.
+func TestConn_RestoreDocument_RollsBackOnPanic(t *testing.T) {
+	companyID := uu.IDv4()
+	docID := uu.IDv4()
+	doc, _, v2 := newRestoreTestDoc(companyID, docID)
+
+	docs := &panicDocumentStore{restoreDocumentStore: newRestoreDocumentStore(), panicOn: v2}
+	meta := newRestoreMetadataStore(t, doc) // knows nothing yet
+	conn := storeconn.New(docs, meta)
+
+	err := conn.RestoreDocument(t.Context(), doc, false)
+	require.ErrorContains(t, err, "document store blew up")
+
+	// v1 was created by this call, so the rollback removed it again.
+	require.Empty(t, meta.stored, "the version created before the panic must be rolled back")
+	require.Equal(t, 1, meta.deleteDocumentCalls+len(meta.deletedVersions))
+}
+
+// TestConn_DeleteDocument_DeletesFileContentWithoutMetadata covers a document
+// whose metadata is gone but whose file content is not — what a failure or
+// cancellation between the two deletes, or between the two writes, leaves
+// behind. Reporting the MetadataStore's not-found without touching the
+// DocumentStore orphaned that content permanently, because every later delete
+// stopped at the same not-found.
+func TestConn_DeleteDocument_DeletesFileContentWithoutMetadata(t *testing.T) {
+	companyID := uu.IDv4()
+	docID := uu.IDv4()
+	doc, v1, _ := newRestoreTestDoc(companyID, docID)
+
+	docs := newRestoreDocumentStore(docdb.FileInfo{Name: "a.txt", Hash: doc.Versions[v1].FileHashes["a.txt"]})
+	meta := newRestoreMetadataStore(t, doc) // no version metadata at all
+	conn := storeconn.New(docs, meta)
+
+	require.NoError(t, conn.DeleteDocument(t.Context(), docID))
+	require.Empty(t, docs.stored, "file content without metadata must be deleted too")
+
+	// A document neither store holds is still reported as not found.
+	err := conn.DeleteDocument(t.Context(), uu.IDv4())
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+// TestConn_RestoreDocument_RecreateRepairsFileContentWithoutMetadata covers
+// re-creating such a document: the up-front delete must not fail on the missing
+// metadata, or the document could never be restored again.
+func TestConn_RestoreDocument_RecreateRepairsFileContentWithoutMetadata(t *testing.T) {
+	companyID := uu.IDv4()
+	docID := uu.IDv4()
+	doc, v1, v2 := newRestoreTestDoc(companyID, docID)
+
+	docs := newRestoreDocumentStore(docdb.FileInfo{Name: "a.txt", Hash: doc.Versions[v1].FileHashes["a.txt"]})
+	meta := newRestoreMetadataStore(t, doc) // no version metadata at all
+	conn := storeconn.New(docs, meta)
+
+	require.NoError(t, conn.RestoreDocument(t.Context(), doc, true))
+	require.Equal(t, []docdb.VersionTime{v1, v2}, meta.insertedVersions)
+	require.True(t, docs.has(doc, v1))
+	require.True(t, docs.has(doc, v2))
 }
