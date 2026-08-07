@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"slices"
@@ -957,4 +958,132 @@ func TestVersionDirWithHiddenFiles(t *testing.T) {
 	require.Equal(t, []string{"b.txt"}, newVersion.AddedFiles)
 	require.Empty(t, newVersion.ModifiedFiles)
 	require.Empty(t, newVersion.RemovedFiles)
+}
+
+// panicFileReader is an fs.FileReader whose content cannot be read: every read
+// path panics. Copying it into the new version directory is the last thing
+// CreateDocument and AddDocumentVersion do before they have a complete version
+// on disk, so it panics them at the point where the document or version
+// directory exists but nothing that makes it valid has been written yet.
+type panicFileReader struct {
+	fs.FileReader
+}
+
+func newPanicFileReader(name string) fs.FileReader {
+	return panicFileReader{FileReader: fs.NewMemFile(name, []byte(name))}
+}
+
+func (panicFileReader) ReadAll() ([]byte, error) { panic("file reader blew up") }
+
+func (panicFileReader) ReadAllContext(context.Context) ([]byte, error) {
+	panic("file reader blew up")
+}
+
+func (panicFileReader) ReadAllContentHash(context.Context) ([]byte, string, error) {
+	panic("file reader blew up")
+}
+
+func (panicFileReader) WriteTo(io.Writer) (int64, error) { panic("file reader blew up") }
+
+func (panicFileReader) OpenReader() (fs.ReadCloser, error) { panic("file reader blew up") }
+
+// TestCreateDocument_RollsBackOnPanic and TestAddDocumentVersion_RollsBackOnPanic
+// are regression tests for the rollback defers keying on the named error result,
+// which a panic never sets.
+//
+// A panic that escapes leaves the half-created document or version on disk: a
+// document directory with no version info JSON, or a version directory the
+// document's version list does not know about. Both make every later reader of
+// that document fail, and neither is repaired by retrying the call — the
+// document then already exists. The panic has to reach the rollback as an
+// error, which is what deferring errs.RecoverPanicAsError after the rollback
+// (so it runs before it) does. Calling recover from inside the rollback closure
+// would not: recover only recovers when the deferred function calls it itself.
+func TestCreateDocument_RollsBackOnPanic(t *testing.T) {
+	// given a conn with no document
+	tmp := fs.File(t.TempDir())
+	documentsDir := tmp.Join("documents")
+	companiesDir := tmp.Join("companies")
+	require.NoError(t, documentsDir.MakeDir())
+	require.NoError(t, companiesDir.MakeDir())
+	conn := localfsdb.NewConn(documentsDir, companiesDir)
+
+	var (
+		companyID = uu.IDFrom("6f296458-24cd-4146-ac3a-33ca885a993e")
+		docID     = uu.IDFrom("c538ac93-2cf0-49a9-8378-22cd48b5ab84")
+		userID    = uu.IDFrom("ce6f0867-0172-4ffc-a0c0-c5878b921171")
+		v0        = docdb.MustVersionTimeFromString("2023-01-01_00-00-00.000")
+		noopOnNew = func(context.Context, *docdb.VersionInfo) error { return nil }
+	)
+
+	// when creating it panics while writing the version's files
+	err := conn.CreateDocument(
+		t.Context(), companyID, docID, userID, "TestCreateDocument_RollsBackOnPanic", v0,
+		[]fs.FileReader{newPanicFileReader("a.txt")}, noopOnNew,
+	)
+
+	// then the panic is returned as an error rather than escaping
+	require.ErrorContains(t, err, "file reader blew up")
+
+	// and nothing of the half-created document is left behind: neither the
+	// document directory nor the company's reference to it.
+	require.False(t, uuiddir.Join(documentsDir, docID).Exists(),
+		"the document directory created before the panic must be rolled back")
+	require.False(t, uuiddir.Join(companiesDir.Join(companyID.String()), docID).Exists(),
+		"the company document directory created before the panic must be rolled back")
+
+	// and the document can still be created afterwards, which a leftover
+	// directory would refuse as ErrDocumentAlreadyExists.
+	require.NoError(t, conn.CreateDocument(
+		t.Context(), companyID, docID, userID, "retry after panic", v0,
+		newTestMemFiles("a.txt"), noopOnNew,
+	))
+}
+
+func TestAddDocumentVersion_RollsBackOnPanic(t *testing.T) {
+	// given a document with one version
+	conn := localfsdb.NewTestConn(t)
+
+	var (
+		companyID = uu.IDFrom("6f296458-24cd-4146-ac3a-33ca885a993e")
+		docID     = uu.IDFrom("c538ac93-2cf0-49a9-8378-22cd48b5ab84")
+		userID    = uu.IDFrom("ce6f0867-0172-4ffc-a0c0-c5878b921171")
+		v0        = docdb.MustVersionTimeFromString("2023-01-01_00-00-00.000")
+		noopOnNew = func(context.Context, *docdb.VersionInfo) error { return nil }
+	)
+	require.NoError(t, conn.CreateDocument(
+		t.Context(), companyID, docID, userID, "TestAddDocumentVersion_RollsBackOnPanic", v0,
+		newTestMemFiles("a.txt"), noopOnNew,
+	))
+
+	// when adding a version panics while writing its files
+	err := conn.AddDocumentVersion(
+		t.Context(), docID, userID, "add b.txt",
+		docdb.CreateVersionWriteFiles(newPanicFileReader("b.txt")),
+		noopOnNew,
+	)
+
+	// then the panic is returned as an error rather than escaping
+	require.ErrorContains(t, err, "file reader blew up")
+
+	// and the document is left at the version it had before the call: the
+	// half-written version directory is gone, so no reader sees a version the
+	// document's version list does not know about.
+	versions, err := conn.DocumentVersions(t.Context(), docID)
+	require.NoError(t, err)
+	require.Equal(t, []docdb.VersionTime{v0}, versions)
+
+	doc, err := docdb.ReadHashedDocument(t.Context(), conn, docID)
+	require.NoError(t, err)
+	require.Equal(t, []docdb.VersionTime{v0}, doc.VersionTimes())
+	require.Equal(t, []string{"a.txt"}, slices.Sorted(maps.Keys(doc.Versions[v0].FileHashes)))
+
+	// and a later version can still be added on top of v0
+	var newVersion *docdb.VersionInfo
+	require.NoError(t, conn.AddDocumentVersion(
+		t.Context(), docID, userID, "add b.txt after panic",
+		docdb.CreateVersionWriteFiles(newTestMemFiles("b.txt")...),
+		docdb.CaptureNewVersionInfo(&newVersion),
+	))
+	require.Equal(t, []string{"a.txt", "b.txt"}, slices.Sorted(maps.Keys(newVersion.Files)))
 }
