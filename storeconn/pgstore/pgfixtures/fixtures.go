@@ -25,8 +25,8 @@ import (
 )
 
 // globalConn lazily connects to the test Postgres database once per process.
-// Connection and ping failures are returned rather than panicked, so tests
-// can skip cleanly when no database is available (e.g. plain `go test ./...`).
+// Connection and ping failures are returned rather than panicked so that
+// FixtureGlobalConn can report them through *testing.T.
 var globalConn = sync.OnceValues(func() (sqldb.Connection, error) {
 	return connectFromEnv(context.Background())
 })
@@ -40,10 +40,16 @@ func CloseGlobalConn() {
 	}
 }
 
+// FixtureGlobalConn returns the process-wide test database connection.
+// An unreachable database fails the test rather than skipping it: a test built
+// on this fixture verifies nothing without a database, and a skip is reported
+// as success by both the go test summary and its exit code, so skipping would
+// let a run that exercised none of these tests pass. Start the database with
+// run_tests.sh.
 var FixtureGlobalConn = newFixture(func(t *testing.T) sqldb.Connection {
 	conn, err := globalConn()
 	if err != nil {
-		t.Skipf("Postgres test database not available: %v", err)
+		t.Fatalf("Postgres test database not available, start it with run_tests.sh: %v", err)
 	}
 	return conn
 })
@@ -73,13 +79,24 @@ type Populator struct {
 }
 
 func (populator *Populator) DocumentVersion(data ...map[string]any) *pgstore.DocumentVersion {
+	// Derive the predecessor from this row's own version rather than from the
+	// wall clock, so two versions of one document never name the same
+	// predecessor: a caller that overrides Version to build a multi-version
+	// document would otherwise produce a forked chain, which the
+	// one-successor-per-version index rejects.
+	version := docdb.VersionTimeFrom(time.Now())
+	if len(data) > 0 {
+		if v, ok := data[0]["Version"].(docdb.VersionTime); ok {
+			version = v
+		}
+	}
 	return insertRecordWithExtraData(
 		pgstore.DocumentVersion{
 			ID:            uu.IDv7(),
 			DocumentID:    uu.IDv7(),
 			CompanyID:     uu.IDv7(),
-			Version:       docdb.VersionTimeFrom(time.Now()),
-			PrevVersion:   new(docdb.VersionTimeFrom(time.Now().Add(-time.Second))),
+			Version:       version,
+			PrevVersion:   new(docdb.VersionTimeFrom(version.Time.Add(-time.Second))),
 			CommitUserID:  uu.IDv7(),
 			CommitReason:  "test",
 			AddedFiles:    []string{randomDocName(), randomDocName()},

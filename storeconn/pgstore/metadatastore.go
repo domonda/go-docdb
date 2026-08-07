@@ -74,6 +74,13 @@ func metadataStoreVersionsExist(ctx context.Context) bool {
 	return ctx.Value(metadataStoreVersionsExistCtxKey{}) != nil
 }
 
+// oneSuccessorPerVersionIndex is the unique index on
+// docdb.document_version (document_id, prev_version) enforcing that a version
+// has at most one successor. Postgres names the violated index in the error, so
+// this is how a concurrent append is told apart from a plain duplicate. It must
+// match the index name in schema/document_version.sql.
+const oneSuccessorPerVersionIndex = "document_version_one_successor_per_version_idx"
+
 func NewMetadataStore() storeconn.MetadataStore {
 	return &postgresMetadataStore{}
 }
@@ -153,6 +160,33 @@ func (store *postgresMetadataStore) CreateDocumentVersion(ctx context.Context, i
 			return info, store.assertStoredVersionEquals(ctx, info)
 		}
 
+		// A version inserted between two existing ones takes over the successor
+		// that currently chains off the same predecessor — the merge-restore of
+		// a deleted middle version, whose successor DeleteDocumentVersion
+		// relinked to the predecessor when the version was removed. Without
+		// this the successor keeps naming a predecessor that is no longer the
+		// version before it, and the chain forks.
+		//
+		// Only a successor *after* the new version is relinked, which is what
+		// separates filling in a middle version from a concurrent append: a
+		// second writer appending to the same predecessor produces a version
+		// after the one already there, relinks nothing, and is refused below.
+		if in.PreviousVersion != nil {
+			err := db.Exec(ctx,
+				/* sql */ `
+					update docdb.document_version
+					set prev_version = $3
+					where document_id = $1 and prev_version = $2 and version > $3
+				`,
+				in.DocID,            // $1
+				*in.PreviousVersion, // $2
+				in.NewVersion,       // $3
+			)
+			if err != nil {
+				return nil, err
+			}
+		}
+
 		versionID := uu.IDv7()
 		err := db.InsertRowStruct(ctx, &DocumentVersion{
 			ID:            versionID,
@@ -167,18 +201,34 @@ func (store *postgresMetadataStore) CreateDocumentVersion(ctx context.Context, i
 			ModifiedFiles: modifiedFilenames,
 		})
 		if err != nil {
-			// document_version has two unique constraints: (document_id, version)
-			// and a partial unique index on (document_id) where prev_version is
-			// null (one genesis version per document). A genesis insert
-			// (PreviousVersion == nil) can violate either — a same-timestamp
-			// collision or another genesis with a different timestamp — and both
-			// mean the document already exists. An appended insert can only hit
-			// (document_id, version), meaning that specific version already exists.
-			if errors.As(err, &sqldb.ErrUniqueViolation{}) {
-				if in.PreviousVersion == nil {
+			// document_version has three unique constraints: (document_id,
+			// version), a partial unique index on (document_id) where
+			// prev_version is null (one genesis version per document), and
+			// (document_id, prev_version) (one successor per version).
+			//
+			// The successor index is the only one that means something other
+			// than "this already exists": another writer appended a version
+			// after the same predecessor between this call reading the latest
+			// version and inserting, so the file set carried forward here is
+			// already stale. That is an optimistic concurrency conflict, and
+			// the caller has to redo the work from the new latest version
+			// rather than treat its own version as written.
+			//
+			// Of the other two, a genesis insert (PreviousVersion == nil) can
+			// violate either the timestamp constraint or the genesis index —
+			// both mean the document already exists. An appended insert can
+			// only hit (document_id, version), meaning that specific version
+			// already exists.
+			var uniqueViolation sqldb.ErrUniqueViolation
+			if errors.As(err, &uniqueViolation) {
+				switch {
+				case uniqueViolation.Constraint == oneSuccessorPerVersionIndex && in.PreviousVersion != nil:
+					return nil, docdb.NewErrDocumentChanged(in.DocID, *in.PreviousVersion)
+				case in.PreviousVersion == nil:
 					return nil, docdb.NewErrDocumentAlreadyExists(in.DocID)
+				default:
+					return nil, docdb.NewErrVersionAlreadyExists(in.DocID, in.NewVersion)
 				}
-				return nil, docdb.NewErrVersionAlreadyExists(in.DocID, in.NewVersion)
 			}
 			return nil, err
 		}

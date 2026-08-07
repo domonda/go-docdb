@@ -41,4 +41,19 @@ create unique index document_version_one_genesis_per_document_idx
     on docdb.document_version (document_id)
     where prev_version is null;
 
+-- A document's versions form a linear chain, so a version has at most one
+-- successor: no two versions of a document may name the same prev_version.
+-- Without this, two concurrent AddDocumentVersion calls both read the same
+-- latest version, both carry its file set forward, and both insert with that
+-- version as prev_version — neither existing constraint stops them, because
+-- their own version timestamps differ. The later row's file set is then the
+-- older one plus its own change, silently dropping the other writer's. The
+-- index turns that into a unique violation, which CreateDocumentVersion maps
+-- to ErrDocumentChanged for the writer that lost, so the update is refused
+-- instead of lost and the caller can retry from the new latest version. Rows
+-- with a NULL prev_version are not constrained here — Postgres treats NULLs as
+-- distinct in a unique index — which is what the genesis index above is for.
+create unique index document_version_one_successor_per_version_idx
+    on docdb.document_version (document_id, prev_version);
+
 comment on table docdb.document_version is 'Document version meta data';

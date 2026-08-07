@@ -2,6 +2,8 @@ package pgstore_test
 
 import (
 	"database/sql"
+	"maps"
+	"slices"
 	"testing"
 	"time"
 
@@ -1276,4 +1278,64 @@ func TestDeleteDocumentVersion(t *testing.T) {
 		// then
 		require.ErrorIs(t, err, docdb.NewErrDocumentNotFound(docID))
 	})
+}
+
+// TestCreateDocumentVersionConcurrentAppend covers the interleaving of two
+// writers appending to the same document.
+//
+// storeconn.AddDocumentVersion reads the latest version, carries its file set
+// forward, applies its own changes and inserts. Two callers doing that at once
+// both read the same latest version and both build their result from it, so
+// whichever inserts second writes a file set that never saw the first one's
+// changes. Nothing about the second insert looks wrong on its own — its version
+// timestamp is unique and it is not a genesis — so without a constraint on the
+// chain it succeeds and the first writer's work is silently gone.
+//
+// The versions of a document are a chain, so a version has at most one
+// successor. Naming an already-used prev_version is the conflict, and the
+// loser must be told rather than allowed to overwrite: ErrDocumentChanged is
+// the optimistic concurrency conflict, and the caller retries from the new
+// latest version.
+func TestCreateDocumentVersionConcurrentAppend(t *testing.T) {
+	t.Parallel()
+	ctx := pgfixtures.FixtureCtxWithTestTx(t)
+	docID := uu.IDv7()
+	companyID := uu.IDv7()
+	userID := uu.IDv7()
+
+	genesis := docdb.NewVersionTime()
+	_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+		DocID: docID, CompanyID: companyID, UserID: userID, Reason: "genesis", NewVersion: genesis,
+		AddedFiles: []*docdb.FileInfo{{Name: "a.pdf", Size: 1, Hash: docdb.ContentHash([]byte("a"))}},
+	})
+	require.NoError(t, err)
+
+	// Writer one appends its change.
+	first := docdb.VersionTimeFrom(genesis.Time.Add(time.Second))
+	_, err = store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+		DocID: docID, CompanyID: companyID, UserID: userID, Reason: "writer one", NewVersion: first,
+		PreviousVersion: &genesis,
+		AddedFiles:      []*docdb.FileInfo{{Name: "one.pdf", Size: 1, Hash: docdb.ContentHash([]byte("one"))}},
+	})
+	require.NoError(t, err)
+
+	// Writer two started before that landed, so it still chains off the genesis
+	// version and its file set has no one.pdf in it.
+	second := docdb.VersionTimeFrom(genesis.Time.Add(2 * time.Second))
+	_, err = store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+		DocID: docID, CompanyID: companyID, UserID: userID, Reason: "writer two", NewVersion: second,
+		PreviousVersion: &genesis,
+		AddedFiles:      []*docdb.FileInfo{{Name: "two.pdf", Size: 1, Hash: docdb.ContentHash([]byte("two"))}},
+	})
+	require.ErrorIs(t, err, docdb.NewErrDocumentChanged(docID, genesis),
+		"a second version chained off the same predecessor must be refused, not silently accepted")
+
+	// Writer one's version is the latest, and writer two changed nothing.
+	versions, err := store.DocumentVersions(ctx, docID)
+	require.NoError(t, err)
+	require.Equal(t, []docdb.VersionTime{genesis, first}, versions)
+
+	latest, err := store.LatestDocumentVersionInfo(ctx, docID)
+	require.NoError(t, err)
+	require.Equal(t, []string{"a.pdf", "one.pdf"}, slices.Sorted(maps.Keys(latest.Files)))
 }

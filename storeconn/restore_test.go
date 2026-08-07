@@ -27,6 +27,7 @@ type restoreDocumentStore struct {
 	stored map[docdb.FileInfo]struct{} // (Name, Hash) of every stored file
 
 	writtenVersions   []docdb.VersionTime // versions passed to CreateDocumentVersion
+	writtenFiles      []string            // names of every file actually uploaded
 	filesExistCalls   int                 // calls to DocumentHashFilesExist
 	filesExistChecked int                 // files asked about in total
 
@@ -93,6 +94,7 @@ func (d *restoreDocumentStore) CreateDocumentVersion(_ context.Context, _ uu.ID,
 		}
 		info := docdb.FileInfo{Name: file.Name(), Hash: docdb.ContentHash(data)}
 		d.stored[info] = struct{}{}
+		d.writtenFiles = append(d.writtenFiles, info.Name)
 		fileInfos[i] = &docdb.FileInfo{Name: info.Name, Size: int64(len(data)), Hash: info.Hash}
 	}
 	return fileInfos, nil
@@ -482,4 +484,52 @@ func TestConn_RestoreDocument_RecreateRepairsFileContentWithoutMetadata(t *testi
 	require.Equal(t, []docdb.VersionTime{v1, v2}, meta.insertedVersions)
 	require.True(t, docs.has(doc, v1))
 	require.True(t, docs.has(doc, v2))
+}
+
+// TestConn_RestoreDocument_MergeWritesOnlyMissingFiles pins that a version
+// whose content is only partly missing costs only the missing part.
+//
+// The presence of every candidate file is already established per file, so
+// reducing that to "this version is not fully stored" and then re-uploading all
+// of it wastes a full upload of every file that was already there. Files are
+// content-addressed by name and hash, so a file carried forward unchanged is
+// one object no matter how many versions reference it, and writing it once is
+// enough for all of them.
+func TestConn_RestoreDocument_MergeWritesOnlyMissingFiles(t *testing.T) {
+	doc, v1, v2 := newRestoreTestDoc(uu.IDv4(), uu.IDv4())
+
+	// The interrupted run got as far as a.txt, which v1 and v2 share, so only
+	// v2's b.txt is missing.
+	docs := newRestoreDocumentStore(docdb.FileInfo{Name: "a.txt", Hash: doc.Versions[v1].FileHashes["a.txt"]})
+	meta := newRestoreMetadataStore(t, doc, v1, v2)
+	meta.versionsExist = true
+	conn := storeconn.New(docs, meta)
+
+	require.NoError(t, conn.RestoreDocument(t.Context(), doc, false))
+
+	require.True(t, docs.has(doc, v1))
+	require.True(t, docs.has(doc, v2))
+	require.Equal(t, []docdb.VersionTime{v2}, docs.writtenVersions, "v1 was complete")
+	require.Equal(t, []string{"b.txt"}, docs.writtenFiles,
+		"a.txt was already stored, so only the missing b.txt may be uploaded")
+}
+
+// TestConn_RestoreDocument_WritesCarriedForwardFileOnce covers a document
+// neither store knows: every file is written, but a file that later versions
+// carry forward unchanged is the same object and must not be uploaded again
+// for each of them.
+func TestConn_RestoreDocument_WritesCarriedForwardFileOnce(t *testing.T) {
+	doc, v1, v2 := newRestoreTestDoc(uu.IDv4(), uu.IDv4())
+
+	docs := newRestoreDocumentStore() // empty
+	meta := newRestoreMetadataStore(t, doc)
+	conn := storeconn.New(docs, meta)
+
+	require.NoError(t, conn.RestoreDocument(t.Context(), doc, false))
+
+	require.True(t, docs.has(doc, v1))
+	require.True(t, docs.has(doc, v2))
+	// a.txt belongs to both versions but is one object.
+	require.ElementsMatch(t, []string{"a.txt", "b.txt"}, docs.writtenFiles)
+	require.Len(t, docs.writtenFiles, 2, "a.txt is carried forward unchanged, so it is written once")
 }

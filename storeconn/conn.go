@@ -467,6 +467,12 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		// DocumentStore. A version in metadataVersions but not in skipVersions
 		// still needs its files written.
 		skipVersions []docdb.VersionTime
+		// storedFiles are the (name, content hash) pairs the DocumentStore is
+		// known to hold, so they are not written again. It starts from what the
+		// presence check found and grows with every file written below: a file
+		// carried forward unchanged is the same content-addressed object in
+		// every version that references it, so writing it once is enough.
+		storedFiles map[docdb.FileInfo]bool
 	)
 	if !recreate {
 		versions, versionsErr := c.DocumentVersions(ctx, doc.ID)
@@ -499,11 +505,14 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		// With no object at all under the document, no version can be fully
 		// stored, so the per-file check is not worth a round trip.
 		if docExists {
-			skipVersions, err = c.versionsFullyStored(ctx, doc, versionTimes, metadataVersions)
+			skipVersions, storedFiles, err = c.versionsFullyStored(ctx, doc, versionTimes, metadataVersions)
 			if err != nil {
 				return err
 			}
 		}
+	}
+	if storedFiles == nil {
+		storedFiles = make(map[docdb.FileInfo]bool)
 	}
 
 	noopOnNew := func(context.Context, *docdb.VersionInfo) error { return nil }
@@ -544,7 +553,7 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 			continue
 		}
 		hv := doc.Versions[v]
-		files := hashedVersionFiles(doc, hv)
+		files := hashedVersionFilesMissingFrom(doc, hv, storedFiles)
 		versionInMetadata := versionTimeIn(metadataVersions, v)
 
 		// CreateDocument writes a document's genesis version and enforces that
@@ -568,6 +577,7 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 			} else {
 				createdVersions = append(createdVersions, v)
 			}
+			markVersionFilesStored(hv, storedFiles)
 			continue
 		}
 
@@ -634,12 +644,19 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 			return err
 		}
 		// The metadata version was already written above, so the FileInfos
-		// returned by the blob write are not needed here. Writing all files of
-		// the version, including any already present, is idempotent: they are
-		// stored under their content hash.
-		_, err = c.documentStore.CreateDocumentVersion(ctx, doc.ID, v, files)
-		if err != nil {
-			return err
+		// returned by the blob write are not needed here. Only the files the
+		// DocumentStore does not already hold are written: a version reached
+		// here because some of its content is missing, not necessarily all of
+		// it, and re-writing what is there costs a full upload of the whole
+		// version to repair one absent object. Nothing is written at all for a
+		// version whose files all turned out to be present, which happens when
+		// the MetadataStore did not know it.
+		if len(files) > 0 {
+			_, err = c.documentStore.CreateDocumentVersion(ctx, doc.ID, v, files)
+			if err != nil {
+				return err
+			}
+			markVersionFilesStored(hv, storedFiles)
 		}
 		// The DocumentStore now holds objects for the document, so a following
 		// version that neither store knows must not take the genesis path.
@@ -706,7 +723,10 @@ func isAlreadyExistsErr(err error) bool {
 
 // versionsFullyStored returns the versions of doc that a merge-restore has
 // nothing left to do for: held by the MetadataStore and with every file present
-// in the DocumentStore.
+// in the DocumentStore. It also returns the files it found present, so a
+// version that is only partly stored writes what is missing instead of every
+// file it has: the per-file answer is what the check is made of, and throwing
+// it away would re-upload whole versions to repair one absent object.
 //
 // Presence in the MetadataStore alone does not mean a version was copied. The
 // two stores are not necessarily populated together: a copy into a fresh
@@ -721,7 +741,7 @@ func isAlreadyExistsErr(err error) bool {
 // are. Every candidate file is checked in a single DocumentStore call, so the
 // common case of a document that is fully present costs one round trip rather
 // than one per version or per file.
-func (c *conn) versionsFullyStored(ctx context.Context, doc *docdb.HashedDocument, versionTimes, metadataVersions []docdb.VersionTime) ([]docdb.VersionTime, error) {
+func (c *conn) versionsFullyStored(ctx context.Context, doc *docdb.HashedDocument, versionTimes, metadataVersions []docdb.VersionTime) ([]docdb.VersionTime, map[docdb.FileInfo]bool, error) {
 	var candidates []docdb.VersionTime
 	for _, v := range versionTimes {
 		if versionTimeIn(metadataVersions, v) {
@@ -729,7 +749,7 @@ func (c *conn) versionsFullyStored(ctx context.Context, doc *docdb.HashedDocumen
 		}
 	}
 	if len(candidates) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	// Collect the distinct files of all candidate versions. Only Name and Hash
@@ -750,14 +770,23 @@ func (c *conn) versionsFullyStored(ctx context.Context, doc *docdb.HashedDocumen
 	}
 	exist, err := c.documentStore.DocumentHashFilesExist(ctx, doc.ID, files)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+
+	// present keeps only the files that are there, so the restore can skip
+	// writing them again instead of asking a second time.
+	present := make(map[docdb.FileInfo]bool, len(files))
+	for file, ok := range exist {
+		if ok {
+			present[file] = true
+		}
 	}
 
 	var stored []docdb.VersionTime
 	for _, v := range candidates {
 		fullyStored := true
 		for filename, hash := range doc.Versions[v].FileHashes {
-			if !exist[docdb.FileInfo{Name: filename, Hash: hash}] {
+			if !present[docdb.FileInfo{Name: filename, Hash: hash}] {
 				fullyStored = false
 				break
 			}
@@ -766,7 +795,7 @@ func (c *conn) versionsFullyStored(ctx context.Context, doc *docdb.HashedDocumen
 			stored = append(stored, v)
 		}
 	}
-	return stored, nil
+	return stored, present, nil
 }
 
 // fileInfosNamed returns the FileInfos of the passed filenames in that order,
@@ -785,14 +814,31 @@ func fileInfosNamed(files map[string]docdb.FileInfo, filenames []string) []*docd
 	return infos
 }
 
-// hashedVersionFiles materializes the files of a docdb.HashedVersion as in-memory
-// fs.FileReaders backed by the corresponding HashedFiles entries.
-func hashedVersionFiles(doc *docdb.HashedDocument, hv *docdb.HashedVersion) []fs.FileReader {
+// hashedVersionFilesMissingFrom materializes the files of a docdb.HashedVersion
+// as in-memory fs.FileReaders backed by the corresponding HashedFiles entries,
+// skipping the ones stored already holds.
+//
+// A DocumentStore addresses a file by name and content hash, so a file it
+// already holds under both is the object a write would produce and writing it
+// again only costs the upload. Pass a nil or empty stored to get every file.
+func hashedVersionFilesMissingFrom(doc *docdb.HashedDocument, hv *docdb.HashedVersion, stored map[docdb.FileInfo]bool) []fs.FileReader {
 	files := make([]fs.FileReader, 0, len(hv.FileHashes))
 	for filename, hash := range hv.FileHashes {
+		if stored[docdb.FileInfo{Name: filename, Hash: hash}] {
+			continue
+		}
 		files = append(files, fs.NewMemFile(filename, doc.HashedFiles[hash]))
 	}
 	return files
+}
+
+// markVersionFilesStored records every file of hv as held by the DocumentStore,
+// so a later version carrying one of them forward unchanged does not write the
+// same content-addressed object again.
+func markVersionFilesStored(hv *docdb.HashedVersion, stored map[docdb.FileInfo]bool) {
+	for filename, hash := range hv.FileHashes {
+		stored[docdb.FileInfo{Name: filename, Hash: hash}] = true
+	}
 }
 
 func versionTimeIn(versions []docdb.VersionTime, v docdb.VersionTime) bool {
