@@ -68,14 +68,19 @@ func TempFileCopy(ctx context.Context, provider FileProvider, filename string) (
 ///////////////////////////////////////////////////////////////////////////////
 // DirFileProvider
 
-// DirFileProvider returns a FileProvider for the files directly contained
-// in a fs.File directory.
+// DirFileProvider returns a FileProvider for the files in a fs.File directory.
 //
 // Hidden entries (a dot-prefixed name, plus the hidden attribute on Windows)
-// and sub-directories are not provided files: ListFiles omits them, HasFile
-// reports them as not existing, and ReadFile returns an fs.ErrDoesNotExist
-// for them. All three are filtered identically so that a filename either
-// belongs to the provider or does not, no matter which method is asked.
+// and sub-directories are never files of the provider: ListFiles omits them,
+// HasFile reports them as not existing, and ReadFile returns an
+// fs.ErrDoesNotExist for them.
+//
+// ListFiles reports only the files directly in the directory. HasFile and
+// ReadFile resolve their argument as a path relative to it, so a file inside a
+// sub-directory is reachable as "subdir/nested.txt" even though ListFiles does
+// not report it — see TestDirFileProvider_NestedPaths. Only the entry the path
+// resolves to is checked, so a file under a hidden directory is reachable that
+// way too.
 //
 // The motivating case is a document version directory, whose files must be
 // exactly the files tracked in the version info: a stray .DS_Store, an
