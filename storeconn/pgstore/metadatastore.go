@@ -88,8 +88,19 @@ type postgresMetadataStore struct{}
 // ContextWithMetadataStoreVersionsExist), nothing is inserted; instead the
 // already-stored version is queried and verified to be identical to what would
 // otherwise have been inserted.
+//
+// The insert runs in a savepoint when the caller is already in a transaction,
+// because ErrVersionAlreadyExists and ErrDocumentAlreadyExists are answers this
+// method is expected to give, not just failures: storeconn.RestoreDocument
+// resumes a copy whose metadata was written but whose file content was not by
+// calling this for a version it knows is stored and continuing past the
+// rejection. Both errors come from a unique violation, and a violation raised
+// directly in the caller's transaction aborts that whole transaction — every
+// later statement, of the restore and of whatever else the caller is doing,
+// then fails with "current transaction is aborted". Rolling back to a savepoint
+// contains the violation so only the insert is undone.
 func (store *postgresMetadataStore) CreateDocumentVersion(ctx context.Context, in storeconn.CreateDocumentVersionInput) (*docdb.VersionInfo, error) {
-	return db.TransactionResult(ctx, func(ctx context.Context) (*docdb.VersionInfo, error) {
+	return db.TransactionSavepointResult(ctx, func(ctx context.Context) (*docdb.VersionInfo, error) {
 		// Determine the full file set of the new version. When the caller already
 		// computed it (in.Files), use it directly and skip the predecessor lookup
 		// and re-derivation. Otherwise carry the previous version's files forward

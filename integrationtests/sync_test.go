@@ -397,3 +397,51 @@ func TestSyncDocument_ResumesInterruptedCopy(t *testing.T) {
 
 	assertSyncedDocEqual(t, ctx, dstConn, want)
 }
+
+// TestSyncDocument_ResumesInterruptedCopyWithoutVersionsExistMode covers the
+// same resume as above against a MetadataStore that really inserts, rather than
+// one told up front that every version is already stored.
+//
+// That is the path where the resume asks for a version the unique index already
+// holds, and both stores are read and written inside the caller's transaction:
+// pgfixtures.FixtureCtxWithTestTx supplies one here, and a migration doing its
+// per-document work transactionally is the same shape. A unique violation
+// raised directly in that transaction aborts all of it, so every statement
+// after the tolerated duplicate — the rest of the restore, the caller's next
+// document, its commit — fails with "current transaction is aborted", while the
+// restore itself still returns nil. Reporting success on a dead transaction is
+// the same class of silent data loss the resume fix exists to remove, so the
+// duplicate must stay contained to the insert that provoked it.
+func TestSyncDocument_ResumesInterruptedCopyWithoutVersionsExistMode(t *testing.T) {
+	ctx := pgfixtures.FixtureCtxWithTestTx(t)
+	srcConn := localfsdb.NewTestConn(t)
+	s3fixtures.FixtureCleanBucket(t)
+	documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
+	dstConn := storeconn.New(documentStore, pgstore.NewMetadataStore())
+
+	companyID := uu.IDv7()
+	docID := uu.IDv7()
+	userID := uu.IDv7()
+	createSyncTestDoc(t, ctx, srcConn, companyID, docID, userID, "doc")
+
+	want, err := docdb.ReadHashedDocument(ctx, srcConn, docID)
+	require.NoError(t, err)
+
+	err = docdb.SyncDocument(ctx, srcConn, dstConn, docID, true)
+	require.NoError(t, err)
+
+	versions := want.VersionTimes()
+	require.Len(t, versions, 2)
+	hashOnlyInV2 := want.Versions[versions[1]].FileHashes["b.txt"]
+	err = documentStore.DeleteDocumentHashes(ctx, docID, []string{hashOnlyInV2})
+	require.NoError(t, err)
+
+	// No ContextWithMetadataStoreVersionsExist: the store inserts and the
+	// unique index rejects the duplicate for the second version.
+	err = docdb.SyncDocument(ctx, srcConn, dstConn, docID, false)
+	require.NoError(t, err)
+
+	// The transaction must have survived the rejected insert, so the document
+	// is still readable through it and holds every file again.
+	assertSyncedDocEqual(t, ctx, dstConn, want)
+}
