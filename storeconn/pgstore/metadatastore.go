@@ -160,27 +160,36 @@ func (store *postgresMetadataStore) CreateDocumentVersion(ctx context.Context, i
 			return info, store.assertStoredVersionEquals(ctx, info)
 		}
 
-		// A version inserted between two existing ones takes over the successor
-		// that currently chains off the same predecessor — the merge-restore of
-		// a deleted middle version, whose successor DeleteDocumentVersion
+		// A version filled into an existing chain takes over the successor that
+		// currently chains off the same predecessor — the merge-restore of a
+		// deleted middle version, whose successor DeleteDocumentVersion
 		// relinked to the predecessor when the version was removed. Without
 		// this the successor keeps naming a predecessor that is no longer the
 		// version before it, and the chain forks.
 		//
-		// Only a successor *after* the new version is relinked, which is what
-		// separates filling in a middle version from a concurrent append: a
-		// second writer appending to the same predecessor produces a version
-		// after the one already there, relinks nothing, and is refused below.
-		if in.PreviousVersion != nil {
+		// Only the version the caller names is relinked, and only while it
+		// still chains off the same predecessor. Nothing about a row identifies
+		// it as this version's successor: a concurrent append and a
+		// destination-only version of a merge-restore both name the same
+		// predecessor and can sort after the new version, and adopting either
+		// one leaves it naming a predecessor whose file set it never derived
+		// from (see CreateDocumentVersionInput.RelinkSuccessor). An append
+		// names no successor, relinks nothing, and is refused by the
+		// one-successor-per-version index below.
+		//
+		// A named successor that is not stored, or no longer chains off
+		// in.PreviousVersion, matches no row and relinks nothing.
+		if in.RelinkSuccessor != nil && in.PreviousVersion != nil {
 			err := db.Exec(ctx,
 				/* sql */ `
 					update docdb.document_version
 					set prev_version = $3
-					where document_id = $1 and prev_version = $2 and version > $3
+					where document_id = $1 and prev_version = $2 and version = $4
 				`,
 				in.DocID,            // $1
 				*in.PreviousVersion, // $2
 				in.NewVersion,       // $3
+				*in.RelinkSuccessor, // $4
 			)
 			if err != nil {
 				return nil, err

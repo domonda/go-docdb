@@ -1,6 +1,7 @@
 package pgstore_test
 
 import (
+	"context"
 	"database/sql"
 	"maps"
 	"slices"
@@ -1338,4 +1339,187 @@ func TestCreateDocumentVersionConcurrentAppend(t *testing.T) {
 	latest, err := store.LatestDocumentVersionInfo(ctx, docID)
 	require.NoError(t, err)
 	require.Equal(t, []string{"a.pdf", "one.pdf"}, slices.Sorted(maps.Keys(latest.Files)))
+}
+
+// TestCreateDocumentVersionConcurrentAppendOutOfOrder is
+// TestCreateDocumentVersionConcurrentAppend with the two writers reaching the
+// database in the opposite order to their version timestamps.
+//
+// A CreateVersionFunc stamps its version when it starts, not when its version
+// is inserted, so the writer holding the earlier timestamp is not the one that
+// inserts first: it is whichever finished its work first. The writer that
+// started earlier and is slower therefore inserts a version that sorts *before*
+// a version already chained off the same predecessor.
+//
+// That must be refused exactly like the in-order case. Relinking the version
+// already there — treating it as this version's successor, which is what
+// filling a deleted middle version back in does — would put the two in a chain
+// whose later half never saw the earlier half's change, losing the winner's
+// update silently and in the direction the one-successor-per-version index
+// exists to prevent. Only RestoreDocument declares that intent, via
+// CreateDocumentVersionInput.RelinkSuccessor; an append never does.
+func TestCreateDocumentVersionConcurrentAppendOutOfOrder(t *testing.T) {
+	t.Parallel()
+	ctx := pgfixtures.FixtureCtxWithTestTx(t)
+	docID := uu.IDv7()
+	companyID := uu.IDv7()
+	userID := uu.IDv7()
+
+	genesis := docdb.NewVersionTime()
+	_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+		DocID: docID, CompanyID: companyID, UserID: userID, Reason: "genesis", NewVersion: genesis,
+		AddedFiles: []*docdb.FileInfo{{Name: "a.pdf", Size: 1, Hash: docdb.ContentHash([]byte("a"))}},
+	})
+	require.NoError(t, err)
+
+	// The slow writer stamped its version first and is still working; the fast
+	// writer started later, stamped a later version, and inserts first.
+	slow := docdb.VersionTimeFrom(genesis.Time.Add(time.Second))
+	fast := docdb.VersionTimeFrom(genesis.Time.Add(2 * time.Second))
+
+	_, err = store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+		DocID: docID, CompanyID: companyID, UserID: userID, Reason: "fast writer", NewVersion: fast,
+		PreviousVersion: &genesis,
+		AddedFiles:      []*docdb.FileInfo{{Name: "fast.pdf", Size: 1, Hash: docdb.ContentHash([]byte("fast"))}},
+	})
+	require.NoError(t, err)
+
+	// The slow writer still chains off the genesis version, and its file set
+	// has no fast.pdf in it.
+	_, err = store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+		DocID: docID, CompanyID: companyID, UserID: userID, Reason: "slow writer", NewVersion: slow,
+		PreviousVersion: &genesis,
+		AddedFiles:      []*docdb.FileInfo{{Name: "slow.pdf", Size: 1, Hash: docdb.ContentHash([]byte("slow"))}},
+	})
+	require.ErrorIs(t, err, docdb.NewErrDocumentChanged(docID, genesis),
+		"a version chained off an already-succeeded predecessor must be refused whichever timestamp it holds")
+
+	// The fast writer's version is the latest, and the slow writer changed
+	// nothing: fast.pdf must not have been carried into a version that never
+	// saw it.
+	versions, err := store.DocumentVersions(ctx, docID)
+	require.NoError(t, err)
+	require.Equal(t, []docdb.VersionTime{genesis, fast}, versions)
+
+	latest, err := store.LatestDocumentVersionInfo(ctx, docID)
+	require.NoError(t, err)
+	require.Equal(t, genesis, *latest.PrevVersion)
+	require.Equal(t, []string{"a.pdf", "fast.pdf"}, slices.Sorted(maps.Keys(latest.Files)))
+}
+
+// TestCreateDocumentVersionRelinksOnlyTheNamedSuccessor covers the two rows a
+// merge-restore must not adopt while filling a version back into a chain.
+//
+// Restoring a version deleted from the middle has to take back the successor
+// DeleteDocumentVersion relinked to that version's predecessor. Nothing about
+// the stored rows identifies which one that is: a concurrent append and a
+// version that exists only on the destination of the restore both chain off
+// the same predecessor and can sort after the version being restored. Adopting
+// either leaves it naming a predecessor whose file set it never derived from —
+// silently, and in the direction the one-successor-per-version index exists to
+// prevent. So CreateDocumentVersionInput.RelinkSuccessor names the one version
+// that may move, and only that row is relinked.
+func TestCreateDocumentVersionRelinksOnlyTheNamedSuccessor(t *testing.T) {
+	t.Parallel()
+
+	// newDoc stores a genesis version and returns the ids and that version.
+	newDoc := func(t *testing.T, ctx context.Context) (docID, companyID, userID uu.ID, genesis docdb.VersionTime) {
+		t.Helper()
+		docID, companyID, userID = uu.IDv7(), uu.IDv7(), uu.IDv7()
+		genesis = docdb.NewVersionTime()
+		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "genesis", NewVersion: genesis,
+			AddedFiles: []*docdb.FileInfo{{Name: "a.pdf", Size: 1, Hash: docdb.ContentHash([]byte("a"))}},
+		})
+		require.NoError(t, err)
+		return docID, companyID, userID, genesis
+	}
+
+	t.Run("named successor is relinked", func(t *testing.T) {
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		docID, companyID, userID, genesis := newDoc(t, ctx)
+
+		// v2 is the backup's last version, stored while v1 is missing: this is
+		// the state DeleteDocumentVersion leaves behind after removing v1 from
+		// genesis->v1->v2, having relinked v2 onto genesis.
+		v1 := docdb.VersionTimeFrom(genesis.Time.Add(time.Second))
+		v2 := docdb.VersionTimeFrom(genesis.Time.Add(2 * time.Second))
+		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "v2", NewVersion: v2,
+			PreviousVersion: &genesis,
+			AddedFiles:      []*docdb.FileInfo{{Name: "c.pdf", Size: 1, Hash: docdb.ContentHash([]byte("c"))}},
+		})
+		require.NoError(t, err)
+
+		// Restoring v1 names v2, the backup's own next version, and takes it back.
+		_, err = store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "restored v1", NewVersion: v1,
+			PreviousVersion: &genesis,
+			AddedFiles:      []*docdb.FileInfo{{Name: "b.pdf", Size: 1, Hash: docdb.ContentHash([]byte("b"))}},
+			RelinkSuccessor: &v2,
+		})
+		require.NoError(t, err)
+
+		info, err := store.DocumentVersionInfo(ctx, docID, v2)
+		require.NoError(t, err)
+		require.Equal(t, v1, *info.PrevVersion, "the named successor must chain off the restored version")
+	})
+
+	t.Run("a destination-only version is kept as-is", func(t *testing.T) {
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		docID, companyID, userID, genesis := newDoc(t, ctx)
+
+		// vDest was added on the destination after the backup was taken, so it
+		// is not in the backup and Conn.RestoreDocument must keep it as-is.
+		// It chains off genesis and sorts after the version being restored,
+		// which is exactly what a relink-by-ordering would have adopted.
+		v1 := docdb.VersionTimeFrom(genesis.Time.Add(time.Second))
+		vDest := docdb.VersionTimeFrom(genesis.Time.Add(2 * time.Second))
+		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "destination-only", NewVersion: vDest,
+			PreviousVersion: &genesis,
+			AddedFiles:      []*docdb.FileInfo{{Name: "dest.pdf", Size: 1, Hash: docdb.ContentHash([]byte("dest"))}},
+		})
+		require.NoError(t, err)
+
+		// The backup is genesis->v1 only, so restoring v1 names no successor.
+		// genesis already has one, so the insert is refused rather than
+		// silently forking the chain or stealing vDest.
+		_, err = store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "restored v1", NewVersion: v1,
+			PreviousVersion: &genesis,
+			AddedFiles:      []*docdb.FileInfo{{Name: "b.pdf", Size: 1, Hash: docdb.ContentHash([]byte("b"))}},
+		})
+		require.ErrorIs(t, err, docdb.NewErrDocumentChanged(docID, genesis))
+
+		info, err := store.DocumentVersionInfo(ctx, docID, vDest)
+		require.NoError(t, err)
+		require.Equal(t, genesis, *info.PrevVersion,
+			"a version absent from the backup must keep the predecessor it derived its files from")
+	})
+
+	t.Run("naming a version that is not stored relinks nothing", func(t *testing.T) {
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		docID, companyID, userID, genesis := newDoc(t, ctx)
+
+		// The backup's next version is not on the destination yet, which is the
+		// ordinary case: a restore inserts oldest first, so every version but
+		// the last names a successor that is still to come.
+		v1 := docdb.VersionTimeFrom(genesis.Time.Add(time.Second))
+		v2 := docdb.VersionTimeFrom(genesis.Time.Add(2 * time.Second))
+		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "restored v1", NewVersion: v1,
+			PreviousVersion: &genesis,
+			AddedFiles:      []*docdb.FileInfo{{Name: "b.pdf", Size: 1, Hash: docdb.ContentHash([]byte("b"))}},
+			RelinkSuccessor: &v2,
+		})
+		require.NoError(t, err)
+
+		versions, err := store.DocumentVersions(ctx, docID)
+		require.NoError(t, err)
+		require.Equal(t, []docdb.VersionTime{genesis, v1}, versions)
+	})
 }

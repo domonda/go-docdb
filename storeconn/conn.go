@@ -548,7 +548,7 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 	// func params are already added by the WrapWithFuncParams above.
 	defer errs.RecoverPanicAsError(&err)
 
-	for _, v := range versionTimes {
+	for i, v := range versionTimes {
 		if !recreate && versionTimeIn(skipVersions, v) {
 			continue
 		}
@@ -599,6 +599,24 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		// the version's complete file set, passed as Files so the store stores
 		// it directly without looking the predecessor up to re-derive the
 		// carry-forward set.
+		//
+		// RelinkSuccessor names the backup's own next version, because this is a
+		// version of a backup being filled into whatever chain is on disk, not
+		// an append: restoring a version that was deleted from the middle has
+		// to take back the successor DeleteDocumentVersion relinked to its
+		// predecessor. Naming it is what keeps a version this restore must not
+		// touch from being adopted instead — a concurrent append, or a version
+		// the destination has and the backup does not, either of which can
+		// chain off the same predecessor and sort after v. Versions on disk
+		// that are not in doc.Versions are kept as-is (see Conn.RestoreDocument),
+		// and the backup's next version is the only row that may move. The last
+		// version of the backup has no successor to take back and names none.
+		// See CreateDocumentVersionInput.RelinkSuccessor.
+		var relinkSuccessor *docdb.VersionTime
+		if i+1 < len(versionTimes) {
+			relinkSuccessor = &versionTimes[i+1]
+		}
+
 		var vi *docdb.VersionInfo
 		vi, err = doc.VersionInfo(v)
 		if err != nil {
@@ -615,6 +633,7 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 			ModifiedFiles:   fileInfosNamed(vi.Files, vi.ModifiedFiles),
 			RemovedFiles:    vi.RemovedFiles,
 			Files:           vi.Files,
+			RelinkSuccessor: relinkSuccessor,
 		})
 		switch {
 		case err == nil:

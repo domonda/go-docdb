@@ -35,6 +35,36 @@ type CreateDocumentVersionInput struct {
 	// caller must not mutate it after the call. AddedFiles/ModifiedFiles/
 	// RemovedFiles are still recorded as the version's change lists either way.
 	Files map[string]docdb.FileInfo
+	// RelinkSuccessor, when non-nil, names the one version that must be
+	// relinked to chain off NewVersion instead of PreviousVersion, because this
+	// version is being filled back into an existing chain rather than appended
+	// to its end. DeleteDocumentVersion relinks a deleted version's successor
+	// to the deleted version's own predecessor, so restoring the removed
+	// version has to undo exactly that. Only RestoreDocument sets it, to the
+	// backup's own next version after NewVersion.
+	//
+	// The successor is named rather than found, because no property of the
+	// stored rows identifies it. Relinking whichever version happens to chain
+	// off PreviousVersion and sort after NewVersion captures two rows that are
+	// not this version's successor:
+	//
+	//   - A concurrent append. Both appends chain off the version they read as
+	//     the latest, and the second to insert must be refused (see
+	//     MetadataStore.CreateDocumentVersion), not adopted: its file set was
+	//     carried forward from before the other's change, so taking it over
+	//     drops that change from every version after it. The version
+	//     timestamps do not order the inserts either — a CreateVersionFunc
+	//     stamps its version when it starts, so a slower writer can hold the
+	//     earlier timestamp.
+	//   - A version that exists only on the destination of a merge-restore and
+	//     is absent from the backup. Conn.RestoreDocument keeps such versions
+	//     as-is; relinking one onto a restored version would leave it naming a
+	//     predecessor whose file set it never derived from.
+	//
+	// A named successor that is not stored, or is stored but does not chain off
+	// PreviousVersion, relinks nothing and is not an error: the backup's next
+	// version may simply not be on the destination yet.
+	RelinkSuccessor *docdb.VersionTime
 }
 
 // MetadataStore is the interface for storing and querying document version metadata.
@@ -56,6 +86,18 @@ type MetadataStore interface {
 	// this for such a version and treats the rejection as the expected answer.
 	// An implementation may instead verify the passed input against the stored
 	// version and return that version without inserting.
+	//
+	// A document's versions form a chain, so a version has at most one
+	// successor: a second version naming an already-used in.PreviousVersion
+	// must be refused as docdb.ErrDocumentChanged rather than stored. That is
+	// the optimistic concurrency conflict between two AddDocumentVersion calls
+	// that read the same latest version, and the loser has to redo its work
+	// from the new latest version instead of writing a file set that never saw
+	// the winner's change. An implementation must not tell the two apart by
+	// their version timestamps: a CreateVersionFunc stamps its version when it
+	// starts, so the writer that inserts second may hold either one. An
+	// existing version becomes this one's successor only when in.RelinkSuccessor
+	// names it, and only RestoreDocument names one.
 	//
 	// Returns the resulting full VersionInfo.
 	CreateDocumentVersion(ctx context.Context, in CreateDocumentVersionInput) (*docdb.VersionInfo, error)
