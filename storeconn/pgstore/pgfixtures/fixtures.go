@@ -7,11 +7,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand"
 	"os"
 	"reflect"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -99,21 +99,22 @@ func (populator *Populator) DocumentVersion(data ...map[string]any) *pgstore.Doc
 			PrevVersion:   new(docdb.VersionTimeFrom(version.Time.Add(-time.Second))),
 			CommitUserID:  uu.IDv7(),
 			CommitReason:  "test",
-			AddedFiles:    []string{randomDocName(), randomDocName()},
-			ModifiedFiles: []string{randomDocName(), randomDocName()},
-			RemovedFiles:  []string{randomDocName(), randomDocName()},
+			AddedFiles:    []string{nextDocName(), nextDocName()},
+			ModifiedFiles: []string{nextDocName(), nextDocName()},
+			RemovedFiles:  []string{nextDocName(), nextDocName()},
 		}, populator, data...)
 }
 
 func (populator *Populator) DocumentVersionFile(data ...map[string]any) *pgstore.DocumentVersionFile {
 	docVersion := createRecordIfNeeded("DocumentVersion", populator.DocumentVersion, data...)
 
+	name, size, hash := nextDocFile()
 	return insertRecordWithExtraData(
 		pgstore.DocumentVersionFile{
 			DocumentVersionID: docVersion.ID,
-			Name:              randomDocName(),
-			Size:              rand.Int63n(10000), //#nosec G404
-			Hash:              docdb.ContentHash(uu.IDv7().Bytes()),
+			Name:              name,
+			Size:              size,
+			Hash:              hash,
 			DocumentVersion:   docVersion,
 		}, populator, data...)
 }
@@ -168,8 +169,36 @@ func fillDataIntoStruct[T any](obj T, data ...map[string]any) *T {
 	return &obj
 }
 
-func randomDocName() string {
-	return fmt.Sprintf("doc%d.pdf", rand.Int31n(10000)) //#nosec G404
+// fixtureSeq numbers the file values generated below.
+//
+// They were drawn with math/rand, which makes a name unique only by luck: a
+// filename picked from rand.Int31n(10000) collided with a sibling of the same
+// document version about once in 10000 runs, and the insert then failed on
+// unique (document_version_id, name) — a flake that reads as a bug in the code
+// under test rather than in the fixture. A counter cannot collide, and it makes
+// a run reproducible: the same test produces the same names, sizes and hashes
+// every time.
+//
+// The IDs and version timestamps above are deliberately left unique-per-value
+// rather than counted. They have to be distinct across concurrently running
+// test binaries sharing one database, which a per-process counter cannot
+// guarantee. Filenames only have to be distinct within a document version,
+// whose ID is already unique, so counting them is enough.
+var fixtureSeq atomic.Int64
+
+// nextDocName returns a document filename that no other fixture of this
+// process uses.
+func nextDocName() string {
+	return fmt.Sprintf("doc%d.pdf", fixtureSeq.Add(1))
+}
+
+// nextDocFile returns the name, size and content hash of a new fixture file.
+// All three describe the same imagined content, so a fixture file is internally
+// consistent: its hash is the hash of content of exactly its size.
+func nextDocFile() (name string, size int64, hash string) {
+	name = nextDocName()
+	content := []byte("content of " + name)
+	return name, int64(len(content)), docdb.ContentHash(content)
 }
 
 func connectFromEnv(ctx context.Context) (sqldb.Connection, error) {
