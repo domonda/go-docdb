@@ -51,3 +51,48 @@ func TestConn_AddDocumentVersion_RemoveAllFilesRejected(t *testing.T) {
 	require.ErrorContains(t, err, "at least one file")
 	require.False(t, meta.deleteVersionCalled, "must be rejected before any metadata commit/rollback")
 }
+
+// TestConn_AddDocumentVersion_NoChanges verifies that a version which changes
+// neither the files nor the company is refused as docdb.ErrNoChanges, the
+// answer docdb.Conn documents for every implementation and localfsdb has always
+// given. A change-less version is also one that HashedDocument.Validate
+// rejects, so committing it would produce a document that can no longer be
+// backed up, synced or restored.
+func TestConn_AddDocumentVersion_NoChanges(t *testing.T) {
+	content := []byte("a content")
+	meta, conn, docID := singleFileBackend(content)
+
+	// Rewriting the only file with byte-identical content changes nothing.
+	err := conn.AddDocumentVersion(context.Background(), docID, uu.IDv4(), "rewrite identical content",
+		docdb.CreateVersionWriteFiles(fs.NewMemFile("a.txt", content)),
+		func(context.Context, *docdb.VersionInfo) error { return nil },
+	)
+	require.ErrorIs(t, err, docdb.ErrNoChanges)
+	require.Zero(t, meta.addedVersion, "no version may be committed for a change-less version")
+}
+
+// TestConn_AddDocumentVersion_CompanyChangeIsAChange verifies that moving a
+// document to another company is committed as a version even though it changes
+// no file: that version is what records the move in the document's history, and
+// what makes the document belong to and be listed under the new company.
+func TestConn_AddDocumentVersion_CompanyChangeIsAChange(t *testing.T) {
+	content := []byte("a content")
+	meta, conn, docID := singleFileBackend(content)
+	newCompanyID := uu.IDv4()
+	newVersion := docdb.MustVersionTimeFromString("2024-01-02_00-00-00.000")
+
+	var committed *docdb.VersionInfo
+	err := conn.AddDocumentVersion(context.Background(), docID, uu.IDv4(), "USER_DOCUMENT_MOVE",
+		func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+			return &docdb.CreateVersionResult{Version: newVersion, NewCompanyID: newCompanyID.Nullable()}, nil
+		},
+		func(_ context.Context, versionInfo *docdb.VersionInfo) error {
+			committed = versionInfo
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, newVersion, meta.addedVersion)
+	require.NotNil(t, committed)
+	require.Equal(t, newCompanyID, committed.CompanyID)
+}

@@ -297,6 +297,13 @@ func (store *postgresMetadataStore) DocumentCompanyID(ctx context.Context, docID
 	)
 }
 
+// SetDocumentCompanyID sets the company of every version of the document, not
+// only of its latest one. This store keeps no owner marker separate from the
+// versions, so the company of a document is the company of its latest version;
+// rewriting only that one would leave the versions before it naming a company
+// the document was never moved away from by a version. A move that is meant to
+// stay visible in the document's history has to be committed as a new version
+// with docdb.CreateVersionResult.NewCompanyID instead.
 func (store *postgresMetadataStore) SetDocumentCompanyID(ctx context.Context, docID, companyID uu.ID) error {
 	ids, err := db.QueryRowsAsSlice[uu.ID](ctx,
 		/* sql */ `
@@ -354,26 +361,49 @@ func (store *postgresMetadataStore) LatestDocumentVersion(ctx context.Context, d
 }
 
 func (store *postgresMetadataStore) CompanyIDs(ctx context.Context) (uu.IDSlice, error) {
-	// distinct because a company has one row per document version; ordered by
-	// company_id for a consistent order across calls.
+	// A document belongs to the company of its latest version, so only the
+	// latest version of every document is considered: a company that a document
+	// was moved away from is not reported for that document, even though its
+	// earlier versions still name it. distinct because every company has one
+	// such row per document; ordered by company_id for a consistent order
+	// across calls.
 	return db.QueryRowsAsSlice[uu.ID](ctx,
 		/* sql */ `
 			select distinct company_id
-			from docdb.document_version
+			from (
+				select distinct on (document_id) company_id
+				from docdb.document_version
+				order by document_id, version desc
+			) latest
 			order by company_id
 		`,
 	)
 }
 
 func (store *postgresMetadataStore) CompanyDocumentIDs(ctx context.Context, companyID uu.ID) (uu.IDSlice, error) {
-	// distinct because a document has one row per version; ordered by
-	// document_id for a consistent order across calls.
+	// A document belongs to the company of its latest version, so a document
+	// moved to another company is no longer listed under the previous one, even
+	// though the versions committed before the move still name it. Selecting
+	// every row with the company and deduplicating by document instead would
+	// list a moved document under both companies, and a bulk operation over a
+	// company would then process documents it does not own.
+	//
+	// The company predicate is applied first so only the rows of the passed
+	// company are checked for being the latest version of their document
+	// (document_version_company_id_idx), rather than reducing the whole table
+	// to one row per document. Ordered by document_id for a consistent order
+	// across calls.
 	return db.QueryRowsAsSlice[uu.ID](ctx,
 		/* sql */ `
-			select distinct document_id
-			from docdb.document_version
-			where company_id = $1
-			order by document_id
+			select dv.document_id
+			from docdb.document_version dv
+			where dv.company_id = $1
+				and dv.version = (
+					select max(later.version)
+					from docdb.document_version later
+					where later.document_id = dv.document_id
+				)
+			order by dv.document_id
 		`,
 		companyID, // $1
 	)

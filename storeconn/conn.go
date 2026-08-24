@@ -347,6 +347,17 @@ func (c *conn) AddDocumentVersion(
 	deltas := docdb.VersionInfo{Files: resultingFiles}
 	deltas.SetFileDeltas(latestVersionInfo.Files)
 
+	// A version with the same files as its predecessor changes nothing, unless
+	// it moves the document to another company: that is how a move is recorded,
+	// as a version that changes nothing but the company. localfsdb has always
+	// refused a change-less version this way, and docdb.Conn documents it as
+	// the answer of every implementation; a change-less version created here
+	// was also one that HashedDocument.Validate rejects, so it could never be
+	// backed up, synced or restored again.
+	if deltas.EqualFiles(latestVersionInfo) && companyID == latestVersionInfo.CompanyID {
+		return docdb.ErrNoChanges
+	}
+
 	// Copy the previous version into a local before taking its address, rather
 	// than aliasing the fetched struct's field into the new version's metadata.
 	prevVersion := latestVersionInfo.Version
@@ -489,16 +500,19 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		// Company ownership is the MetadataStore's, so the mismatch check is
 		// gated on that store knowing the document rather than on the
 		// DocumentStore holding blobs for it.
+		//
+		// The stored company is compared against the company the backup names
+		// for the latest stored version, not against the backup's current
+		// company, so a backup whose newer versions move the document to
+		// another company restores that move instead of being refused as a
+		// mismatch.
 		if len(metadataVersions) > 0 {
 			currCompanyID, companyErr := c.DocumentCompanyID(ctx, doc.ID)
 			if companyErr != nil {
 				return companyErr
 			}
-			if currCompanyID != doc.CompanyID {
-				return errs.Errorf(
-					"cannot restore document %s into existing document with different companyID: backup %s != on-disk %s",
-					doc.ID, doc.CompanyID, currCompanyID,
-				)
+			if companyErr = docdb.CheckRestoreCompanyID(doc, metadataVersions, currCompanyID); companyErr != nil {
+				return companyErr
 			}
 		}
 
@@ -563,7 +577,11 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		// precisely what the merge path below expects and handles, so such a
 		// version goes there even when the DocumentStore is still empty.
 		if !docExists && !versionInMetadata {
-			err = c.CreateDocument(ctx, doc.CompanyID, doc.ID, hv.CommitUserID, hv.CommitReason, v, files, noopOnNew)
+			// Created with the company of the genesis version, not the
+			// document's current one: a document moved between companies keeps
+			// the company of every version it was committed under, and the
+			// versions restored after this one carry the move forward.
+			err = c.CreateDocument(ctx, doc.VersionCompanyID(v), doc.ID, hv.CommitUserID, hv.CommitReason, v, files, noopOnNew)
 			if err != nil {
 				return err
 			}

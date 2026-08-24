@@ -19,12 +19,22 @@ type Conn interface {
 
 	// CompanyDocumentIDs returns the IDs of all documents of a company in the
 	// database, sorted by ID for a consistent order.
+	//
+	// A document is listed under the company of its latest version only. A
+	// document moved between companies by a new version that names another
+	// company is listed under that company from then on, and no longer under
+	// the previous one, even though its earlier versions still name it.
 	CompanyDocumentIDs(ctx context.Context, companyID uu.ID) (uu.IDSlice, error)
 
-	// DocumentCompanyID returns the companyID for a docID
+	// DocumentCompanyID returns the companyID for a docID, which is the company
+	// of the document's latest version.
 	DocumentCompanyID(ctx context.Context, docID uu.ID) (companyID uu.ID, err error)
 
-	// SetDocumentCompanyID changes the companyID for a document
+	// SetDocumentCompanyID changes the companyID for a document without
+	// committing a version. Prefer moving a document between companies with a
+	// new version created by AddDocumentVersion with
+	// CreateVersionResult.NewCompanyID, which records the move in the
+	// document's history instead of changing its owner behind it.
 	SetDocumentCompanyID(ctx context.Context, docID, companyID uu.ID) error
 
 	// DocumentVersions returns all version timestamps of a document in ascending order.
@@ -56,6 +66,10 @@ type Conn interface {
 	// and returns the left over versions.
 	// If the version is the only version of the document,
 	// then the document will be deleted and no leftVersions are returned.
+	// Deleting the latest version of a document that was moved between
+	// companies re-assigns the document to the company of the version that
+	// becomes the latest one, so it is always owned by and listed under the
+	// company of its latest version.
 	// Returns wrapped ErrDocumentNotFound and ErrDocumentVersionNotFound
 	// in case of such error conditions.
 	// DeleteDocumentVersion should not be used for normal docdb operations,
@@ -98,7 +112,9 @@ type Conn interface {
 	//
 	// Returns wrapped ErrDocumentNotFound if the document does not exist.
 	// Returns wrapped ErrNoChanges if the new version has identical files
-	// compared to the previous version.
+	// compared to the previous version and does not change the company.
+	// A version that only changes the company is how a document is moved
+	// between companies and is not a change-less version.
 	AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) error
 
 	// AddMultiDocumentVersion adds a new version to multiple existing documents as atomic operation.
@@ -116,6 +132,13 @@ type Conn interface {
 	// deleted first (including its company-document marker), then recreated
 	// from doc. The on-disk CompanyID after the call equals doc.CompanyID.
 	//
+	// Every version is written with the company of that version
+	// (HashedDocument.VersionCompanyID), so a document that was moved between
+	// companies is restored with its move history rather than with every
+	// version filed under its current company. doc.Validate() requires the
+	// latest version to name doc.CompanyID, so the restored document is owned
+	// by and listed under doc.CompanyID.
+	//
 	// WARNING: recreate is NOT atomic with respect to the pre-existing
 	// document. It is deleted before the replacement is written, so if the
 	// restore fails partway the original is gone and the rollback only removes
@@ -128,9 +151,12 @@ type Conn interface {
 	// If recreate is false (additive merge):
 	//   - If the document does not exist on disk, it is created from doc —
 	//     identical effect to recreate=true on a non-existing document.
-	//   - If the document exists, its on-disk CompanyID must equal
-	//     doc.CompanyID. On mismatch the call returns an error and changes
-	//     nothing.
+	//   - If the document exists, its on-disk CompanyID must equal the company
+	//     doc names for the latest version on disk (CheckRestoreCompanyID). On
+	//     mismatch the call returns an error and changes nothing. Newer
+	//     versions in doc that move the document to another company are
+	//     restored as the move they are, and the document ends up owned by the
+	//     company of its latest version.
 	//   - For every version v in doc.Versions: if v is already stored with all
 	//     of its files it is kept as-is (no overwrite, no error); otherwise
 	//     what is missing is written.

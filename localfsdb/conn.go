@@ -570,6 +570,19 @@ func (c *Conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version d
 
 		e = uuiddir.RemoveDir(c.documentsDir, docDir)
 		err = errors.Join(err, e)
+	} else {
+		// A document belongs to the company of its latest version, so deleting
+		// the latest version of a document that was moved between companies
+		// re-assigns it to the company of the version that becomes the latest
+		// one — otherwise the document would stay listed under a company that
+		// none of its remaining versions names. setDocumentCompanyID does
+		// nothing when that company is the one the document already has, which
+		// is the case for every delete that does not undo a move.
+		latestVersionInfo, _, e := c.latestDocumentVersionInfo(ctx, docID)
+		if e == nil {
+			e = c.setDocumentCompanyID(ctx, docID, latestVersionInfo.CompanyID)
+		}
+		err = errors.Join(err, e)
 	}
 
 	return leftVersions, err
@@ -871,7 +884,10 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 		return errs.Errorf("cannot remove all files of document %s: every version must contain at least one file", docID)
 	}
 
-	if versionInfo.EqualFiles(prevVersionInfo) {
+	// A version with the same files as its predecessor changes nothing, unless
+	// it moves the document to another company: that is how a move is recorded,
+	// as a version that changes nothing but the company.
+	if versionInfo.EqualFiles(prevVersionInfo) && companyID == prevVersionInfo.CompanyID {
 		return docdb.ErrNoChanges
 	}
 
@@ -1029,13 +1045,15 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		if err != nil {
 			return err
 		}
-		if currCompanyID != doc.CompanyID {
-			return errs.Errorf(
-				"cannot restore document %s into existing document with different companyID: backup %s != on-disk %s",
-				doc.ID, doc.CompanyID, currCompanyID,
-			)
-		}
 		existingVersions, err = c.documentVersions(ctx, doc.ID)
+		if err != nil {
+			return err
+		}
+		// Compared against the company the backup names for the latest version
+		// on disk, not against the backup's current company, so a backup whose
+		// newer versions move the document to another company restores that
+		// move instead of being refused as a mismatch.
+		err = docdb.CheckRestoreCompanyID(doc, existingVersions, currCompanyID)
 		if err != nil {
 			return err
 		}
@@ -1105,9 +1123,12 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 			}
 		}
 
+		// Every version is written with the company of that version, so a
+		// document moved between companies keeps its move history instead of
+		// having every version filed under its current company.
 		versionInfo, viErr := newVersionInfo(
 			ctx,
-			doc.CompanyID,
+			doc.VersionCompanyID(v),
 			doc.ID,
 			v,
 			prevVersion,
@@ -1129,6 +1150,24 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		cur := v
 		prevVersion = &cur
 		prevVersionDir = versionDir
+	}
+
+	// The document belongs to the company of its latest version, which merging
+	// a backup into an existing document can move: its newer versions can be
+	// the ones that moved the document, leaving the company marker naming the
+	// company from before the move. Only the merge path needs this — a document
+	// created by this call had its marker written as doc.CompanyID above, which
+	// doc.Validate() requires to be the company of the backup's latest version.
+	//
+	// Done as the last step, after which nothing can fail, because the deferred
+	// rollback above only removes the versions and files this call created, not
+	// a company re-assignment.
+	if docExisted {
+		latestVersionInfo, _, err := c.latestDocumentVersionInfo(ctx, doc.ID)
+		if err != nil {
+			return err
+		}
+		return c.setDocumentCompanyID(ctx, doc.ID, latestVersionInfo.CompanyID)
 	}
 	return nil
 }

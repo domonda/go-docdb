@@ -105,6 +105,7 @@ func TestReadHashedDocument_StorageMetadataMismatch(t *testing.T) {
 func TestHashedDocument_Validate(t *testing.T) {
 	validID := uu.IDv4()
 	validCompanyID := uu.IDv4()
+	otherCompanyID := uu.IDv4()
 	validVersion := MustVersionTimeFromString("2024-01-01_00-00-00.000")
 	validVersion2 := MustVersionTimeFromString("2024-01-01_00-00-00.001")
 	var zeroVersion VersionTime
@@ -191,6 +192,48 @@ func TestHashedDocument_Validate(t *testing.T) {
 			},
 			wantErr:     true,
 			errContains: "no change",
+		},
+		{
+			// A document is moved between companies by a version that changes
+			// nothing but the company, so identical files are only a
+			// change-less version when the company is unchanged too.
+			name: "identical consecutive versions with a company change are valid",
+			doc: &HashedDocument{
+				ID: validID, CompanyID: otherCompanyID, HashedFiles: validHashedFiles(),
+				Versions: map[VersionTime]*HashedVersion{
+					validVersion:  {CompanyID: validCompanyID, CommitUserID: uu.IDv4(), CommitReason: "init", FileHashes: map[string]string{"a.txt": hash}},
+					validVersion2: {CompanyID: otherCompanyID, CommitUserID: uu.IDv4(), CommitReason: "moved to another company", FileHashes: map[string]string{"a.txt": hash}},
+				},
+			},
+		},
+		{
+			// A document is owned by the company of its latest version, so a
+			// backup that names another company as the document's current one
+			// contradicts itself: restoring it into a store that derives the
+			// owner from the latest version would file it under a different
+			// company than one that keeps a separate owner marker.
+			name: "latest version with another company than the document is invalid",
+			doc: &HashedDocument{
+				ID: validID, CompanyID: validCompanyID, HashedFiles: validHashedFiles(),
+				Versions: map[VersionTime]*HashedVersion{
+					validVersion:  {CommitUserID: uu.IDv4(), CommitReason: "init", FileHashes: map[string]string{"a.txt": hash}},
+					validVersion2: {CompanyID: otherCompanyID, CommitUserID: uu.IDv4(), CommitReason: "moved", FileHashes: map[string]string{"a.txt": hash, "b.txt": hash}},
+				},
+			},
+			wantErr:     true,
+			errContains: "but the document has",
+		},
+		{
+			// Versions before the latest one may name any company: that is the
+			// history of a document that was moved.
+			name: "earlier version with another company is valid",
+			doc: &HashedDocument{
+				ID: validID, CompanyID: validCompanyID, HashedFiles: validHashedFiles(),
+				Versions: map[VersionTime]*HashedVersion{
+					validVersion:  {CompanyID: otherCompanyID, CommitUserID: uu.IDv4(), CommitReason: "init", FileHashes: map[string]string{"a.txt": hash}},
+					validVersion2: {CompanyID: validCompanyID, CommitUserID: uu.IDv4(), CommitReason: "moved back", FileHashes: map[string]string{"a.txt": hash, "b.txt": hash}},
+				},
+			},
 		},
 		{
 			name: "invalid version time",
@@ -346,4 +389,152 @@ func TestHashedDocument_VersionInfo_FileDeltas(t *testing.T) {
 		},
 		info.Files,
 	)
+}
+
+// TestHashedDocument_MovedBetweenCompanies covers the per-version company of a
+// document that was moved between companies. A move is committed as a new
+// version naming the new company, so a backup has to carry the company of every
+// version: restoring one that files every version under the document's current
+// company erases the move from the document's history, and makes the restored
+// metadata differ from what the source recorded — which a store that verifies
+// already stored versions against a restore rejects.
+func TestHashedDocument_MovedBetweenCompanies(t *testing.T) {
+	var (
+		v0 = MustVersionTimeFromString("2024-01-01_00-00-00.000")
+		v1 = MustVersionTimeFromString("2024-01-02_00-00-00.000")
+		v2 = MustVersionTimeFromString("2024-01-03_00-00-00.000")
+
+		data     = []byte("hello")
+		hash     = ContentHash(data)
+		moreData = []byte("more")
+		moreHash = ContentHash(moreData)
+
+		prevCompanyID = uu.IDv4()
+		companyID     = uu.IDv4()
+
+		doc = &HashedDocument{
+			ID:          uu.IDv4(),
+			CompanyID:   companyID,
+			HashedFiles: map[string][]byte{hash: data, moreHash: moreData},
+			Versions: map[VersionTime]*HashedVersion{
+				// Committed before the move, under the previous company.
+				v0: {CompanyID: prevCompanyID, CommitUserID: uu.IDv4(), CommitReason: "init", FileHashes: map[string]string{"a.txt": hash}},
+				// The move: same files, new company.
+				v1: {CompanyID: companyID, CommitUserID: uu.IDv4(), CommitReason: "moved to another company", FileHashes: map[string]string{"a.txt": hash}},
+				// Committed after the move, company left unset to inherit.
+				v2: {CommitUserID: uu.IDv4(), CommitReason: "added a file", FileHashes: map[string]string{"a.txt": hash, "b.txt": moreHash}},
+			},
+		}
+	)
+
+	require.NoError(t, doc.Validate())
+
+	t.Run("VersionCompanyID reports the company of each version", func(t *testing.T) {
+		require.Equal(t, prevCompanyID, doc.VersionCompanyID(v0))
+		require.Equal(t, companyID, doc.VersionCompanyID(v1))
+		// An unset version company inherits the document's company.
+		require.Equal(t, companyID, doc.VersionCompanyID(v2))
+	})
+
+	t.Run("VersionInfo carries the company of the version", func(t *testing.T) {
+		for _, tt := range []struct {
+			version   VersionTime
+			companyID uu.ID
+		}{
+			{v0, prevCompanyID},
+			{v1, companyID},
+			{v2, companyID},
+		} {
+			info, err := doc.VersionInfo(tt.version)
+			require.NoError(t, err)
+			require.Equal(t, tt.companyID, info.CompanyID, "company of version %s", tt.version)
+		}
+	})
+
+	t.Run("CheckRestoreCompanyID compares at the latest version of the destination", func(t *testing.T) {
+		// A destination that stopped before the move is owned by the previous
+		// company: restoring the move into it is the point of the restore, not
+		// a mismatch.
+		require.NoError(t, CheckRestoreCompanyID(doc, []VersionTime{v0}, prevCompanyID))
+		// The same destination owned by the company of a version it does not
+		// have is a document of another company under the same ID.
+		require.Error(t, CheckRestoreCompanyID(doc, []VersionTime{v0}, companyID))
+		// A destination that has the move is owned by the new company.
+		require.NoError(t, CheckRestoreCompanyID(doc, []VersionTime{v0, v1}, companyID))
+		require.Error(t, CheckRestoreCompanyID(doc, []VersionTime{v0, v1}, prevCompanyID))
+		// A version the backup does not have falls back to the document's
+		// current company.
+		require.NoError(t, CheckRestoreCompanyID(doc, []VersionTime{MustVersionTimeFromString("2030-01-01_00-00-00.000")}, companyID))
+	})
+}
+
+// TestReadHashedDocument_MovedBetweenCompanies covers that a backup keeps the
+// company every version was committed with, and that the latest version is read
+// as owned by the company the Conn reports for the document: an implementation
+// with a separate owner marker can have that marker point at a company its
+// latest version does not name (SetDocumentCompanyID moves the marker without
+// committing a version), while an implementation without such a marker derives
+// the owner from the latest version — so the two would disagree about who owns
+// the restored document.
+func TestReadHashedDocument_MovedBetweenCompanies(t *testing.T) {
+	ctx := context.Background()
+	docID := uu.IDv4()
+	prevCompanyID := uu.IDv4()
+	companyID := uu.IDv4()
+	markerCompanyID := uu.IDv4()
+
+	v0 := MustVersionTimeFromString("2024-01-01_00-00-00.000")
+	v1 := MustVersionTimeFromString("2024-01-02_00-00-00.000")
+
+	data := []byte("hello world")
+	info := FileInfo{Name: "a.txt", Size: int64(len(data)), Hash: ContentHash(data)}
+
+	// newMock serves two versions committed under prevCompanyID and companyID
+	// while reporting docCompanyID as the document's company.
+	newMock := func(docCompanyID uu.ID) *MockConn {
+		return &MockConn{
+			DocumentCompanyIDMock: func(context.Context, uu.ID) (uu.ID, error) {
+				return docCompanyID, nil
+			},
+			DocumentVersionsMock: func(context.Context, uu.ID) ([]VersionTime, error) {
+				return []VersionTime{v0, v1}, nil
+			},
+			DocumentVersionInfoMock: func(_ context.Context, _ uu.ID, version VersionTime) (*VersionInfo, error) {
+				versionCompanyID := prevCompanyID
+				if version.Equal(v1) {
+					versionCompanyID = companyID
+				}
+				return &VersionInfo{
+					CompanyID: versionCompanyID,
+					DocID:     docID,
+					Version:   version,
+					Files:     map[string]FileInfo{"a.txt": info},
+				}, nil
+			},
+			DocumentVersionFileProviderMock: func(context.Context, uu.ID, VersionTime) (FileProvider, error) {
+				return NewFileProvider(fs.NewMemFile("a.txt", data)), nil
+			},
+		}
+	}
+
+	t.Run("every version keeps the company it was committed with", func(t *testing.T) {
+		doc, err := ReadHashedDocument(ctx, newMock(companyID), docID)
+		require.NoError(t, err)
+		require.NoError(t, doc.Validate())
+		require.Equal(t, companyID, doc.CompanyID)
+		require.Equal(t, prevCompanyID, doc.VersionCompanyID(v0))
+		require.Equal(t, companyID, doc.VersionCompanyID(v1))
+	})
+
+	t.Run("the latest version is owned by the company the Conn reports", func(t *testing.T) {
+		doc, err := ReadHashedDocument(ctx, newMock(markerCompanyID), docID)
+		require.NoError(t, err)
+		// The backup must be restorable, which requires the document and its
+		// latest version to name the same company.
+		require.NoError(t, doc.Validate())
+		require.Equal(t, markerCompanyID, doc.CompanyID)
+		require.Equal(t, markerCompanyID, doc.VersionCompanyID(v1))
+		// Versions before the latest one keep what they recorded.
+		require.Equal(t, prevCompanyID, doc.VersionCompanyID(v0))
+	})
 }

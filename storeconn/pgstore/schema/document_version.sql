@@ -27,6 +27,10 @@ create table docdb.document_version (
 );
 
 create index document_version_document_id_idx on docdb.document_version (document_id);
+-- CompanyDocumentIDs and CompanyIDs list a document under the company of its
+-- latest version, which starts from the rows of the passed company: without
+-- this index that is a sequential scan of every version of every document.
+create index document_version_company_id_idx on docdb.document_version (company_id);
 create index document_version_version_idx on docdb.document_version (version);
 create index document_version_commit_user_id_idx on docdb.document_version (commit_user_id);
 create index document_version_commit_reason_idx on docdb.document_version (commit_reason);

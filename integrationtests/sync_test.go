@@ -124,6 +124,7 @@ func assertSyncedDocEqual(t *testing.T, ctx context.Context, conn docdb.Conn, wa
 	for v, wantVer := range want.Versions {
 		gotVer, ok := got.Versions[v]
 		require.Truef(t, ok, "version %s missing after sync", v)
+		require.Equal(t, wantVer.CompanyID, gotVer.CompanyID)
 		require.Equal(t, wantVer.CommitUserID, gotVer.CommitUserID)
 		require.Equal(t, wantVer.CommitReason, gotVer.CommitReason)
 		require.Equal(t, wantVer.FileHashes, gotVer.FileHashes)
@@ -444,4 +445,135 @@ func TestSyncDocument_ResumesInterruptedCopyWithoutVersionsExistMode(t *testing.
 	// The transaction must have survived the rejected insert, so the document
 	// is still readable through it and holds every file again.
 	assertSyncedDocEqual(t, ctx, dstConn, want)
+}
+
+// moveDocumentToCompany adds a version to docID that changes nothing but the
+// company: this is how a document is moved between companies, and it is what
+// keeps the move visible in the document's history.
+func moveDocumentToCompany(t *testing.T, ctx context.Context, conn docdb.Conn, docID, userID, companyID uu.ID, version docdb.VersionTime) {
+	t.Helper()
+
+	err := conn.AddDocumentVersion(
+		ctx, docID, userID, "USER_DOCUMENT_MOVE",
+		func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+			return &docdb.CreateVersionResult{Version: version, NewCompanyID: companyID.Nullable()}, nil
+		},
+		func(context.Context, *docdb.VersionInfo) error { return nil },
+	)
+	require.NoError(t, err)
+}
+
+// TestSyncMovedDocument syncs a document that was moved between companies for
+// every combination of localfsdb and storeconn as source and destination.
+//
+// A move is a version that names the new company, so the versions before it
+// keep naming the previous one. A sync that writes the document's current
+// company into every version instead would erase the move from the restored
+// document's history, and the restored metadata would differ from what the
+// source recorded — which a destination that verifies already stored versions
+// against the restore rejects, aborting the sync of the whole company at the
+// first document that was ever moved.
+func TestSyncMovedDocument(t *testing.T) {
+	for _, src := range syncBackends() {
+		for _, dst := range syncBackends() {
+			t.Run(src.name+" to "+dst.name, func(t *testing.T) {
+				ctx := syncTestContext(t, src, dst)
+				srcConn := src.newConn(t)
+				dstConn := dst.newConn(t)
+
+				prevCompanyID := uu.IDv7()
+				companyID := uu.IDv7()
+				docID := uu.IDv7()
+				userID := uu.IDv7()
+
+				createSyncTestDoc(t, ctx, srcConn, prevCompanyID, docID, userID, "moved-doc")
+				moveDocumentToCompany(t, ctx, srcConn, docID, userID, companyID,
+					docdb.MustVersionTimeFromString("2024-01-01_00-00-00.002"))
+
+				want, err := docdb.ReadHashedDocument(ctx, srcConn, docID)
+				require.NoError(t, err)
+				require.Equal(t, companyID, want.CompanyID)
+				require.Equal(t, prevCompanyID, want.VersionCompanyID(docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")))
+
+				err = docdb.SyncDocument(ctx, srcConn, dstConn, docID, true)
+				require.NoError(t, err)
+
+				// Every version keeps the company it was committed with.
+				assertSyncedDocEqual(t, ctx, dstConn, want)
+
+				// The document belongs to and is listed under the company of
+				// its latest version only.
+				dstCompanyID, err := dstConn.DocumentCompanyID(ctx, docID)
+				require.NoError(t, err)
+				require.Equal(t, companyID, dstCompanyID)
+
+				docIDs, err := dstConn.CompanyDocumentIDs(ctx, companyID)
+				require.NoError(t, err)
+				require.Contains(t, docIDs, docID)
+
+				docIDs, err = dstConn.CompanyDocumentIDs(ctx, prevCompanyID)
+				require.NoError(t, err)
+				require.NotContains(t, docIDs, docID, "the company the document was moved away from must not list it")
+			})
+		}
+	}
+}
+
+// TestSyncMovedDocumentIntoDestinationBeforeTheMove syncs a document that was
+// moved after an earlier sync of the same document already copied it under its
+// previous company — the state every incremental sync of an active company runs
+// into.
+//
+// The destination is still owned by the previous company, so a restore that
+// compares the destination's company against the backup's current one would
+// refuse the very move it is there to copy. The comparison is against the
+// company the backup names for the latest version the destination has instead,
+// and the destination follows the move once the newer versions are restored.
+func TestSyncMovedDocumentIntoDestinationBeforeTheMove(t *testing.T) {
+	for _, src := range syncBackends() {
+		for _, dst := range syncBackends() {
+			if src.storeconn && dst.storeconn {
+				// Source and destination share one metadata store, so the
+				// destination cannot be behind the source's move.
+				continue
+			}
+			t.Run(src.name+" to "+dst.name, func(t *testing.T) {
+				ctx := syncTestContext(t, src, dst)
+				srcConn := src.newConn(t)
+				dstConn := dst.newConn(t)
+
+				prevCompanyID := uu.IDv7()
+				companyID := uu.IDv7()
+				docID := uu.IDv7()
+				userID := uu.IDv7()
+
+				createSyncTestDoc(t, ctx, srcConn, prevCompanyID, docID, userID, "moved-doc")
+
+				// First sync: the destination gets the document as it is before
+				// the move, owned by the previous company.
+				require.NoError(t, docdb.SyncDocument(ctx, srcConn, dstConn, docID, false))
+				dstCompanyID, err := dstConn.DocumentCompanyID(ctx, docID)
+				require.NoError(t, err)
+				require.Equal(t, prevCompanyID, dstCompanyID)
+
+				moveDocumentToCompany(t, ctx, srcConn, docID, userID, companyID,
+					docdb.MustVersionTimeFromString("2024-01-01_00-00-00.002"))
+
+				// Second sync: the move is copied like any other new version.
+				require.NoError(t, docdb.SyncDocument(ctx, srcConn, dstConn, docID, false))
+
+				want, err := docdb.ReadHashedDocument(ctx, srcConn, docID)
+				require.NoError(t, err)
+				assertSyncedDocEqual(t, ctx, dstConn, want)
+
+				dstCompanyID, err = dstConn.DocumentCompanyID(ctx, docID)
+				require.NoError(t, err)
+				require.Equal(t, companyID, dstCompanyID, "the destination must follow the move")
+
+				docIDs, err := dstConn.CompanyDocumentIDs(ctx, prevCompanyID)
+				require.NoError(t, err)
+				require.NotContains(t, docIDs, docID)
+			})
+		}
+	}
 }

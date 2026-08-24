@@ -29,20 +29,24 @@ func CompanyIDs(ctx context.Context) (companyIDs uu.IDSlice, err error) {
 
 // CompanyDocumentIDs returns the IDs of all documents of a company,
 // sorted by ID for a consistent order.
+// A document is listed under the company of its latest version only.
 func CompanyDocumentIDs(ctx context.Context, companyID uu.ID) (docIDs uu.IDSlice, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, companyID)
 
 	return GetConn().CompanyDocumentIDs(ctx, companyID)
 }
 
-// DocumentCompanyID returns the companyID for a docID
+// DocumentCompanyID returns the companyID for a docID,
+// which is the company of the document's latest version.
 func DocumentCompanyID(ctx context.Context, docID uu.ID) (companyID uu.ID, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
 	return GetConn().DocumentCompanyID(ctx, docID)
 }
 
-// SetDocumentCompanyID changes the companyID for a document
+// SetDocumentCompanyID changes the companyID for a document without committing
+// a version. Prefer moving a document between companies with a new version
+// created by AddDocumentVersion with CreateVersionResult.NewCompanyID.
 func SetDocumentCompanyID(ctx context.Context, docID, companyID uu.ID) (err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, companyID)
 
@@ -215,6 +219,9 @@ func DeleteDocument(ctx context.Context, docID uu.ID) (err error) {
 // and returns the left over versions.
 // If the version is the only version of the document,
 // then the document will be deleted and no leftVersions are returned.
+// Deleting the latest version of a document that was moved between companies
+// re-assigns the document to the company of the version that becomes the
+// latest one.
 // Returns wrapped ErrDocumentNotFound and ErrDocumentVersionNotFound
 // in case of such error conditions.
 // DeleteDocumentVersion should not be used for normal docdb operations,
@@ -260,7 +267,7 @@ func CreateDocument(ctx context.Context, companyID, docID, userID uu.ID, reason 
 //
 // Returns wrapped ErrDocumentNotFound if the document does not exist.
 // Returns wrapped ErrNoChanges if the new version has identical files
-// compared to the previous version.
+// compared to the previous version and does not change the company.
 func AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, createVersion CreateVersionFunc, onNewVersion OnNewVersionFunc) (err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, userID, reason, createVersion, onNewVersion)
 

@@ -1140,3 +1140,86 @@ func TestCreateDocumentHiddenFilesOnlyRejected(t *testing.T) {
 	require.Equal(t, []string{"invoice.pdf"}, slices.Sorted(maps.Keys(newVersion.Files)))
 	require.Equal(t, []string{"invoice.pdf"}, newVersion.AddedFiles)
 }
+
+// TestMoveDocumentBetweenCompanies covers moving a document between companies
+// with a new version, which is what records the move in the document's history:
+// the versions before it keep naming the previous company, and only the latest
+// version decides which company the document belongs to and is listed under.
+func TestMoveDocumentBetweenCompanies(t *testing.T) {
+	var (
+		ctx           = t.Context()
+		conn          = localfsdb.NewTestConn(t)
+		prevCompanyID = uu.IDFrom("11111111-1111-4111-8111-111111111111")
+		companyID     = uu.IDFrom("22222222-2222-4222-8222-222222222222")
+		docID         = uu.IDFrom("33333333-3333-4333-8333-333333333333")
+		userID        = uu.IDFrom("ce6f0867-0172-4ffc-a0c0-c5878b921171")
+		v0            = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+		v1            = docdb.MustVersionTimeFromString("2024-01-02_00-00-00.000")
+		noopOnNew     = func(context.Context, *docdb.VersionInfo) error { return nil }
+	)
+
+	require.NoError(t, conn.CreateDocument(
+		ctx, prevCompanyID, docID, userID, "init", v0,
+		newTestMemFiles("a.txt"), noopOnNew,
+	))
+
+	// A move changes nothing but the company: no file is written or removed.
+	moveToCompany := func(companyID uu.ID, version docdb.VersionTime) docdb.CreateVersionFunc {
+		return func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+			return &docdb.CreateVersionResult{Version: version, NewCompanyID: companyID.Nullable()}, nil
+		}
+	}
+
+	t.Run("a version that only changes the company is not a change-less version", func(t *testing.T) {
+		err := conn.AddDocumentVersion(ctx, docID, userID, "USER_DOCUMENT_MOVE", moveToCompany(companyID, v1), noopOnNew)
+		require.NoError(t, err, "a move must not be rejected as ErrNoChanges")
+
+		versions, err := conn.DocumentVersions(ctx, docID)
+		require.NoError(t, err)
+		require.Equal(t, []docdb.VersionTime{v0, v1}, versions)
+	})
+
+	t.Run("the versions before the move keep the previous company", func(t *testing.T) {
+		v0Info, err := conn.DocumentVersionInfo(ctx, docID, v0)
+		require.NoError(t, err)
+		require.Equal(t, prevCompanyID, v0Info.CompanyID)
+
+		v1Info, err := conn.DocumentVersionInfo(ctx, docID, v1)
+		require.NoError(t, err)
+		require.Equal(t, companyID, v1Info.CompanyID)
+	})
+
+	t.Run("the document belongs to and is listed under the company of its latest version", func(t *testing.T) {
+		docCompanyID, err := conn.DocumentCompanyID(ctx, docID)
+		require.NoError(t, err)
+		require.Equal(t, companyID, docCompanyID)
+
+		docIDs, err := conn.CompanyDocumentIDs(ctx, companyID)
+		require.NoError(t, err)
+		require.Equal(t, uu.IDSlice{docID}, docIDs)
+
+		// The company the document was moved away from must not list it any
+		// more, even though the version before the move still names it.
+		docIDs, err = conn.CompanyDocumentIDs(ctx, prevCompanyID)
+		require.NoError(t, err)
+		require.Nil(t, docIDs)
+	})
+
+	t.Run("deleting the move re-assigns the document to the previous company", func(t *testing.T) {
+		leftVersions, err := conn.DeleteDocumentVersion(ctx, docID, v1)
+		require.NoError(t, err)
+		require.Equal(t, []docdb.VersionTime{v0}, leftVersions)
+
+		docCompanyID, err := conn.DocumentCompanyID(ctx, docID)
+		require.NoError(t, err)
+		require.Equal(t, prevCompanyID, docCompanyID, "the document must follow the company of its new latest version")
+
+		docIDs, err := conn.CompanyDocumentIDs(ctx, prevCompanyID)
+		require.NoError(t, err)
+		require.Equal(t, uu.IDSlice{docID}, docIDs)
+
+		docIDs, err = conn.CompanyDocumentIDs(ctx, companyID)
+		require.NoError(t, err)
+		require.Nil(t, docIDs, "the document must no longer be listed under the company of the deleted version")
+	})
+}

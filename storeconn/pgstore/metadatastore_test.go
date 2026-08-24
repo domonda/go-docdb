@@ -777,6 +777,36 @@ func TestCompanyDocumentIDs(t *testing.T) {
 		require.NoError(t, err)
 		require.Nil(t, docIDs)
 	})
+
+	// A document is moved between companies by a new version naming the new
+	// company, so the versions before the move keep naming the previous one.
+	// Listing every company a version names would report the document for both
+	// companies, and a bulk operation over the previous company - a backup, a
+	// migration to another store - would process a document it no longer owns.
+	t.Run("Returns a moved document only for the company of its latest version", func(t *testing.T) {
+		// given
+		t.Parallel()
+		populator := pgfixtures.FixturePopulator(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		prevCompanyID := uu.IDFrom("a3c60853-022c-403d-85cc-6ea146ec6a4a")
+		companyID := uu.IDFrom("c7e67e60-9548-43c6-83be-55cb736a5761")
+		version1 := populator.DocumentVersion(map[string]any{"CompanyID": prevCompanyID})
+		populator.DocumentVersion(map[string]any{
+			"DocumentID": version1.DocumentID,
+			"CompanyID":  companyID,
+			"Version":    docdb.VersionTimeFrom(time.Now().Add(time.Second)),
+		})
+
+		// when
+		movedToDocIDs, err := store.CompanyDocumentIDs(ctx, companyID)
+		require.NoError(t, err)
+		movedFromDocIDs, err := store.CompanyDocumentIDs(ctx, prevCompanyID)
+		require.NoError(t, err)
+
+		// then
+		require.Equal(t, uu.IDSlice{version1.DocumentID}, movedToDocIDs)
+		require.Nil(t, movedFromDocIDs, "the company the document was moved away from must not list it")
+	})
 }
 
 func TestCompanyIDs(t *testing.T) {
@@ -819,6 +849,31 @@ func TestCompanyIDs(t *testing.T) {
 		// then
 		require.NoError(t, err)
 		require.Nil(t, companyIDs)
+	})
+
+	// A company that a document was moved away from has no documents left, so
+	// it is not a company with documents any more - even though the versions
+	// committed before the move still name it.
+	t.Run("Does not return the company a document was moved away from", func(t *testing.T) {
+		// given
+		t.Parallel()
+		populator := pgfixtures.FixturePopulator(t)
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		prevCompanyID := uu.IDFrom("a3c60853-022c-403d-85cc-6ea146ec6a4a")
+		companyID := uu.IDFrom("c7e67e60-9548-43c6-83be-55cb736a5761")
+		version1 := populator.DocumentVersion(map[string]any{"CompanyID": prevCompanyID})
+		populator.DocumentVersion(map[string]any{
+			"DocumentID": version1.DocumentID,
+			"CompanyID":  companyID,
+			"Version":    docdb.VersionTimeFrom(time.Now().Add(time.Second)),
+		})
+
+		// when
+		companyIDs, err := store.CompanyIDs(ctx)
+
+		// then
+		require.NoError(t, err)
+		require.Equal(t, uu.IDSlice{companyID}, companyIDs)
 	})
 }
 
