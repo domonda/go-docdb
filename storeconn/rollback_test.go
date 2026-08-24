@@ -130,6 +130,61 @@ func TestConn_AddDocumentVersion_RollsBackOnPanic(t *testing.T) {
 	require.NotContains(t, meta.stored, newVersion)
 }
 
+// TestConn_AddDocumentVersion_RollsBackACancelledWrite verifies that a write
+// aborted by context cancellation is rolled back rather than left half-written.
+//
+// Cancellation is precisely the case that leaves a document with a committed
+// metadata version and no file content: an HTTP handler whose client hung up, a
+// worker shutting down. Running the cleanup on the same cancelled context made
+// every delete of that cleanup fail too, so the partial state survived — and
+// was then misread by RestoreDocument's skip logic on the next run. The
+// rollback therefore runs on rollbackCtx, which is context.WithoutCancel of the
+// caller's context plus a deadline of its own.
+func TestConn_AddDocumentVersion_RollsBackACancelledWrite(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	docID := uu.IDv4()
+	companyID := uu.IDv4()
+	userID := uu.IDv4()
+	content := []byte("a content")
+	v1 := docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+	newVersion := docdb.MustVersionTimeFromString("2024-01-02_00-00-00.000")
+
+	meta := newFakeMetadataStore(&docdb.VersionInfo{
+		DocID:     docID,
+		CompanyID: companyID,
+		Version:   v1,
+		Files: map[string]docdb.FileInfo{
+			"a.txt": {Name: "a.txt", Size: int64(len(content)), Hash: docdb.ContentHash(content)},
+		},
+	})
+	docs := newFakeDocumentStore()
+	docs.prevFiles = []fs.FileReader{fs.NewMemFile("a.txt", content)}
+	// The caller is cancelled during the blob write, after the metadata version
+	// has been committed.
+	docs.cancelWrite = cancel
+	conn := storeconn.New(docs, meta)
+
+	err := conn.AddDocumentVersion(ctx, docID, userID, "add b",
+		func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+			return &docdb.CreateVersionResult{
+				Version:    newVersion,
+				WriteFiles: []fs.FileReader{fs.NewMemFile("b.txt", []byte("b content"))},
+			}, nil
+		},
+		func(context.Context, *docdb.VersionInfo) error { return nil },
+	)
+
+	require.ErrorIs(t, err, context.Canceled)
+	// The cleanup must have run despite the cancellation, so the committed
+	// version is gone rather than left pointing at file content that was never
+	// written.
+	require.Equal(t, []docdb.VersionTime{newVersion}, meta.deletedVersions,
+		"a cancelled write must still roll back its metadata version")
+	require.NotContains(t, meta.stored, newVersion)
+}
+
 // TestConn_CreateDocument_RollbackDeletesOrphanedBlobs verifies that when
 // creating a genesis document fails after the blobs were written (here the
 // metadata insert fails), the rollback deletes the just-written blobs instead

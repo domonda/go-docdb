@@ -24,6 +24,11 @@ import (
 // Only the methods the tests exercise are implemented; any other is promoted
 // from the embedded nil interface and panics if called, which surfaces an
 // unexpected change to the code path under test instead of silently passing.
+//
+// Every mutating method refuses a cancelled context, the way a real store does.
+// Without that a rollback running on the caller's already-cancelled context
+// would still appear to succeed here, and the test could not tell it apart from
+// one that ran on the uncancelled rollbackCtx.
 
 // fakeDocumentStore is a content-addressed in-memory storeconn.DocumentStore:
 // it holds files by name and content hash and knows nothing about versions,
@@ -52,6 +57,10 @@ type fakeDocumentStore struct {
 	// panicOn, when set, makes CreateDocumentVersion panic for that version,
 	// modelling a store client that panics rather than returning an error.
 	panicOn *docdb.VersionTime
+	// cancelWrite, when set, is called at the start of CreateDocumentVersion so
+	// a test can cancel the caller's context in the middle of a write, which is
+	// where a half-written document comes from.
+	cancelWrite context.CancelFunc
 
 	deleteDocumentCalls int
 	deletedHashes       []string
@@ -85,7 +94,10 @@ func (d *fakeDocumentStore) DocumentHashFileProvider(context.Context, uu.ID, []s
 	return docdb.NewFileProvider(d.prevFiles...), nil
 }
 
-func (d *fakeDocumentStore) DeleteDocument(_ context.Context, docID uu.ID) error {
+func (d *fakeDocumentStore) DeleteDocument(ctx context.Context, docID uu.ID) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	d.deleteDocumentCalls++
 	if len(d.stored) == 0 {
 		// Same as s3store: deleting nothing means the document is not there.
@@ -95,7 +107,10 @@ func (d *fakeDocumentStore) DeleteDocument(_ context.Context, docID uu.ID) error
 	return nil
 }
 
-func (d *fakeDocumentStore) DeleteDocumentHashes(_ context.Context, _ uu.ID, hashes []string) error {
+func (d *fakeDocumentStore) DeleteDocumentHashes(ctx context.Context, _ uu.ID, hashes []string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	d.deletedHashes = append(d.deletedHashes, hashes...)
 	for file := range d.stored {
 		if slices.Contains(hashes, file.Hash) {
@@ -105,9 +120,15 @@ func (d *fakeDocumentStore) DeleteDocumentHashes(_ context.Context, _ uu.ID, has
 	return nil
 }
 
-func (d *fakeDocumentStore) CreateDocumentVersion(_ context.Context, _ uu.ID, version docdb.VersionTime, files []fs.FileReader) ([]*docdb.FileInfo, error) {
+func (d *fakeDocumentStore) CreateDocumentVersion(ctx context.Context, _ uu.ID, version docdb.VersionTime, files []fs.FileReader) ([]*docdb.FileInfo, error) {
 	if d.panicOn != nil && d.panicOn.Equal(version) {
 		panic("document store blew up")
+	}
+	if d.cancelWrite != nil {
+		d.cancelWrite()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	if d.createErr != nil {
 		return nil, d.createErr
@@ -226,7 +247,10 @@ func (m *fakeMetadataStore) LatestDocumentVersionInfo(_ context.Context, docID u
 	return m.stored[latest], nil
 }
 
-func (m *fakeMetadataStore) DeleteDocument(_ context.Context, docID uu.ID) error {
+func (m *fakeMetadataStore) DeleteDocument(ctx context.Context, docID uu.ID) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.deleteDocumentCalls++
 	if len(m.stored) == 0 {
 		// Same as pgstore: deleting no version means the document is not there.
@@ -236,7 +260,10 @@ func (m *fakeMetadataStore) DeleteDocument(_ context.Context, docID uu.ID) error
 	return nil
 }
 
-func (m *fakeMetadataStore) DeleteDocumentVersion(_ context.Context, _ uu.ID, version docdb.VersionTime) ([]docdb.VersionTime, []string, error) {
+func (m *fakeMetadataStore) DeleteDocumentVersion(ctx context.Context, _ uu.ID, version docdb.VersionTime) ([]docdb.VersionTime, []string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	m.deletedVersions = append(m.deletedVersions, version)
 	delete(m.stored, version)
 	return slices.SortedFunc(maps.Keys(m.stored), docdb.VersionTime.Compare), m.safeHashesToDelete, nil
