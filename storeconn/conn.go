@@ -452,13 +452,30 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		return err
 	}
 
-	if recreate && docExists {
+	if recreate {
 		// NOTE: recreate deletes the existing document before the replacement
 		// is written and is therefore not atomic — a later failure in this call
 		// leaves the document absent (the rollback below only undoes what this
 		// call created, not this up-front delete). See Conn.RestoreDocument.
-		if err = c.DeleteDocument(ctx, doc.ID); err != nil {
-			return err
+		//
+		// The delete is not gated on docExists, which reports only what the
+		// DocumentStore holds. The two stores are written independently, so a
+		// document can exist as metadata alone: a migration that mirrored the
+		// version rows but never copied the file content, or a write cancelled
+		// between the two steps. Skipping the delete for such a document left
+		// the loop below taking the genesis path for a version the
+		// MetadataStore already holds, which the one-genesis-per-document index
+		// refuses with ErrDocumentAlreadyExists — so recreate failed on exactly
+		// the half-written state it exists to repair, and CreateDocument's
+		// rollback deliberately keeps the blobs it wrote for that error,
+		// leaving them behind too.
+		//
+		// DeleteDocument reports not-found only when neither store holds
+		// anything, which is not a failure for a restore that is about to write
+		// the document from scratch.
+		delErr := c.DeleteDocument(ctx, doc.ID)
+		if delErr != nil && !errors.Is(delErr, os.ErrNotExist) {
+			return delErr
 		}
 		docExists = false
 	}
@@ -878,6 +895,18 @@ func markVersionFilesStored(hv *docdb.HashedVersion, stored map[docdb.FileInfo]b
 	}
 }
 
+// versionTimeIn reports whether v is one of versions.
+//
+// TODO: this is a linear scan used for set membership, and RestoreDocument runs
+// three of them per version — skipVersions and metadataVersions in its loop,
+// plus metadataVersions again inside versionsFullyStored. That is quadratic in
+// the number of versions of a document: restoring one with 2000 versions costs
+// about 12 million VersionTime.Equal calls, for every document of a company-wide
+// migration. Building a map[docdb.VersionTime]bool for each of the two slices
+// once, before the loop, gives the same answers in a single pass. Left as is
+// here because the correctness fixes of this release should not also restructure
+// the restore loop; the slices are what MetadataStore.DocumentVersions returns
+// and what the rollback needs in order.
 func versionTimeIn(versions []docdb.VersionTime, v docdb.VersionTime) bool {
 	for _, e := range versions {
 		if e.Equal(v) {

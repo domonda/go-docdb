@@ -1,210 +1,16 @@
 package storeconn_test
 
 import (
-	"context"
-	"errors"
-	"maps"
 	"os"
-	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"github.com/ungerik/go-fs"
 
 	"github.com/domonda/go-types/uu"
 
 	"github.com/domonda/go-docdb"
 	"github.com/domonda/go-docdb/storeconn"
 )
-
-// restoreDocumentStore is a content-addressed in-memory storeconn.DocumentStore:
-// it holds files by name and content hash and knows nothing about versions, like
-// the S3 store it models. Only the methods a merge-restore uses are implemented;
-// any other is promoted from the embedded nil interface and panics if called.
-type restoreDocumentStore struct {
-	storeconn.DocumentStore
-
-	stored map[docdb.FileInfo]struct{} // (Name, Hash) of every stored file
-
-	writtenVersions   []docdb.VersionTime // versions passed to CreateDocumentVersion
-	writtenFiles      []string            // names of every file actually uploaded
-	filesExistCalls   int                 // calls to DocumentHashFilesExist
-	filesExistChecked int                 // files asked about in total
-
-	// failWriteOf, when set, makes CreateDocumentVersion fail for that version,
-	// modelling a blob write that dies mid-restore.
-	failWriteOf *docdb.VersionTime
-
-	deleteDocumentCalls int
-	deletedHashes       []string
-}
-
-func newRestoreDocumentStore(files ...docdb.FileInfo) *restoreDocumentStore {
-	store := &restoreDocumentStore{stored: make(map[docdb.FileInfo]struct{})}
-	for _, file := range files {
-		store.stored[file] = struct{}{}
-	}
-	return store
-}
-
-func (d *restoreDocumentStore) DocumentExists(context.Context, uu.ID) (bool, error) {
-	return len(d.stored) > 0, nil
-}
-
-func (d *restoreDocumentStore) DocumentHashFilesExist(_ context.Context, _ uu.ID, files []docdb.FileInfo) (map[docdb.FileInfo]bool, error) {
-	d.filesExistCalls++
-	d.filesExistChecked += len(files)
-	exist := make(map[docdb.FileInfo]bool, len(files))
-	for _, file := range files {
-		_, exist[file] = d.stored[file]
-	}
-	return exist, nil
-}
-
-func (d *restoreDocumentStore) DeleteDocument(_ context.Context, docID uu.ID) error {
-	d.deleteDocumentCalls++
-	if len(d.stored) == 0 {
-		// Same as s3store: deleting nothing means the document is not there.
-		return docdb.NewErrDocumentNotFound(docID)
-	}
-	clear(d.stored)
-	return nil
-}
-
-func (d *restoreDocumentStore) DeleteDocumentHashes(_ context.Context, _ uu.ID, hashes []string) error {
-	d.deletedHashes = append(d.deletedHashes, hashes...)
-	for file := range d.stored {
-		if slices.Contains(hashes, file.Hash) {
-			delete(d.stored, file)
-		}
-	}
-	return nil
-}
-
-func (d *restoreDocumentStore) CreateDocumentVersion(_ context.Context, _ uu.ID, version docdb.VersionTime, files []fs.FileReader) ([]*docdb.FileInfo, error) {
-	if d.failWriteOf != nil && d.failWriteOf.Equal(version) {
-		return nil, errors.New("blob write failed")
-	}
-	d.writtenVersions = append(d.writtenVersions, version)
-	fileInfos := make([]*docdb.FileInfo, len(files))
-	for i, file := range files {
-		data, err := file.ReadAll()
-		if err != nil {
-			return nil, err
-		}
-		info := docdb.FileInfo{Name: file.Name(), Hash: docdb.ContentHash(data)}
-		d.stored[info] = struct{}{}
-		d.writtenFiles = append(d.writtenFiles, info.Name)
-		fileInfos[i] = &docdb.FileInfo{Name: info.Name, Size: int64(len(data)), Hash: info.Hash}
-	}
-	return fileInfos, nil
-}
-
-// has reports whether every file of the version is stored.
-func (d *restoreDocumentStore) has(doc *docdb.HashedDocument, version docdb.VersionTime) bool {
-	for filename, hash := range doc.Versions[version].FileHashes {
-		if _, ok := d.stored[docdb.FileInfo{Name: filename, Hash: hash}]; !ok {
-			return false
-		}
-	}
-	return true
-}
-
-// restoreMetadataStore is a storeconn.MetadataStore that already holds every
-// version of the document, which is the state a migration into a shared
-// MetadataStore starts from: the version rows were mirrored long before any file
-// content was copied.
-type restoreMetadataStore struct {
-	storeconn.MetadataStore
-
-	companyID uu.ID
-	// stored is the version metadata the store already holds, keyed by version.
-	stored map[docdb.VersionTime]*docdb.VersionInfo
-
-	// versionsExist models pgstore.ContextWithMetadataStoreVersionsExist: the
-	// store inserts nothing and verifies instead, so a create for an
-	// already-stored version succeeds. When false the store really inserts and
-	// rejects a duplicate the way Postgres does.
-	versionsExist bool
-
-	insertedVersions    []docdb.VersionTime
-	deletedVersions     []docdb.VersionTime
-	deleteDocumentCalls int
-}
-
-// newRestoreMetadataStore returns a MetadataStore already holding the passed
-// versions of doc, exactly as the backup describes them — the state a migration
-// starts from, where the version rows were mirrored long before any file
-// content was copied.
-func newRestoreMetadataStore(t *testing.T, doc *docdb.HashedDocument, versions ...docdb.VersionTime) *restoreMetadataStore {
-	t.Helper()
-	store := &restoreMetadataStore{
-		companyID: doc.CompanyID,
-		stored:    make(map[docdb.VersionTime]*docdb.VersionInfo, len(versions)),
-	}
-	for _, v := range versions {
-		info, err := doc.VersionInfo(v)
-		require.NoError(t, err)
-		store.stored[v] = info
-	}
-	return store
-}
-
-func (m *restoreMetadataStore) DocumentCompanyID(context.Context, uu.ID) (uu.ID, error) {
-	return m.companyID, nil
-}
-
-func (m *restoreMetadataStore) DocumentVersions(_ context.Context, docID uu.ID) ([]docdb.VersionTime, error) {
-	if len(m.stored) == 0 {
-		// Same as pgstore: a document without versions is not found.
-		return nil, docdb.NewErrDocumentNotFound(docID)
-	}
-	return slices.SortedFunc(maps.Keys(m.stored), docdb.VersionTime.Compare), nil
-}
-
-func (m *restoreMetadataStore) DocumentVersionInfo(_ context.Context, docID uu.ID, version docdb.VersionTime) (*docdb.VersionInfo, error) {
-	info, ok := m.stored[version]
-	if !ok {
-		return nil, docdb.NewErrDocumentVersionNotFound(docID, version)
-	}
-	return info, nil
-}
-
-func (m *restoreMetadataStore) DeleteDocument(_ context.Context, docID uu.ID) error {
-	m.deleteDocumentCalls++
-	if len(m.stored) == 0 {
-		// Same as pgstore: deleting no version means the document is not there.
-		return docdb.NewErrDocumentNotFound(docID)
-	}
-	clear(m.stored)
-	return nil
-}
-
-func (m *restoreMetadataStore) DeleteDocumentVersion(_ context.Context, _ uu.ID, version docdb.VersionTime) ([]docdb.VersionTime, []string, error) {
-	m.deletedVersions = append(m.deletedVersions, version)
-	delete(m.stored, version)
-	return slices.SortedFunc(maps.Keys(m.stored), docdb.VersionTime.Compare), nil, nil
-}
-
-func (m *restoreMetadataStore) CreateDocumentVersion(_ context.Context, in storeconn.CreateDocumentVersionInput) (*docdb.VersionInfo, error) {
-	if stored, ok := m.stored[in.NewVersion]; ok {
-		if m.versionsExist {
-			return stored, nil
-		}
-		if in.PreviousVersion == nil {
-			return nil, docdb.NewErrDocumentAlreadyExists(in.DocID)
-		}
-		return nil, docdb.NewErrVersionAlreadyExists(in.DocID, in.NewVersion)
-	}
-	m.stored[in.NewVersion] = &docdb.VersionInfo{
-		DocID:     in.DocID,
-		CompanyID: in.CompanyID,
-		Version:   in.NewVersion,
-		Files:     in.Files,
-	}
-	m.insertedVersions = append(m.insertedVersions, in.NewVersion)
-	return m.stored[in.NewVersion], nil
-}
 
 // newRestoreTestDoc returns a two-version backup: v1 holds a.txt, v2 adds b.txt.
 func newRestoreTestDoc(companyID, docID uu.ID) (doc *docdb.HashedDocument, v1, v2 docdb.VersionTime) {
@@ -257,7 +63,7 @@ func TestConn_RestoreDocument_MergeResumesInterruptedCopy(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			// The interrupted run got as far as v1's file.
-			docs := newRestoreDocumentStore(docdb.FileInfo{Name: "a.txt", Hash: doc.Versions[v1].FileHashes["a.txt"]})
+			docs := newFakeDocumentStore(docdb.FileInfo{Name: "a.txt", Hash: doc.Versions[v1].FileHashes["a.txt"]})
 			meta := newRestoreMetadataStore(t, doc, v1, v2)
 			meta.versionsExist = versionsExist
 			conn := storeconn.New(docs, meta)
@@ -286,7 +92,7 @@ func TestConn_RestoreDocument_MergeSkipsFullyStoredDocument(t *testing.T) {
 	docID := uu.IDv4()
 	doc, v1, v2 := newRestoreTestDoc(companyID, docID)
 
-	docs := newRestoreDocumentStore(
+	docs := newFakeDocumentStore(
 		docdb.FileInfo{Name: "a.txt", Hash: doc.Versions[v1].FileHashes["a.txt"]},
 		docdb.FileInfo{Name: "b.txt", Hash: doc.Versions[v2].FileHashes["b.txt"]},
 	)
@@ -311,7 +117,7 @@ func TestConn_RestoreDocument_MergeWritesVersionsMissingFromBothStores(t *testin
 	docID := uu.IDv4()
 	doc, v1, v2 := newRestoreTestDoc(companyID, docID)
 
-	docs := newRestoreDocumentStore(docdb.FileInfo{Name: "a.txt", Hash: doc.Versions[v1].FileHashes["a.txt"]})
+	docs := newFakeDocumentStore(docdb.FileInfo{Name: "a.txt", Hash: doc.Versions[v1].FileHashes["a.txt"]})
 	meta := newRestoreMetadataStore(t, doc, v1)
 	conn := storeconn.New(docs, meta)
 
@@ -342,7 +148,7 @@ func TestConn_RestoreDocument_MergeIntoEmptyDocumentStore(t *testing.T) {
 			name = "inserting MetadataStore"
 		}
 		t.Run(name, func(t *testing.T) {
-			docs := newRestoreDocumentStore() // nothing copied yet
+			docs := newFakeDocumentStore() // nothing copied yet
 			meta := newRestoreMetadataStore(t, doc, v1, v2)
 			meta.versionsExist = versionsExist
 			conn := storeconn.New(docs, meta)
@@ -370,7 +176,7 @@ func TestConn_RestoreDocument_RollbackKeepsPreExistingVersions(t *testing.T) {
 	// The MetadataStore holds v2 but not v1, so the restore creates v1 (through
 	// the genesis path, the DocumentStore being empty) and then fails writing
 	// the files of the already-stored v2.
-	docs := newRestoreDocumentStore()
+	docs := newFakeDocumentStore()
 	docs.failWriteOf = &v2
 	meta := newRestoreMetadataStore(t, doc, v2)
 	conn := storeconn.New(docs, meta)
@@ -393,7 +199,7 @@ func TestConn_RestoreDocument_MergeRejectsDifferentStoredFileSet(t *testing.T) {
 	docID := uu.IDv4()
 	doc, v1, v2 := newRestoreTestDoc(companyID, docID)
 
-	docs := newRestoreDocumentStore(docdb.FileInfo{Name: "a.txt", Hash: doc.Versions[v1].FileHashes["a.txt"]})
+	docs := newFakeDocumentStore(docdb.FileInfo{Name: "a.txt", Hash: doc.Versions[v1].FileHashes["a.txt"]})
 	meta := newRestoreMetadataStore(t, doc, v1, v2)
 	// The stored v2 describes a different file set than the backup's v2.
 	meta.stored[v2] = &docdb.VersionInfo{
@@ -409,20 +215,6 @@ func TestConn_RestoreDocument_MergeRejectsDifferentStoredFileSet(t *testing.T) {
 	require.False(t, docs.has(doc, v2), "no file may be written under a version that is not the backup's")
 }
 
-// panicDocumentStore panics instead of writing the files of one version,
-// modelling a store client that panics rather than returning an error.
-type panicDocumentStore struct {
-	*restoreDocumentStore
-	panicOn docdb.VersionTime
-}
-
-func (d *panicDocumentStore) CreateDocumentVersion(ctx context.Context, docID uu.ID, version docdb.VersionTime, files []fs.FileReader) ([]*docdb.FileInfo, error) {
-	if version.Equal(d.panicOn) {
-		panic("document store blew up")
-	}
-	return d.restoreDocumentStore.CreateDocumentVersion(ctx, docID, version, files)
-}
-
 // TestConn_RestoreDocument_RollsBackOnPanic verifies that a panic from a store
 // is rolled back like an error. The rollback runs only when the call ends with
 // an error, so a panic travelling past it would leave behind exactly the
@@ -433,7 +225,8 @@ func TestConn_RestoreDocument_RollsBackOnPanic(t *testing.T) {
 	docID := uu.IDv4()
 	doc, _, v2 := newRestoreTestDoc(companyID, docID)
 
-	docs := &panicDocumentStore{restoreDocumentStore: newRestoreDocumentStore(), panicOn: v2}
+	docs := newFakeDocumentStore()
+	docs.panicOn = &v2
 	meta := newRestoreMetadataStore(t, doc) // knows nothing yet
 	conn := storeconn.New(docs, meta)
 
@@ -456,7 +249,7 @@ func TestConn_DeleteDocument_DeletesFileContentWithoutMetadata(t *testing.T) {
 	docID := uu.IDv4()
 	doc, v1, _ := newRestoreTestDoc(companyID, docID)
 
-	docs := newRestoreDocumentStore(docdb.FileInfo{Name: "a.txt", Hash: doc.Versions[v1].FileHashes["a.txt"]})
+	docs := newFakeDocumentStore(docdb.FileInfo{Name: "a.txt", Hash: doc.Versions[v1].FileHashes["a.txt"]})
 	meta := newRestoreMetadataStore(t, doc) // no version metadata at all
 	conn := storeconn.New(docs, meta)
 
@@ -476,11 +269,41 @@ func TestConn_RestoreDocument_RecreateRepairsFileContentWithoutMetadata(t *testi
 	docID := uu.IDv4()
 	doc, v1, v2 := newRestoreTestDoc(companyID, docID)
 
-	docs := newRestoreDocumentStore(docdb.FileInfo{Name: "a.txt", Hash: doc.Versions[v1].FileHashes["a.txt"]})
+	docs := newFakeDocumentStore(docdb.FileInfo{Name: "a.txt", Hash: doc.Versions[v1].FileHashes["a.txt"]})
 	meta := newRestoreMetadataStore(t, doc) // no version metadata at all
 	conn := storeconn.New(docs, meta)
 
 	require.NoError(t, conn.RestoreDocument(t.Context(), doc, true))
+	require.Equal(t, []docdb.VersionTime{v1, v2}, meta.insertedVersions)
+	require.True(t, docs.has(doc, v1))
+	require.True(t, docs.has(doc, v2))
+}
+
+// TestConn_RestoreDocument_RecreateRepairsMetadataWithoutFileContent covers the
+// mirror of the case above: the metadata is there and the file content is not.
+// That is what a migration which mirrored the version rows long before copying
+// any blob leaves behind, and what a write cancelled between the two steps
+// leaves behind.
+//
+// The up-front delete used to be gated on DocumentExists, which reports only
+// what the DocumentStore holds, so for such a document it was skipped. The loop
+// then took the genesis path for a version the MetadataStore already had, which
+// the one-genesis-per-document index refuses with ErrDocumentAlreadyExists —
+// and CreateDocument's rollback deliberately keeps the blobs it wrote for that
+// error, because under concurrency they belong to the winner. So recreate
+// failed on exactly the state it is asked for, and left new orphaned content.
+func TestConn_RestoreDocument_RecreateRepairsMetadataWithoutFileContent(t *testing.T) {
+	companyID := uu.IDv4()
+	docID := uu.IDv4()
+	doc, v1, v2 := newRestoreTestDoc(companyID, docID)
+
+	docs := newFakeDocumentStore()                  // no file content at all
+	meta := newRestoreMetadataStore(t, doc, v1, v2) // every version already mirrored
+	conn := storeconn.New(docs, meta)
+
+	require.NoError(t, conn.RestoreDocument(t.Context(), doc, true))
+
+	require.Positive(t, meta.deleteDocumentCalls, "recreate must delete the metadata-only document first")
 	require.Equal(t, []docdb.VersionTime{v1, v2}, meta.insertedVersions)
 	require.True(t, docs.has(doc, v1))
 	require.True(t, docs.has(doc, v2))
@@ -500,7 +323,7 @@ func TestConn_RestoreDocument_MergeWritesOnlyMissingFiles(t *testing.T) {
 
 	// The interrupted run got as far as a.txt, which v1 and v2 share, so only
 	// v2's b.txt is missing.
-	docs := newRestoreDocumentStore(docdb.FileInfo{Name: "a.txt", Hash: doc.Versions[v1].FileHashes["a.txt"]})
+	docs := newFakeDocumentStore(docdb.FileInfo{Name: "a.txt", Hash: doc.Versions[v1].FileHashes["a.txt"]})
 	meta := newRestoreMetadataStore(t, doc, v1, v2)
 	meta.versionsExist = true
 	conn := storeconn.New(docs, meta)
@@ -521,7 +344,7 @@ func TestConn_RestoreDocument_MergeWritesOnlyMissingFiles(t *testing.T) {
 func TestConn_RestoreDocument_WritesCarriedForwardFileOnce(t *testing.T) {
 	doc, v1, v2 := newRestoreTestDoc(uu.IDv4(), uu.IDv4())
 
-	docs := newRestoreDocumentStore() // empty
+	docs := newFakeDocumentStore() // empty
 	meta := newRestoreMetadataStore(t, doc)
 	conn := storeconn.New(docs, meta)
 

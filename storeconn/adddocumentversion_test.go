@@ -14,24 +14,23 @@ import (
 )
 
 // singleFileBackend builds a storeconn.Conn whose latest version contains a
-// single file "a.txt" with the given content. It reuses the fakes from
-// rollback_test.go. The version invariant checks run before any store write,
+// single file "a.txt" with the given content. It reuses the package's fakes
+// from fakes_test.go. The version invariant checks run before any store write,
 // so neither fake store needs to be functional beyond the latest-version
 // lookup and the previous-file provider.
 func singleFileBackend(content []byte) (*fakeMetadataStore, docdb.Conn, uu.ID) {
 	docID := uu.IDv4()
 	companyID := uu.IDv4()
-	meta := &fakeMetadataStore{
-		latest: &docdb.VersionInfo{
-			DocID:     docID,
-			CompanyID: companyID,
-			Version:   docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000"),
-			Files: map[string]docdb.FileInfo{
-				"a.txt": {Name: "a.txt", Size: int64(len(content)), Hash: docdb.ContentHash(content)},
-			},
+	meta := newFakeMetadataStore(&docdb.VersionInfo{
+		DocID:     docID,
+		CompanyID: companyID,
+		Version:   docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000"),
+		Files: map[string]docdb.FileInfo{
+			"a.txt": {Name: "a.txt", Size: int64(len(content)), Hash: docdb.ContentHash(content)},
 		},
-	}
-	docs := &fakeDocumentStore{prevFiles: []fs.FileReader{fs.NewMemFile("a.txt", content)}}
+	})
+	docs := newFakeDocumentStore()
+	docs.prevFiles = []fs.FileReader{fs.NewMemFile("a.txt", content)}
 	return meta, storeconn.New(docs, meta), docID
 }
 
@@ -49,7 +48,7 @@ func TestConn_AddDocumentVersion_RemoveAllFilesRejected(t *testing.T) {
 	require.Error(t, err)
 	require.NotErrorIs(t, err, docdb.ErrNoChanges)
 	require.ErrorContains(t, err, "at least one file")
-	require.False(t, meta.deleteVersionCalled, "must be rejected before any metadata commit/rollback")
+	require.Empty(t, meta.deletedVersions, "must be rejected before any metadata commit/rollback")
 }
 
 // TestConn_AddDocumentVersion_NoChanges verifies that a version which changes
@@ -68,7 +67,7 @@ func TestConn_AddDocumentVersion_NoChanges(t *testing.T) {
 		func(context.Context, *docdb.VersionInfo) error { return nil },
 	)
 	require.ErrorIs(t, err, docdb.ErrNoChanges)
-	require.Zero(t, meta.addedVersion, "no version may be committed for a change-less version")
+	require.Empty(t, meta.insertedVersions, "no version may be committed for a change-less version")
 }
 
 // TestConn_AddDocumentVersion_CompanyChangeIsAChange verifies that moving a
@@ -92,7 +91,7 @@ func TestConn_AddDocumentVersion_CompanyChangeIsAChange(t *testing.T) {
 		},
 	)
 	require.NoError(t, err)
-	require.Equal(t, newVersion, meta.addedVersion)
+	require.Equal(t, []docdb.VersionTime{newVersion}, meta.insertedVersions)
 	require.NotNil(t, committed)
 	require.Equal(t, newCompanyID, committed.CompanyID)
 }

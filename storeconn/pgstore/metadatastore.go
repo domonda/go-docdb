@@ -76,10 +76,19 @@ func metadataStoreVersionsExist(ctx context.Context) bool {
 
 // oneSuccessorPerVersionIndex is the unique index on
 // docdb.document_version (document_id, prev_version) enforcing that a version
-// has at most one successor. Postgres names the violated index in the error, so
-// this is how a concurrent append is told apart from a plain duplicate. It must
-// match the index name in schema/document_version.sql.
+// has at most one successor. Postgres names the violated index in the error,
+// which is how an insert refused by this one is told apart from an insert
+// refused by (document_id, version) — the latter being conclusive on its own,
+// this one not (see resolveSuccessorIndexViolation). It must match the index
+// name in schema/document_version.sql.
 const oneSuccessorPerVersionIndex = "document_version_one_successor_per_version_idx"
+
+// errSuccessorIndexViolation marks an insert that Postgres rejected naming
+// oneSuccessorPerVersionIndex, which on its own does not say what happened.
+// It never reaches a caller: CreateDocumentVersion replaces it with the
+// caller-facing error once the savepoint is rolled back (see
+// resolveSuccessorIndexViolation).
+var errSuccessorIndexViolation = errs.New("one-successor-per-version index violated")
 
 func NewMetadataStore() storeconn.MetadataStore {
 	return &postgresMetadataStore{}
@@ -107,7 +116,7 @@ type postgresMetadataStore struct{}
 // then fails with "current transaction is aborted". Rolling back to a savepoint
 // contains the violation so only the insert is undone.
 func (store *postgresMetadataStore) CreateDocumentVersion(ctx context.Context, in storeconn.CreateDocumentVersionInput) (*docdb.VersionInfo, error) {
-	return db.TransactionSavepointResult(ctx, func(ctx context.Context) (*docdb.VersionInfo, error) {
+	info, err := db.TransactionSavepointResult(ctx, func(ctx context.Context) (*docdb.VersionInfo, error) {
 		// Determine the full file set of the new version. When the caller already
 		// computed it (in.Files), use it directly and skip the predecessor lookup
 		// and re-derivation. Otherwise carry the previous version's files forward
@@ -192,6 +201,17 @@ func (store *postgresMetadataStore) CreateDocumentVersion(ctx context.Context, i
 				*in.RelinkSuccessor, // $4
 			)
 			if err != nil {
+				// The relink violates the one-successor-per-version index
+				// itself when some row already chains off in.NewVersion, which
+				// a partially applied restore or a hand-repaired chain can
+				// leave behind. The chain on disk is then not the one this call
+				// read, which is what ErrDocumentChanged says; returning the
+				// raw violation handed the caller a Postgres index name and no
+				// way to tell it apart from a failure it must not retry.
+				var uniqueViolation sqldb.ErrUniqueViolation
+				if errors.As(err, &uniqueViolation) {
+					return nil, docdb.NewErrDocumentChanged(in.DocID, *in.PreviousVersion)
+				}
 				return nil, err
 			}
 		}
@@ -215,28 +235,26 @@ func (store *postgresMetadataStore) CreateDocumentVersion(ctx context.Context, i
 			// prev_version is null (one genesis version per document), and
 			// (document_id, prev_version) (one successor per version).
 			//
-			// The successor index is the only one that means something other
-			// than "this already exists": another writer appended a version
-			// after the same predecessor between this call reading the latest
-			// version and inserting, so the file set carried forward here is
-			// already stale. That is an optimistic concurrency conflict, and
-			// the caller has to redo the work from the new latest version
-			// rather than treat its own version as written.
+			// A genesis insert (PreviousVersion == nil) can violate either the
+			// timestamp constraint or the genesis index, and both mean the
+			// document already exists. It can never violate the successor
+			// index, whose NULL prev_version rows are all distinct.
 			//
-			// Of the other two, a genesis insert (PreviousVersion == nil) can
-			// violate either the timestamp constraint or the genesis index —
-			// both mean the document already exists. An appended insert can
-			// only hit (document_id, version), meaning that specific version
-			// already exists.
+			// For an appended insert, (document_id, version) being named is
+			// conclusive on its own: that specific version is stored, whether
+			// or not the successor index is violated too. The successor index
+			// being named is not conclusive, because a row duplicating an
+			// already-stored version violates both and Postgres names whichever
+			// it checks first — resolveSuccessorIndexViolation asks instead.
 			var uniqueViolation sqldb.ErrUniqueViolation
 			if errors.As(err, &uniqueViolation) {
 				switch {
-				case uniqueViolation.Constraint == oneSuccessorPerVersionIndex && in.PreviousVersion != nil:
-					return nil, docdb.NewErrDocumentChanged(in.DocID, *in.PreviousVersion)
 				case in.PreviousVersion == nil:
 					return nil, docdb.NewErrDocumentAlreadyExists(in.DocID)
-				default:
+				case uniqueViolation.Constraint != oneSuccessorPerVersionIndex:
 					return nil, docdb.NewErrVersionAlreadyExists(in.DocID, in.NewVersion)
+				default:
+					return nil, errSuccessorIndexViolation
 				}
 			}
 			return nil, err
@@ -257,6 +275,47 @@ func (store *postgresMetadataStore) CreateDocumentVersion(ctx context.Context, i
 		}
 		return info, nil
 	})
+	if errors.Is(err, errSuccessorIndexViolation) {
+		return nil, store.resolveSuccessorIndexViolation(ctx, in)
+	}
+	return info, err
+}
+
+// resolveSuccessorIndexViolation reports what a violation of
+// oneSuccessorPerVersionIndex means for the insert of in.
+//
+// A row that duplicates an already-stored version violates both
+// (document_id, version) and (document_id, prev_version), and which of the two
+// Postgres names is its own choice: it reports the first index it checks, in
+// the relation's index order. Nothing pins that order — a REINDEX or a
+// dump/restore can change it — so the version is looked up instead of trusting
+// the name. The insert duplicates a version that is already stored (which is
+// what a resumed restore provokes on purpose and continues past), or it appends
+// after a predecessor another writer has already appended to, which is the
+// optimistic concurrency conflict the index exists to refuse.
+//
+// Called after the savepoint has been rolled back: the violation left the
+// transaction aborted, so a query issued before the rollback would fail with
+// "current transaction is aborted, commands ignored until end of transaction
+// block" instead of answering.
+func (store *postgresMetadataStore) resolveSuccessorIndexViolation(ctx context.Context, in storeconn.CreateDocumentVersionInput) error {
+	stored, err := db.QueryRowAs[bool](ctx,
+		/* sql */ `
+			select exists(
+				select from docdb.document_version
+				where document_id = $1 and version = $2
+			)
+		`,
+		in.DocID,      // $1
+		in.NewVersion, // $2
+	)
+	if err != nil {
+		return errs.Errorf("cannot tell a duplicate of document %s version %s from a concurrent append: %w", in.DocID, in.NewVersion, err)
+	}
+	if stored {
+		return docdb.NewErrVersionAlreadyExists(in.DocID, in.NewVersion)
+	}
+	return docdb.NewErrDocumentChanged(in.DocID, *in.PreviousVersion)
 }
 
 // assertStoredVersionEquals verifies that the document version already stored in
@@ -542,18 +601,30 @@ func (store *postgresMetadataStore) DeleteDocument(ctx context.Context, docID uu
 		return nil
 	}
 
-	deleted, err := db.QueryRowAs[bool](ctx,
+	// Counted inside a CTE rather than read from `returning`, which yields no
+	// row at all for a document that is not there: QueryRowAs then fails with
+	// sql.ErrNoRows instead of reaching the not-found below, and that error
+	// does not match os.ErrNotExist. storeconn.DeleteDocument keys on exactly
+	// that match to go on and delete the document's file content when the
+	// metadata is already gone, so the raw sql.ErrNoRows stopped it and
+	// orphaned the content it exists to remove — and RestoreDocument with
+	// recreate=true failed instead of rebuilding such a document.
+	// DeleteDocumentVersion aggregates its count the same way.
+	deleted, err := db.QueryRowAs[int](ctx,
 		/* sql */ `
-			delete from docdb.document_version
-			where document_id = $1
-			returning true
+			with deleted as (
+				delete from docdb.document_version
+				where document_id = $1
+				returning 1
+			)
+			select count(*)::int from deleted
 		`,
 		docID, // $1
 	)
 	if err != nil {
 		return err
 	}
-	if !deleted {
+	if deleted == 0 {
 		return docdb.NewErrDocumentNotFound(docID)
 	}
 	return nil

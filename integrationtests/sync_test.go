@@ -463,6 +463,73 @@ func moveDocumentToCompany(t *testing.T, ctx context.Context, conn docdb.Conn, d
 	require.NoError(t, err)
 }
 
+// TestMoveDocumentBetweenCompanies runs a move and its undo against both
+// backends, because the two record ownership in completely different ways and
+// still have to answer the same: localfsdb keeps an owner marker beside the
+// versions (company.id plus the per-company directory) and has to rewrite it
+// whenever the latest version changes, while storeconn/pgstore derives the
+// owner from the latest version row and has nothing to rewrite. A divergence
+// here silently sends bulk operations over a company - backups, migrations,
+// exports - to the wrong set of documents on one backend only.
+func TestMoveDocumentBetweenCompanies(t *testing.T) {
+	for _, backend := range syncBackends() {
+		t.Run(backend.name, func(t *testing.T) {
+			ctx := syncTestContext(t, backend)
+			conn := backend.newConn(t)
+
+			var (
+				prevCompanyID = uu.IDv7()
+				companyID     = uu.IDv7()
+				docID         = uu.IDv7()
+				userID        = uu.IDv7()
+				v0            = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+				moveVersion   = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.002")
+			)
+
+			createSyncTestDoc(t, ctx, conn, prevCompanyID, docID, userID, "moved-doc")
+			moveDocumentToCompany(t, ctx, conn, docID, userID, companyID, moveVersion)
+
+			// the document belongs to and is listed under the company of its
+			// latest version, and only under that one
+			gotCompanyID, err := conn.DocumentCompanyID(ctx, docID)
+			require.NoError(t, err)
+			require.Equal(t, companyID, gotCompanyID)
+
+			docIDs, err := conn.CompanyDocumentIDs(ctx, companyID)
+			require.NoError(t, err)
+			require.Equal(t, uu.IDSlice{docID}, docIDs)
+
+			docIDs, err = conn.CompanyDocumentIDs(ctx, prevCompanyID)
+			require.NoError(t, err)
+			require.Nil(t, docIDs, "the company the document was moved away from must not list it")
+
+			// the versions committed before the move keep naming the previous
+			// company: that is what keeps the move visible in the history
+			v0Info, err := conn.DocumentVersionInfo(ctx, docID, v0)
+			require.NoError(t, err)
+			require.Equal(t, prevCompanyID, v0Info.CompanyID)
+
+			// deleting the version that moved the document hands it back to the
+			// company of the version that becomes the latest one
+			leftVersions, err := conn.DeleteDocumentVersion(ctx, docID, moveVersion)
+			require.NoError(t, err)
+			require.NotContains(t, leftVersions, moveVersion)
+
+			gotCompanyID, err = conn.DocumentCompanyID(ctx, docID)
+			require.NoError(t, err)
+			require.Equal(t, prevCompanyID, gotCompanyID, "the document must follow the company of its new latest version")
+
+			docIDs, err = conn.CompanyDocumentIDs(ctx, prevCompanyID)
+			require.NoError(t, err)
+			require.Equal(t, uu.IDSlice{docID}, docIDs)
+
+			docIDs, err = conn.CompanyDocumentIDs(ctx, companyID)
+			require.NoError(t, err)
+			require.Nil(t, docIDs, "the company of the deleted version must not list the document any more")
+		})
+	}
+}
+
 // TestSyncMovedDocument syncs a document that was moved between companies for
 // every combination of localfsdb and storeconn as source and destination.
 //

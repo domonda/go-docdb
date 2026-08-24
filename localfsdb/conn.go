@@ -743,18 +743,6 @@ func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.I
 		return err
 	}
 
-	// The len(files) check above is on what the caller passed, which is not the
-	// same as what the version tracks: newVersionInfo enumerates the written
-	// directory through docdb.DirFileProvider, which does not report hidden
-	// entries as files of a version. A caller passing only hidden files would
-	// otherwise get exactly the empty, change-less first version the check
-	// above exists to reject — created without error and reading back with no
-	// files at all. AddDocumentVersion makes the same check on its resulting
-	// file set.
-	if len(versionInfo.Files) == 0 {
-		return errs.Errorf("cannot create document %s without files: none of the %d passed files is a file of a document version", docID, len(files))
-	}
-
 	err = versionInfo.WriteJSON(docDir.Joinf("%s.json", newVersion))
 	if err != nil {
 		return err
@@ -878,12 +866,6 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 		return err
 	}
 
-	if len(versionInfo.Files) == 0 {
-		// Every version must contain at least one file: removing all files of a
-		// document is not allowed (use DeleteDocument to remove the document).
-		return errs.Errorf("cannot remove all files of document %s: every version must contain at least one file", docID)
-	}
-
 	// A version with the same files as its predecessor changes nothing, unless
 	// it moves the document to another company: that is how a move is recorded,
 	// as a version that changes nothing but the company.
@@ -956,9 +938,36 @@ func newVersionInfo(ctx context.Context, companyID, docID uu.ID, version docdb.V
 	if err != nil {
 		return nil, err
 	}
+	if len(versionInfo.Files) == 0 {
+		// Every version must contain at least one file: a document cannot start
+		// with, or be reduced to, an empty change-less version, and
+		// HashedDocument.Validate rejects one — a document with such a version
+		// can never be backed up, synced or restored again.
+		//
+		// Checked here rather than at each call site because this is where a
+		// version's file set is established, and it is not the set the caller
+		// passed: the directory is enumerated through docdb.DirFileProvider,
+		// which does not report hidden entries or sub-directories as files of a
+		// version. A caller that wrote only such entries ends up with an empty
+		// set however many files it handed over, which is how CreateDocument
+		// used to create a document tracking nothing and RestoreDocument used
+		// to restore a version reading back empty.
+		return nil, errs.Errorf("document %s version %s has no files: every version must contain at least one file", docID, version)
+	}
 
 	// A nil prevVersionFiles for the first version of a document
 	// makes SetFileDeltas report all files as added.
+	//
+	// TODO: this re-reads and content-hashes every file of the previous version
+	// although the callers already hold those hashes. AddDocumentVersion parsed
+	// <prev>.json into prevVersionInfo.Files, and RestoreDocument has the
+	// backup's FileHashes, both of which carry exactly the name/hash pairs
+	// SetFileDeltas compares — so committing a one-line change to a 200 MB
+	// version reads and hashes 400 MB instead of 200 MB. Passing the previous
+	// file set in instead of the directory would remove the second read; it is
+	// left as is here because it changes newVersionInfo's signature and its
+	// prevVersion/prevVersionDir invariant, which is more than this release's
+	// correctness fixes should touch.
 	var prevVersionFiles map[string]docdb.FileInfo
 	if prevVersionDir != "" {
 		prevVersionFiles, err = versionDirFileInfos(ctx, prevVersionDir)

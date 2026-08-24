@@ -1121,7 +1121,7 @@ func TestCreateDocumentHiddenFilesOnlyRejected(t *testing.T) {
 	)
 
 	// then the document is not created
-	require.ErrorContains(t, err, "without files")
+	require.ErrorContains(t, err, "has no files")
 	exists, existsErr := conn.DocumentExists(t.Context(), docID)
 	require.NoError(t, existsErr)
 	require.False(t, exists, "a rejected CreateDocument must leave no document behind")
@@ -1139,6 +1139,54 @@ func TestCreateDocumentHiddenFilesOnlyRejected(t *testing.T) {
 	))
 	require.Equal(t, []string{"invoice.pdf"}, slices.Sorted(maps.Keys(newVersion.Files)))
 	require.Equal(t, []string{"invoice.pdf"}, newVersion.AddedFiles)
+}
+
+// TestRestoreDocumentHiddenFilesOnlyRejected covers the third path that builds a
+// version's file set by enumerating a directory it just wrote. CreateDocument
+// and AddDocumentVersion both refuse a version that ends up tracking nothing,
+// and RestoreDocument is the path most likely to be handed such a version: the
+// filenames come from a backup taken somewhere else, and storeconn addresses
+// files by name and content hash, so it stores a dot-prefixed name like any
+// other. Restoring one used to write the file, record a version with no files
+// at all and report success — a document that every later reader, including
+// ReadHashedDocument and the next backup, rejects.
+//
+// The check therefore lives in newVersionInfo, where a version's file set is
+// established, so all three paths get it from the same place.
+func TestRestoreDocumentHiddenFilesOnlyRejected(t *testing.T) {
+	conn := localfsdb.NewTestConn(t)
+
+	var (
+		companyID = uu.IDFrom("6f296458-24cd-4146-ac3a-33ca885a993e")
+		docID     = uu.IDFrom("c538ac93-2cf0-49a9-8378-22cd48b5ab84")
+		userID    = uu.IDFrom("ce6f0867-0172-4ffc-a0c0-c5878b921171")
+		v0        = docdb.MustVersionTimeFromString("2023-01-01_00-00-00.000")
+		data      = []byte("SECRET=1")
+		hash      = docdb.ContentHash(data)
+	)
+
+	// A structurally valid backup: the version has a file, it is just not one
+	// that a version directory reports as its own.
+	backup := &docdb.HashedDocument{
+		ID:          docID,
+		CompanyID:   companyID,
+		HashedFiles: map[string][]byte{hash: data},
+		Versions: map[docdb.VersionTime]*docdb.HashedVersion{
+			v0: {
+				CommitUserID: userID,
+				CommitReason: "hidden files only",
+				FileHashes:   map[string]string{".env": hash},
+			},
+		},
+	}
+	require.NoError(t, backup.Validate())
+
+	err := conn.RestoreDocument(t.Context(), backup, false)
+	require.ErrorContains(t, err, "has no files")
+
+	exists, existsErr := conn.DocumentExists(t.Context(), docID)
+	require.NoError(t, existsErr)
+	require.False(t, exists, "a rejected restore must leave no document behind")
 }
 
 // TestMoveDocumentBetweenCompanies covers moving a document between companies
