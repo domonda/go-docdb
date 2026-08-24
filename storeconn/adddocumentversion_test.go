@@ -70,6 +70,43 @@ func TestConn_AddDocumentVersion_NoChanges(t *testing.T) {
 	require.Empty(t, meta.insertedVersions, "no version may be committed for a change-less version")
 }
 
+// staleSizeFile is an fs.FileReader whose Size() disagrees with the bytes
+// ReadAll returns, which is what a file rewritten between the stat and the read
+// looks like — and what a FileReader implementation that simply computes Size()
+// from something other than its content looks like at any time.
+type staleSizeFile struct {
+	fs.MemFile
+}
+
+func (staleSizeFile) Size() int64 { return 999999 }
+
+// TestConn_AddDocumentVersion_RecordsTheSizeOfTheHashedBytes verifies that a
+// version records the size of the bytes it hashed, not whatever the
+// FileReader's Size() reports.
+//
+// Size and Hash of a stored file have to describe the same content: a version
+// whose Size contradicts its Hash fails every later read of it through
+// ReadHashedDocument, so the document can no longer be backed up, synced or
+// restored — silent, and only discovered at the next migration.
+func TestConn_AddDocumentVersion_RecordsTheSizeOfTheHashedBytes(t *testing.T) {
+	content := []byte("a content")
+	meta, conn, docID := singleFileBackend(content)
+
+	newContent := []byte("new content of b")
+	var committed *docdb.VersionInfo
+	err := conn.AddDocumentVersion(context.Background(), docID, uu.IDv4(), "add b",
+		docdb.CreateVersionWriteFiles(staleSizeFile{fs.MemFile{FileName: "b.txt", FileData: newContent}}),
+		docdb.CaptureNewVersionInfo(&committed),
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, meta.insertedVersions)
+
+	file := committed.Files["b.txt"]
+	require.Equal(t, int64(len(newContent)), file.Size,
+		"the recorded size must describe the bytes that were hashed, not the FileReader's Size()")
+	require.Equal(t, docdb.ContentHash(newContent), file.Hash)
+}
+
 // TestConn_AddDocumentVersion_CompanyChangeIsAChange verifies that moving a
 // document to another company is committed as a version even though it changes
 // no file: that version is what records the move in the document's history, and
