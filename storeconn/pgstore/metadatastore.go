@@ -420,21 +420,37 @@ func (store *postgresMetadataStore) LatestDocumentVersion(ctx context.Context, d
 }
 
 func (store *postgresMetadataStore) CompanyIDs(ctx context.Context) (uu.IDSlice, error) {
-	// A document belongs to the company of its latest version, so only the
-	// latest version of every document is considered: a company that a document
-	// was moved away from is not reported for that document, even though its
-	// earlier versions still name it. distinct because every company has one
-	// such row per document; ordered by company_id for a consistent order
-	// across calls.
+	// A document belongs to the company of its latest version, so a company is
+	// reported only while some document's latest version still names it: one
+	// that every document was moved away from has no documents left, even
+	// though the versions committed before those moves still name it.
+	//
+	// Written as a candidate list plus an exists filter, not as a reduction of
+	// the whole table to one row per document (`distinct on (document_id) ...
+	// order by document_id, version desc`). That reduction has to read and sort
+	// every version row of every document before it can answer, which is a full
+	// scan plus a sort of the whole table on every call — and this is a
+	// bulk-operation and routerconn fan-out entry point. The candidate list is
+	// an index-only scan of document_version_company_id_idx, and each exists
+	// probe is served by the same index and stops at the first document the
+	// company still owns, which for a company that owns any is its first row.
 	return db.QueryRowsAsSlice[uu.ID](ctx,
 		/* sql */ `
-			select distinct company_id
+			select candidate.company_id
 			from (
-				select distinct on (document_id) company_id
-				from docdb.document_version
-				order by document_id, version desc
-			) latest
-			order by company_id
+				select distinct company_id from docdb.document_version
+			) candidate
+			where exists (
+				select
+				from docdb.document_version dv
+				where dv.company_id = candidate.company_id
+					and dv.version = (
+						select max(later.version)
+						from docdb.document_version later
+						where later.document_id = dv.document_id
+					)
+			)
+			order by candidate.company_id
 		`,
 	)
 }

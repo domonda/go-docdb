@@ -258,3 +258,117 @@ func TestRouterConn(t *testing.T) {
 		require.Panics(t, func() { routerconn.New(validConn, validConn) })
 	})
 }
+
+// TestRouterConnRefusesCrossBackendCompanyMove covers the two ways a document's
+// company can change, both of which route by document ID and would otherwise
+// commit the change on the backend the document is on while the new company
+// belongs to another one.
+//
+// routerconn never splits a document across backends, and a document left on
+// the backend that no longer answers for its company is not reported as broken
+// anywhere: CompanyDocumentIDs of the new company asks the other backend, which
+// does not list the document, so a company-wide sync or migration silently
+// skips it.
+func TestRouterConnRefusesCrossBackendCompanyMove(t *testing.T) {
+	var (
+		docID     = uu.IDv7()
+		companyA  = uu.IDv7() // on backendA, together with the document
+		companyB  = uu.IDv7() // on backendB
+		newVerion = docdb.NewVersionTime()
+	)
+
+	newConn := func(t *testing.T, backendA, backendB docdb.Conn) docdb.Conn {
+		t.Helper()
+		return routerconn.New(
+			func(_ context.Context, id uu.ID) (docdb.Conn, error) {
+				switch id {
+				case companyA:
+					return backendA, nil
+				case companyB:
+					return backendB, nil
+				default:
+					return nil, errors.New("unexpected companyID")
+				}
+			},
+			connFor(docID, backendA),
+			backendA, backendB,
+		)
+	}
+
+	moveTo := func(companyID uu.ID) docdb.CreateVersionFunc {
+		return func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+			return &docdb.CreateVersionResult{Version: newVerion, NewCompanyID: companyID.Nullable()}, nil
+		}
+	}
+
+	t.Run("AddDocumentVersion to a company on another backend", func(t *testing.T) {
+		var committed bool
+		backendA := &docdb.MockConn{
+			AddDocumentVersionMock: func(ctx context.Context, _, _ uu.ID, _ string, createVersion docdb.CreateVersionFunc, _ docdb.OnNewVersionFunc) error {
+				// The company is only known once the callback has run, so the
+				// refusal has to come out of the callback — which is what makes
+				// the version roll back instead of being committed here.
+				_, err := createVersion(ctx, docID, docdb.NewVersionTime(), nil)
+				if err != nil {
+					return err
+				}
+				committed = true
+				return nil
+			},
+		}
+		conn := newConn(t, backendA, &docdb.MockConn{})
+
+		err := conn.AddDocumentVersion(t.Context(), docID, uu.IDv7(), "move", moveTo(companyB), nil)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "routerconn cannot span")
+		require.False(t, committed, "the version must not be committed on the document's backend")
+	})
+
+	t.Run("AddDocumentVersion to a company on the same backend is allowed", func(t *testing.T) {
+		var gotCompanyID uu.NullableID
+		backendA := &docdb.MockConn{
+			AddDocumentVersionMock: func(ctx context.Context, _, _ uu.ID, _ string, createVersion docdb.CreateVersionFunc, _ docdb.OnNewVersionFunc) error {
+				result, err := createVersion(ctx, docID, docdb.NewVersionTime(), nil)
+				if err != nil {
+					return err
+				}
+				gotCompanyID = result.NewCompanyID
+				return nil
+			},
+		}
+		conn := newConn(t, backendA, &docdb.MockConn{})
+
+		require.NoError(t, conn.AddDocumentVersion(t.Context(), docID, uu.IDv7(), "move", moveTo(companyA), nil))
+		require.Equal(t, companyA.Nullable(), gotCompanyID)
+	})
+
+	t.Run("SetDocumentCompanyID to a company on another backend", func(t *testing.T) {
+		var called bool
+		backendA := &docdb.MockConn{
+			SetDocumentCompanyIDMock: func(context.Context, uu.ID, uu.ID) error {
+				called = true
+				return nil
+			},
+		}
+		conn := newConn(t, backendA, &docdb.MockConn{})
+
+		err := conn.SetDocumentCompanyID(t.Context(), docID, companyB)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "routerconn cannot span")
+		require.False(t, called, "the move must not reach the document's backend")
+	})
+
+	t.Run("SetDocumentCompanyID to a company on the same backend is allowed", func(t *testing.T) {
+		var called bool
+		backendA := &docdb.MockConn{
+			SetDocumentCompanyIDMock: func(context.Context, uu.ID, uu.ID) error {
+				called = true
+				return nil
+			},
+		}
+		conn := newConn(t, backendA, &docdb.MockConn{})
+
+		require.NoError(t, conn.SetDocumentCompanyID(t.Context(), docID, companyA))
+		require.True(t, called)
+	})
+}

@@ -180,9 +180,14 @@ func TestHashedDocument_Validate(t *testing.T) {
 			errContains: "has no files",
 		},
 		{
-			// Two consecutive versions with identical files are a change-less
-			// version, which must not exist.
-			name: "identical consecutive versions are invalid",
+			// Creating a version identical to its predecessor is refused where
+			// versions are created (Conn.AddDocumentVersion returns
+			// ErrNoChanges), but a store can hold one anyway: deleting the
+			// middle of v0(F), v1(G), v2(F) leaves v0 and v2 adjacent with the
+			// same files. Rejecting it here would not undo it — RestoreDocument
+			// validates first, so it would only make that document impossible
+			// to back up, sync or migrate for good.
+			name: "identical consecutive versions are valid so a stored document stays backupable",
 			doc: &HashedDocument{
 				ID: validID, CompanyID: validCompanyID, HashedFiles: validHashedFiles(),
 				Versions: map[VersionTime]*HashedVersion{
@@ -190,13 +195,24 @@ func TestHashedDocument_Validate(t *testing.T) {
 					validVersion2: {CommitUserID: uu.IDv4(), CommitReason: "no change", FileHashes: map[string]string{"a.txt": hash}},
 				},
 			},
-			wantErr:     true,
-			errContains: "no change",
+		},
+		{
+			// The same for the move that SetDocumentCompanyID rewrote back: the
+			// pure company-move version v1 named another company, the marker
+			// move rewrote it to the one v0 already names, and the two versions
+			// are now indistinguishable. That document must still be backupable.
+			name: "identical consecutive versions with the same company are valid",
+			doc: &HashedDocument{
+				ID: validID, CompanyID: validCompanyID, HashedFiles: validHashedFiles(),
+				Versions: map[VersionTime]*HashedVersion{
+					validVersion:  {CompanyID: validCompanyID, CommitUserID: uu.IDv4(), CommitReason: "init", FileHashes: map[string]string{"a.txt": hash}},
+					validVersion2: {CompanyID: validCompanyID, CommitUserID: uu.IDv4(), CommitReason: "moved back", FileHashes: map[string]string{"a.txt": hash}},
+				},
+			},
 		},
 		{
 			// A document is moved between companies by a version that changes
-			// nothing but the company, so identical files are only a
-			// change-less version when the company is unchanged too.
+			// nothing but the company.
 			name: "identical consecutive versions with a company change are valid",
 			doc: &HashedDocument{
 				ID: validID, CompanyID: otherCompanyID, HashedFiles: validHashedFiles(),

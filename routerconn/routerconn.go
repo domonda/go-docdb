@@ -16,6 +16,13 @@
 // across backends. Both callbacks must return one of the connections passed as
 // allConns, and connForCompanyID and connForDocID must resolve a document and
 // its owning company to the same backend.
+//
+// Changing a document's company is therefore refused when the new company
+// resolves to another backend, both for SetDocumentCompanyID and for a version
+// that names a docdb.CreateVersionResult.NewCompanyID. Moving a document to a
+// company on another backend is a migration — every version copied over and the
+// original deleted — not a company change, and doing the company change alone
+// would leave the document on a backend that no longer answers for its company.
 package routerconn
 
 import (
@@ -24,6 +31,7 @@ import (
 	"github.com/ungerik/go-fs"
 
 	"github.com/domonda/go-docdb"
+	"github.com/domonda/go-errs"
 	"github.com/domonda/go-types/uu"
 )
 
@@ -117,7 +125,43 @@ func (r *routerConn) SetDocumentCompanyID(ctx context.Context, docID, companyID 
 	if err != nil {
 		return err
 	}
+	if err = r.checkCompanyOnConn(ctx, docID, companyID, conn); err != nil {
+		return err
+	}
 	return conn.SetDocumentCompanyID(ctx, docID, companyID)
+}
+
+// checkCompanyOnConn returns an error if moving docID to companyID would leave
+// the document on a backend that is not the one connForCompanyID resolves its
+// new company to.
+//
+// routerconn never splits a document across backends and its callbacks must
+// resolve a document and its owning company to the same one (see the package
+// doc). A move to a company on another backend breaks that: the document stays
+// where it is while CompanyDocumentIDs of the new company asks the other
+// backend, which does not list it — so a company-wide sync or migration skips
+// it without reporting anything. Carrying the document over would be a copy of
+// every version plus a delete of the original, which is a migration, not a
+// company change; refusing tells the caller to run one instead of silently
+// stranding the document.
+//
+// The backends are compared by identity, which is what the package already
+// requires of the callbacks: both must return one of the connections passed as
+// allConns.
+func (r *routerConn) checkCompanyOnConn(ctx context.Context, docID, companyID uu.ID, docConn docdb.Conn) error {
+	companyConn, err := r.connForCompanyID(ctx, companyID)
+	if err != nil {
+		return err
+	}
+	if companyConn != docConn {
+		// Reported by type, not by value: a backend prints its whole
+		// configuration when it has no String method of its own.
+		return errs.Errorf(
+			"cannot move document %s to company %s: the company routes to backend %T but the document is on backend %T, and routerconn cannot span the two — migrate the document instead",
+			docID, companyID, companyConn, docConn,
+		)
+	}
+	return nil
 }
 
 func (r *routerConn) DocumentVersions(ctx context.Context, docID uu.ID) ([]docdb.VersionTime, error) {
@@ -194,10 +238,35 @@ func (r *routerConn) CreateDocument(ctx context.Context, companyID, docID, userI
 	return conn.CreateDocument(ctx, companyID, docID, userID, reason, version, files, onNewVersion)
 }
 
+// AddDocumentVersion routes by docID, and refuses a version that would move the
+// document to a company on another backend.
+//
+// A version can change the document's company via
+// docdb.CreateVersionResult.NewCompanyID, which docdb.Conn documents as the way
+// to move a document between companies. That company is only known once
+// createVersion has run, so the check is wrapped around the callback rather
+// than done up front: returning the error from there aborts the version and
+// rolls back atomically, leaving the document where it is instead of committed
+// on the wrong backend.
 func (r *routerConn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, createVersion docdb.CreateVersionFunc, onNewVersion docdb.OnNewVersionFunc) error {
 	conn, err := r.connForDocID(ctx, docID)
 	if err != nil {
 		return err
+	}
+	if createVersion != nil {
+		inner := createVersion
+		createVersion = func(ctx context.Context, docID uu.ID, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+			result, err := inner(ctx, docID, prevVersion, prevFiles)
+			if err != nil || result == nil {
+				return result, err
+			}
+			if result.NewCompanyID.IsNotNull() {
+				if err = r.checkCompanyOnConn(ctx, docID, result.NewCompanyID.Get(), conn); err != nil {
+					return nil, err
+				}
+			}
+			return result, nil
+		}
 	}
 	return conn.AddDocumentVersion(ctx, docID, userID, reason, createVersion, onNewVersion)
 }

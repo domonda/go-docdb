@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"reflect"
 	"strconv"
@@ -85,10 +86,8 @@ func (populator *Populator) DocumentVersion(data ...map[string]any) *pgstore.Doc
 	// document would otherwise produce a forked chain, which the
 	// one-successor-per-version index rejects.
 	version := docdb.VersionTimeFrom(time.Now())
-	if len(data) > 0 {
-		if v, ok := data[0]["Version"].(docdb.VersionTime); ok {
-			version = v
-		}
+	if v, ok := mergedData(data...)["Version"].(docdb.VersionTime); ok {
+		version = v
 	}
 	return insertRecordWithExtraData(
 		pgstore.DocumentVersion{
@@ -119,17 +118,36 @@ func (populator *Populator) DocumentVersionFile(data ...map[string]any) *pgstore
 		}, populator, data...)
 }
 
+// mergedData combines the variadic override maps of the fixture constructors
+// into the one map they all read, with a later map winning over an earlier one
+// for a key both name.
+//
+// Every place that reads an override goes through this, so passing more than
+// one map means the same thing everywhere. Reading only data[0] instead — which
+// is what the constructors used to do, each on its own — silently dropped every
+// later map: an override in one was neither applied nor rejected, and the
+// fixture was inserted with the generated default the caller had asked to
+// replace.
+func mergedData(data ...map[string]any) map[string]any {
+	switch len(data) {
+	case 0:
+		return nil
+	case 1:
+		return data[0]
+	}
+	merged := make(map[string]any)
+	for _, d := range data {
+		maps.Copy(merged, d)
+	}
+	return merged
+}
+
 func createRecordIfNeeded[T any](
 	key string,
 	createRecord func(data ...map[string]any) *T,
 	data ...map[string]any,
 ) *T {
-	d := map[string]any{}
-	if len(data) > 0 {
-		d = data[0]
-	}
-
-	if res, ok := d[key]; ok {
+	if res, ok := mergedData(data...)[key]; ok {
 		return res.(*T)
 	}
 
@@ -152,13 +170,8 @@ func insertRecordWithExtraData[T sqldb.StructWithTableName](
 }
 
 func fillDataIntoStruct[T any](obj T, data ...map[string]any) *T {
-	d := map[string]any{}
-	if len(data) > 0 {
-		d = data[0]
-	}
-
 	ref := reflect.ValueOf(&obj).Elem()
-	for key, value := range d {
+	for key, value := range mergedData(data...) {
 		field := ref.FieldByName(key)
 		if !field.IsValid() {
 			continue

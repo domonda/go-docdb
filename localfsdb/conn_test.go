@@ -1271,3 +1271,238 @@ func TestMoveDocumentBetweenCompanies(t *testing.T) {
 		require.Nil(t, docIDs, "the document must no longer be listed under the company of the deleted version")
 	})
 }
+
+// TestSetDocumentCompanyIDSurvives covers the operations that re-derive a
+// document's company from its latest version. Each of them must do so only when
+// it actually changed which version is the latest one: SetDocumentCompanyID
+// moves the company marker without committing a version, so the marker names a
+// company that no version of the document names, on purpose. An operation that
+// re-derives unconditionally silently undoes that move.
+func TestSetDocumentCompanyIDSurvives(t *testing.T) {
+	var (
+		ctx       = t.Context()
+		companyA  = uu.IDFrom("11111111-1111-4111-8111-111111111111")
+		companyB  = uu.IDFrom("22222222-2222-4222-8222-222222222222")
+		docID     = uu.IDFrom("33333333-3333-4333-8333-333333333333")
+		userID    = uu.IDFrom("ce6f0867-0172-4ffc-a0c0-c5878b921171")
+		v0        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+		v1        = docdb.MustVersionTimeFromString("2024-01-02_00-00-00.000")
+		noopOnNew = func(context.Context, *docdb.VersionInfo) error { return nil }
+	)
+
+	// movedDoc returns a document owned by companyB through the marker alone:
+	// every version of it still names companyA.
+	movedDoc := func(t *testing.T) *localfsdb.Conn {
+		t.Helper()
+		conn := localfsdb.NewTestConn(t)
+		require.NoError(t, conn.CreateDocument(
+			ctx, companyA, docID, userID, "v0", v0,
+			newTestMemFiles("a.txt"), noopOnNew,
+		))
+		require.NoError(t, conn.AddDocumentVersion(
+			ctx, docID, userID, "v1",
+			func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+				return &docdb.CreateVersionResult{Version: v1, WriteFiles: newTestMemFiles("b.txt")}, nil
+			},
+			noopOnNew,
+		))
+		require.NoError(t, conn.SetDocumentCompanyID(ctx, docID, companyB))
+		return conn
+	}
+
+	requireOwnedBy := func(t *testing.T, conn *localfsdb.Conn, companyID uu.ID, msgAndArgs ...any) {
+		t.Helper()
+		docCompanyID, err := conn.DocumentCompanyID(ctx, docID)
+		require.NoError(t, err)
+		require.Equal(t, companyID, docCompanyID, msgAndArgs...)
+		docIDs, err := conn.CompanyDocumentIDs(ctx, companyID)
+		require.NoError(t, err)
+		require.Equal(t, uu.IDSlice{docID}, docIDs, msgAndArgs...)
+	}
+
+	t.Run("deleting a version that is not the latest keeps the moved company", func(t *testing.T) {
+		conn := movedDoc(t)
+
+		// v0 is the oldest version and cannot decide who owns the document, so
+		// deleting it must not touch the company marker.
+		leftVersions, err := conn.DeleteDocumentVersion(ctx, docID, v0)
+		require.NoError(t, err)
+		require.Equal(t, []docdb.VersionTime{v1}, leftVersions)
+
+		requireOwnedBy(t, conn, companyB, "deleting an older version must not undo SetDocumentCompanyID")
+	})
+
+	t.Run("deleting the latest version re-derives the company from the new latest one", func(t *testing.T) {
+		conn := movedDoc(t)
+
+		// The counterpart: v1 is the latest version, so deleting it does change
+		// which version the document's company has to come from.
+		leftVersions, err := conn.DeleteDocumentVersion(ctx, docID, v1)
+		require.NoError(t, err)
+		require.Equal(t, []docdb.VersionTime{v0}, leftVersions)
+
+		requireOwnedBy(t, conn, companyA, "the document must follow the company of its new latest version")
+	})
+
+	t.Run("a merge restore that writes nothing keeps the moved company", func(t *testing.T) {
+		conn := movedDoc(t)
+		backup, err := docdb.ReadHashedDocument(ctx, conn, docID)
+		require.NoError(t, err)
+		require.Equal(t, companyB, backup.CompanyID)
+
+		// Re-syncing the document into itself: every version is already there,
+		// so this restore has nothing to write and must change nothing.
+		require.NoError(t, conn.RestoreDocument(ctx, backup, false))
+
+		requireOwnedBy(t, conn, companyB, "an incremental sync must not undo SetDocumentCompanyID")
+	})
+
+	t.Run("a merge restore that writes a new latest version takes its company", func(t *testing.T) {
+		conn := movedDoc(t)
+		backup, err := docdb.ReadHashedDocument(ctx, conn, docID)
+		require.NoError(t, err)
+
+		// The counterpart: a restore into a destination missing the latest
+		// version does establish who owns the document.
+		target := localfsdb.NewTestConn(t)
+		require.NoError(t, target.CreateDocument(
+			ctx, companyA, docID, userID, "v0", v0,
+			newTestMemFiles("a.txt"), noopOnNew,
+		))
+		require.NoError(t, target.RestoreDocument(ctx, backup, false))
+
+		requireOwnedBy(t, target, companyB, "the restored latest version decides the company")
+	})
+}
+
+// TestRestoreDocumentRelinksSuccessor covers a merge restore that fills a
+// version back into the middle of an existing chain: the successor was relinked
+// to the deleted version's own predecessor when it was deleted, and the restore
+// has to take that back. Otherwise the successor keeps naming a predecessor
+// that is no longer the version before it and the chain forks.
+func TestRestoreDocumentRelinksSuccessor(t *testing.T) {
+	var (
+		ctx       = t.Context()
+		companyID = uu.IDFrom("3a4f1c2e-7b8d-4e9a-b1c2-d3e4f5a6b7c8")
+		docID     = uu.IDFrom("11111111-2222-4333-8444-555555555555")
+		userID    = uu.IDFrom("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
+		v0        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+		v1        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.001")
+		v2        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.002")
+		noopOnNew = func(context.Context, *docdb.VersionInfo) error { return nil }
+	)
+
+	conn := localfsdb.NewTestConn(t)
+	require.NoError(t, conn.CreateDocument(
+		ctx, companyID, docID, userID, "v0", v0,
+		newTestMemFiles("a.txt"), noopOnNew,
+	))
+	require.NoError(t, conn.AddDocumentVersion(
+		ctx, docID, userID, "v1",
+		func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+			return &docdb.CreateVersionResult{Version: v1, WriteFiles: newTestMemFiles("b.txt")}, nil
+		},
+		noopOnNew,
+	))
+	require.NoError(t, conn.AddDocumentVersion(
+		ctx, docID, userID, "v2",
+		func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+			return &docdb.CreateVersionResult{Version: v2, WriteFiles: newTestMemFiles("c.txt")}, nil
+		},
+		noopOnNew,
+	))
+
+	backup, err := docdb.ReadHashedDocument(ctx, conn, docID)
+	require.NoError(t, err)
+
+	// A destination that has v0 and v2 but not v1, with v2 chained off v0
+	// because that is the version it was restored after. Built by restoring a
+	// backup with the middle version taken out, which is what a destination
+	// looks like after v1 was deleted from it and it was re-synced.
+	partial := &docdb.HashedDocument{
+		ID:          backup.ID,
+		CompanyID:   backup.CompanyID,
+		HashedFiles: backup.HashedFiles,
+		Versions:    maps.Clone(backup.Versions),
+	}
+	delete(partial.Versions, v1)
+
+	target := localfsdb.NewTestConn(t)
+	require.NoError(t, target.RestoreDocument(ctx, partial, false))
+	v2Info, err := target.DocumentVersionInfo(ctx, docID, v2)
+	require.NoError(t, err)
+	require.Equal(t, &v0, v2Info.PrevVersion, "without v1 the destination chains v2 off v0")
+
+	// Restoring the full backup fills v1 back in between them. Leaving v2
+	// chained off v0 would fork the chain: two versions naming the same
+	// predecessor, and v2 naming one that is no longer the version before it.
+	require.NoError(t, target.RestoreDocument(ctx, backup, false))
+
+	versions, err := target.DocumentVersions(ctx, docID)
+	require.NoError(t, err)
+	require.Equal(t, []docdb.VersionTime{v0, v1, v2}, versions)
+
+	v1Info, err := target.DocumentVersionInfo(ctx, docID, v1)
+	require.NoError(t, err)
+	require.Equal(t, &v0, v1Info.PrevVersion)
+
+	v2Info, err = target.DocumentVersionInfo(ctx, docID, v2)
+	require.NoError(t, err)
+	require.Equal(t, &v1, v2Info.PrevVersion, "the restored v1 must take v2 back as its successor")
+}
+
+// TestSyncDocumentMovedBackToPreviousCompany covers a document whose latest
+// version is a company move that was later undone with SetDocumentCompanyID.
+//
+// Reading it back collapses that version into its predecessor: the move version
+// changed nothing but the company, and the marker move renamed it to the
+// company the predecessor already names, so the two versions become
+// indistinguishable. That is a state the public API produces, and the document
+// has to stay backupable and syncable in it — rejecting the backup would not
+// undo the collapse, only make the document impossible to copy for good.
+func TestSyncDocumentMovedBackToPreviousCompany(t *testing.T) {
+	var (
+		ctx       = t.Context()
+		companyA  = uu.IDFrom("11111111-1111-4111-8111-111111111111")
+		companyB  = uu.IDFrom("22222222-2222-4222-8222-222222222222")
+		docID     = uu.IDFrom("33333333-3333-4333-8333-333333333333")
+		userID    = uu.IDFrom("ce6f0867-0172-4ffc-a0c0-c5878b921171")
+		v0        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+		v1        = docdb.MustVersionTimeFromString("2024-01-02_00-00-00.000")
+		noopOnNew = func(context.Context, *docdb.VersionInfo) error { return nil }
+	)
+
+	src := localfsdb.NewTestConn(t)
+	require.NoError(t, src.CreateDocument(
+		ctx, companyA, docID, userID, "v0", v0,
+		newTestMemFiles("a.txt"), noopOnNew,
+	))
+	// A pure company move: no file is written or removed.
+	require.NoError(t, src.AddDocumentVersion(
+		ctx, docID, userID, "USER_DOCUMENT_MOVE",
+		func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+			return &docdb.CreateVersionResult{Version: v1, NewCompanyID: companyB.Nullable()}, nil
+		},
+		noopOnNew,
+	))
+	// Moved back, marker only. v1 now names the company v0 already names.
+	require.NoError(t, src.SetDocumentCompanyID(ctx, docID, companyA))
+
+	backup, err := docdb.ReadHashedDocument(ctx, src, docID)
+	require.NoError(t, err)
+	require.NoError(t, backup.Validate(),
+		"a document the public API can produce must be backupable")
+	require.Equal(t, companyA, backup.CompanyID)
+
+	dest := localfsdb.NewTestConn(t)
+	require.NoError(t, docdb.SyncDocument(ctx, src, dest, docID, false))
+
+	destCompanyID, err := dest.DocumentCompanyID(ctx, docID)
+	require.NoError(t, err)
+	require.Equal(t, companyA, destCompanyID)
+
+	versions, err := dest.DocumentVersions(ctx, docID)
+	require.NoError(t, err)
+	require.Equal(t, []docdb.VersionTime{v0, v1}, versions,
+		"both versions must survive the copy, collapsed or not")
+}

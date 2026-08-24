@@ -172,7 +172,9 @@ type Conn interface {
 	// Each version is written as a single unit (file content + per-version
 	// metadata + company marker). On error mid-restore, partial state created
 	// during the call is rolled back; versions successfully written before
-	// the failing one stay written.
+	// the failing one stay written. Rolling back covers the file content this
+	// call wrote for a version whose metadata was already stored, which is not
+	// the call's to remove but whose files it uploaded all the same.
 	//
 	// Returns wrapped ErrNotImplemented if the implementation does not
 	// support restoration.

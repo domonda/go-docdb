@@ -356,3 +356,55 @@ func TestConn_RestoreDocument_WritesCarriedForwardFileOnce(t *testing.T) {
 	require.ElementsMatch(t, []string{"a.txt", "b.txt"}, docs.writtenFiles)
 	require.Len(t, docs.writtenFiles, 2, "a.txt is carried forward unchanged, so it is written once")
 }
+
+// TestConn_RestoreDocument_RollsBackFileContentOfPreExistingVersions covers the
+// rollback of a restore into a MetadataStore that already holds every version.
+//
+// That is the migration case: the version rows were mirrored long before any
+// file content was copied, so no version the restore writes files for is one it
+// added to the MetadataStore, and none of them may be deleted from there on
+// failure. The file content is a different matter — this call uploaded it, and
+// leaving it behind when the restore fails orphans objects that nothing
+// references and that no later run will clean up, because the next attempt
+// finds them present and skips them.
+func TestConn_RestoreDocument_RollsBackFileContentOfPreExistingVersions(t *testing.T) {
+	doc, v1, v2 := newRestoreTestDoc(uu.IDv4(), uu.IDv4())
+
+	docs := newFakeDocumentStore() // no file content at all
+	docs.failWriteOf = &v2         // the second version's upload dies
+	meta := newRestoreMetadataStore(t, doc, v1, v2)
+	meta.versionsExist = true
+	conn := storeconn.New(docs, meta)
+
+	require.Error(t, conn.RestoreDocument(t.Context(), doc, false))
+
+	require.Zero(t, meta.deleteDocumentCalls, "the pre-existing metadata is not this call's to delete")
+	require.False(t, docs.has(doc, v1), "v1's content was uploaded by this call and must be rolled back")
+	// Both hashes: v1's because it was uploaded, and v2's because the upload
+	// that failed may still have stored some of its objects before it did.
+	require.ElementsMatch(t,
+		[]string{doc.Versions[v1].FileHashes["a.txt"], doc.Versions[v2].FileHashes["b.txt"]},
+		docs.deletedHashes,
+	)
+}
+
+// TestConn_RestoreDocument_RollbackKeepsPreExistingFileContent is the
+// counterpart: the rollback deletes the objects this call uploaded, never one
+// that was already there. An interrupted earlier run left a.txt behind, so the
+// restore only writes b.txt and only b.txt may be removed again — deleting
+// a.txt would destroy content of a version the restore never touched.
+func TestConn_RestoreDocument_RollbackKeepsPreExistingFileContent(t *testing.T) {
+	doc, v1, v2 := newRestoreTestDoc(uu.IDv4(), uu.IDv4())
+
+	hashA := doc.Versions[v1].FileHashes["a.txt"]
+	docs := newFakeDocumentStore(docdb.FileInfo{Name: "a.txt", Hash: hashA})
+	docs.failWriteOf = &v2
+	meta := newRestoreMetadataStore(t, doc, v1, v2)
+	meta.versionsExist = true
+	conn := storeconn.New(docs, meta)
+
+	require.Error(t, conn.RestoreDocument(t.Context(), doc, false))
+
+	require.NotContains(t, docs.deletedHashes, hashA, "a.txt was already stored before this call")
+	require.True(t, docs.has(doc, v1), "v1 was complete before the call and must stay complete")
+}

@@ -49,11 +49,28 @@ type HashedVersion struct {
 // nil HashedVersion entries, and FileHashes references that have no corresponding
 // entry in HashedFiles. All encountered problems are joined with errors.Join.
 //
+// The joined problems are built with fmt.Errorf rather than errs.Errorf, as in
+// CreateVersionResult.Validate: this reports every problem of one value at
+// once, and a call stack per problem would repeat the same frames as many times
+// as there are problems. The caller attaches one where the error propagates —
+// Conn.RestoreDocument implementations wrap it with errs.WrapWithFuncParams.
+//
 // It also enforces the document version invariants: every version must contain
 // at least one file (a document cannot be created empty, and no version may
-// remove all files), and every version after the first must differ from its
-// predecessor either in its files or in its company (no change-less versions),
-// and the latest version must name the document's current CompanyID.
+// remove all files), and the latest version must name the document's current
+// CompanyID.
+//
+// A version whose files and company are identical to its predecessor's is NOT
+// rejected. Creating one is refused where versions are created — Conn.
+// AddDocumentVersion returns ErrNoChanges — but a stored document can end up
+// holding one anyway, through operations that are documented to do exactly
+// that: DeleteDocumentVersion removing the middle of v0(F), v1(G), v2(F)
+// leaves two adjacent versions with the same files, and SetDocumentCompanyID
+// rewrites the company of versions that only differ from their predecessor in
+// naming another company. Rejecting such a document here would not undo it —
+// it would only make it impossible to back up, sync or migrate for good, since
+// every RestoreDocument starts by calling this. A backup has to be able to
+// represent what a store actually holds.
 func (doc *HashedDocument) Validate() error {
 	if doc == nil {
 		return errors.New("nil HashedDocument")
@@ -87,10 +104,10 @@ func (doc *HashedDocument) Validate() error {
 	}
 
 	// Ordered version invariants: every version must contain at least one file
-	// (no version may remove all files), and every version after the first must
-	// differ from its predecessor. VersionTimes returns the versions sorted
-	// ascending. Nil HashedVersions were already reported above and are skipped
-	// here to avoid a nil deref.
+	// (no version may remove all files), and the latest one must name the
+	// document's company. VersionTimes returns the versions sorted ascending.
+	// Nil HashedVersions were already reported above and are skipped here to
+	// avoid a nil deref.
 	sorted := doc.VersionTimes()
 	for i, v := range sorted {
 		hv := doc.Versions[v]
@@ -99,20 +116,6 @@ func (doc *HashedDocument) Validate() error {
 		}
 		if len(hv.FileHashes) == 0 {
 			err = errors.Join(err, fmt.Errorf("HashedDocument version %s has no files", v))
-		}
-		if i > 0 {
-			// A version with the same files as its predecessor is a change-less
-			// version unless it moved the document to another company, which is
-			// how a move is recorded: a new version that changes nothing but the
-			// company.
-			prev := doc.Versions[sorted[i-1]]
-			if prev != nil && maps.Equal(hv.FileHashes, prev.FileHashes) &&
-				doc.VersionCompanyID(v) == doc.VersionCompanyID(sorted[i-1]) {
-				err = errors.Join(err, fmt.Errorf(
-					"HashedDocument version %s is identical to previous version %s (no change)",
-					v, sorted[i-1],
-				))
-			}
 		}
 		// The company of the latest version is the document's current company:
 		// a store that keeps no separate owner marker derives the owner from

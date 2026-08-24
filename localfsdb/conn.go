@@ -570,14 +570,21 @@ func (c *Conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version d
 
 		e = uuiddir.RemoveDir(c.documentsDir, docDir)
 		err = errors.Join(err, e)
-	} else {
+	} else if version.After(leftVersions[len(leftVersions)-1]) {
 		// A document belongs to the company of its latest version, so deleting
 		// the latest version of a document that was moved between companies
 		// re-assigns it to the company of the version that becomes the latest
 		// one — otherwise the document would stay listed under a company that
-		// none of its remaining versions names. setDocumentCompanyID does
-		// nothing when that company is the one the document already has, which
-		// is the case for every delete that does not undo a move.
+		// none of its remaining versions names.
+		//
+		// Only for a delete that actually removed the latest version, which is
+		// what documentVersions returning nothing after it proves: leftVersions
+		// is ascending, so version being after the last of them is what makes
+		// it the one that was on top. Re-deriving the company after deleting an
+		// older version instead would overwrite a company marker that
+		// SetDocumentCompanyID moved without committing a version — that marker
+		// names a company no version of the document names, on purpose, and
+		// deleting a version that cannot affect ownership must leave it alone.
 		latestVersionInfo, _, e := c.latestDocumentVersionInfo(ctx, docID)
 		if e == nil {
 			e = c.setDocumentCompanyID(ctx, docID, latestVersionInfo.CompanyID)
@@ -1089,6 +1096,7 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 	var (
 		createdVersionDirs []fs.File
 		createdInfoFiles   []fs.File
+		relinkedInfoFiles  []relinkedInfoFile
 	)
 	defer func() {
 		if err == nil {
@@ -1102,6 +1110,11 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 				err = errors.Join(err, f.Remove())
 			}
 		}
+		// A relinked successor is a version this call did not create and must
+		// not remove, so its original bytes are written back instead.
+		for _, r := range relinkedInfoFiles {
+			err = errors.Join(err, r.file.WriteAll(r.data))
+		}
 		if !docExisted {
 			err = errors.Join(err, c.removeCompanyDocumentDirIfExists(doc.CompanyID, doc.ID))
 			if docDir.Exists() {
@@ -1110,7 +1123,13 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		}
 	}()
 
-	for _, v := range doc.VersionTimes() {
+	// latestWritten is the newest version this call wrote, which the ascending
+	// walk below leaves at the last one it wrote. It decides whether the
+	// company marker has to be re-derived at the end.
+	var latestWritten *docdb.VersionTime
+
+	versionTimes := doc.VersionTimes()
+	for i, v := range versionTimes {
 		if !recreate && versionTimeIn(existingVersions, v) {
 			cur := v
 			prevVersion = &cur
@@ -1156,9 +1175,30 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		}
 		createdInfoFiles = append(createdInfoFiles, infoFile)
 
+		// A version written back into the middle of an existing chain has to
+		// take back the successor that DeleteDocumentVersion relinked to this
+		// version's own predecessor when it was removed. Only the backup's own
+		// next version is considered, and only while it still chains off that
+		// same predecessor, which is the rule storeconn restores by (see
+		// storeconn.CreateDocumentVersionInput.RelinkSuccessor): no property of
+		// a stored version identifies it as this one's successor, and a version
+		// the destination has but the backup does not is kept as-is rather than
+		// adopted.
+		if !recreate && i+1 < len(versionTimes) && versionTimeIn(existingVersions, versionTimes[i+1]) {
+			var relinked *relinkedInfoFile
+			relinked, err = relinkSuccessorInfoFile(ctx, docDir, doc.ID, versionTimes[i+1], prevVersion, v)
+			if err != nil {
+				return err
+			}
+			if relinked != nil {
+				relinkedInfoFiles = append(relinkedInfoFiles, *relinked)
+			}
+		}
+
 		cur := v
 		prevVersion = &cur
 		prevVersionDir = versionDir
+		latestWritten = &cur
 	}
 
 	// The document belongs to the company of its latest version, which merging
@@ -1168,17 +1208,80 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 	// created by this call had its marker written as doc.CompanyID above, which
 	// doc.Validate() requires to be the company of the backup's latest version.
 	//
+	// Gated on this call having written the version that is now the document's
+	// latest one. A merge that wrote nothing, or only versions below the latest
+	// one on disk, changed nothing about who owns the document, and re-deriving
+	// the company from the latest version would then overwrite a marker that
+	// SetDocumentCompanyID moved without committing a version: that marker
+	// names a company no version names, on purpose, and ReadHashedDocument
+	// documents it as the answer that wins. Reverting it on every merge made
+	// every incremental sync into this store undo every such move.
+	//
 	// Done as the last step, after which nothing can fail, because the deferred
 	// rollback above only removes the versions and files this call created, not
 	// a company re-assignment.
-	if docExisted {
+	if docExisted && latestWritten != nil {
 		latestVersionInfo, _, err := c.latestDocumentVersionInfo(ctx, doc.ID)
 		if err != nil {
 			return err
 		}
-		return c.setDocumentCompanyID(ctx, doc.ID, latestVersionInfo.CompanyID)
+		if latestVersionInfo.Version.Equal(*latestWritten) {
+			return c.setDocumentCompanyID(ctx, doc.ID, latestVersionInfo.CompanyID)
+		}
 	}
 	return nil
+}
+
+// relinkedInfoFile is the original content of a version info file that
+// RestoreDocument rewrote to relink a chain, kept so the rollback can put the
+// file back as it was.
+type relinkedInfoFile struct {
+	file fs.File
+	data []byte
+}
+
+// relinkSuccessorInfoFile makes successor name newVersion as its predecessor,
+// but only while it still names prevVersion — the predecessor newVersion was
+// filled in front of. It returns the file's original content so the caller can
+// undo the rewrite, or nil when nothing was rewritten.
+//
+// A successor that names something else is not the row this restore may move:
+// it either never chained off prevVersion or was already relinked, and taking
+// it over would leave it naming a predecessor whose file set it never derived
+// from. A nil prevVersion means newVersion is the earliest version of the
+// backup and had no predecessor to be filled in after, so nothing is relinked.
+//
+// Only PrevVersion is rewritten. The successor's added/modified/removed lists
+// still describe its diff against the version it used to chain off, which is
+// what storeconn's relink leaves behind as well — the two stores stay
+// equivalent, rather than one of them silently deriving different change lists
+// for the same restore.
+func relinkSuccessorInfoFile(ctx context.Context, docDir fs.File, docID uu.ID, successor docdb.VersionTime, prevVersion *docdb.VersionTime, newVersion docdb.VersionTime) (relinked *relinkedInfoFile, err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, docDir, docID, successor, prevVersion, newVersion)
+
+	if prevVersion == nil {
+		return nil, nil
+	}
+	infoFile := docDir.Joinf("%s.json", successor)
+	if !infoFile.Exists() {
+		return nil, nil
+	}
+	original, err := infoFile.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	versionInfo, err := readAndFixVersionInfoJSON(ctx, infoFile, false)
+	if err != nil {
+		return nil, err
+	}
+	if versionInfo.PrevVersion == nil || !versionInfo.PrevVersion.Equal(*prevVersion) {
+		return nil, nil
+	}
+	versionInfo.PrevVersion = &newVersion
+	if err = versionInfo.WriteJSON(infoFile); err != nil {
+		return nil, err
+	}
+	return &relinkedInfoFile{file: infoFile, data: original}, nil
 }
 
 func versionTimeIn(versions []docdb.VersionTime, v docdb.VersionTime) bool {
