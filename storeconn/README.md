@@ -249,8 +249,26 @@ For middle versions it calls `metadataStore.CreateDocumentVersion` **directly**
 restoring versions out of "latest" order is expected. It diffs each version
 against the *backup's* predecessor (not the DB's latest) to compute
 added/modified/removed, and passes the version's authoritative full file set as
-`Files`. A rollback removes versions created during the call (newest first), or
-drops the whole document if it was created fresh here.
+`Files`. A rollback drops the whole document if it was created fresh here;
+otherwise it removes the versions created during the call (newest first) and the
+file content this call uploaded, and nothing else.
+
+Three rules make that "nothing else" true:
+
+- **The versions go through `metadataStore.DeleteDocumentVersion`, not
+  `conn.DeleteDocumentVersion`.** The composite one also deletes the hashes the
+  removed version alone references, and a version this call created can reference
+  content it never wrote — files the `DocumentStore` already held, which is
+  exactly why nothing was uploaded for it.
+- **The content is deleted by name *and* hash**, through
+  `DocumentHashFilesExist`'s mirror `DeleteDocumentHashFiles`. A hash does not
+  identify one object: a document holding the same bytes under two names holds
+  two, so a restore that uploads `b.txt` with the content of an already-stored
+  `a.txt` shares its hash, and a hash-only delete would take both.
+- **A failed metadata delete stops the content delete.** A version that is still
+  committed while its content is gone cannot be told apart from corruption by any
+  reader. An orphaned object can: the presence check of the next restore finds
+  it, and a content-addressed write of the same bytes overwrites it.
 
 ### Deletion
 
@@ -271,6 +289,12 @@ The metadata store is the authority on which hashes are safe to delete:
 remaining version references. Only those blobs are deleted, so shared content
 survives.
 
+`DeleteDocumentHashes` matches on the hash alone and therefore removes every
+file with that content, whatever its name — which is what removing a version's
+content needs. `DeleteDocumentHashFiles` matches `Name` and `Hash` together, for
+a caller undoing exactly the files it wrote. Picking the wrong one is how a
+rollback deletes an object it never created.
+
 ## Ordering & rollback summary
 
 The recurring rule across every orchestrated write:
@@ -280,9 +304,14 @@ The recurring rule across every orchestrated write:
   version).
 - **Guard before you can clean up** — `CreateDocument`'s existence check is what
   makes deleting blobs on rollback safe.
-- **Roll back by hash safety, not by name** — never delete a blob whose
-  content hash might be shared; always ask the metadata store which hashes are
-  exclusively the removed version's.
+- **Roll back only what you can prove is yours.** Two different questions, two
+  different deletes. Removing a *version's* content is a hash question — ask the
+  metadata store which hashes no remaining version references and delete those
+  with `DeleteDocumentHashes`. Undoing your *own uploads* is a name-and-hash
+  question — a document can hold the same bytes under two names, so record what
+  you wrote as `(name, hash)` pairs and delete them with
+  `DeleteDocumentHashFiles`. Using the first for the second deletes an object the
+  caller never wrote.
 - **Never let cleanup mask the cause** — rollback errors are `errors.Join`ed onto
   the original error, and expected not-found results are ignored.
 
