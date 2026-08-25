@@ -15,100 +15,6 @@ import (
 	"github.com/domonda/go-docdb/storeconn"
 )
 
-// fakeMetadataStore implements storeconn.MetadataStore for rollback tests.
-// Only the methods exercised by AddDocumentVersion are implemented; any other
-// method is promoted from the embedded nil interface and panics if called,
-// which surfaces unexpected changes to the code path under test.
-type fakeMetadataStore struct {
-	storeconn.MetadataStore
-
-	latest *docdb.VersionInfo
-
-	addedVersion        docdb.VersionTime
-	deleteVersionCalled bool
-	// deletedVersion records the version passed to DeleteDocumentVersion, so a
-	// test can assert the genesis rollback targets exactly the version it
-	// created rather than wiping the whole document.
-	deletedVersion docdb.VersionTime
-	// createVersionErr, when set, is returned by CreateDocumentVersion to
-	// simulate a metadata insert failure after the blobs were written.
-	createVersionErr error
-	// safeHashesToDelete models the sibling-safe set the real
-	// DeleteDocumentVersion SQL returns: only hashes referenced solely by the
-	// version being deleted (hashes still shared with a sibling are excluded).
-	safeHashesToDelete []string
-}
-
-func (m *fakeMetadataStore) LatestDocumentVersionInfo(context.Context, uu.ID) (*docdb.VersionInfo, error) {
-	return m.latest, nil
-}
-
-func (m *fakeMetadataStore) CreateDocumentVersion(_ context.Context, in storeconn.CreateDocumentVersionInput) (*docdb.VersionInfo, error) {
-	if m.createVersionErr != nil {
-		return nil, m.createVersionErr
-	}
-	m.addedVersion = in.NewVersion
-	return &docdb.VersionInfo{DocID: in.DocID, CompanyID: in.CompanyID, Version: in.NewVersion}, nil
-}
-
-func (m *fakeMetadataStore) DeleteDocumentVersion(_ context.Context, _ uu.ID, version docdb.VersionTime) (leftVersions []docdb.VersionTime, hashesToDelete []string, err error) {
-	m.deleteVersionCalled = true
-	m.deletedVersion = version
-	return nil, m.safeHashesToDelete, nil
-}
-
-// fakeDocumentStore implements storeconn.DocumentStore for rollback tests.
-type fakeDocumentStore struct {
-	storeconn.DocumentStore
-
-	prevFiles []fs.FileReader
-	createErr error
-	// exists is returned by DocumentExists, which the genesis create path calls
-	// to enforce the ErrDocumentAlreadyExists contract before writing anything.
-	exists bool
-
-	deletedHashes [][]string
-	// deleteDocumentCalled records that the genesis rollback deleted the whole
-	// document's blobs (the existence guard proved they were all written here).
-	deleteDocumentCalled bool
-	// deleteDocumentErr, when set, is returned by DeleteDocument to simulate the
-	// blob rollback finding nothing to delete (ErrDocumentNotFound).
-	deleteDocumentErr error
-}
-
-func (d *fakeDocumentStore) DocumentExists(context.Context, uu.ID) (bool, error) {
-	return d.exists, nil
-}
-
-func (d *fakeDocumentStore) DeleteDocument(context.Context, uu.ID) error {
-	d.deleteDocumentCalled = true
-	return d.deleteDocumentErr
-}
-
-func (d *fakeDocumentStore) DocumentHashFileProvider(context.Context, uu.ID, []string) (docdb.FileProvider, error) {
-	return docdb.NewFileProvider(d.prevFiles...), nil
-}
-
-func (d *fakeDocumentStore) CreateDocumentVersion(_ context.Context, _ uu.ID, _ docdb.VersionTime, files []fs.FileReader) ([]*docdb.FileInfo, error) {
-	if d.createErr != nil {
-		return nil, d.createErr
-	}
-	fileInfos := make([]*docdb.FileInfo, len(files))
-	for i, file := range files {
-		data, err := file.ReadAll()
-		if err != nil {
-			return nil, err
-		}
-		fileInfos[i] = &docdb.FileInfo{Name: file.Name(), Size: file.Size(), Hash: docdb.ContentHash(data)}
-	}
-	return fileInfos, nil
-}
-
-func (d *fakeDocumentStore) DeleteDocumentHashes(_ context.Context, _ uu.ID, hashes []string) error {
-	d.deletedHashes = append(d.deletedHashes, hashes)
-	return nil
-}
-
 // TestConn_AddDocumentVersion_RollbackKeepsSharedBlob verifies that when adding
 // a new version fails after its metadata is committed, the rollback deletes only
 // the blobs the metadata store reports as referenced solely by the rolled-back
@@ -145,23 +51,21 @@ func TestConn_AddDocumentVersion_RollbackKeepsSharedBlob(t *testing.T) {
 			companyID := uu.IDv4()
 			userID := uu.IDv4()
 
-			meta := &fakeMetadataStore{
-				latest: &docdb.VersionInfo{
-					DocID:     docID,
-					CompanyID: companyID,
-					Version:   v1,
-					Files: map[string]docdb.FileInfo{
-						"logo.png": {Name: "logo.png", Size: int64(len(content)), Hash: sharedHash},
-					},
+			meta := newFakeMetadataStore(&docdb.VersionInfo{
+				DocID:     docID,
+				CompanyID: companyID,
+				Version:   v1,
+				Files: map[string]docdb.FileInfo{
+					"logo.png": {Name: "logo.png", Size: int64(len(content)), Hash: sharedHash},
 				},
-				// logo.png in v1 still references sharedHash, so deleting the new
-				// version reports nothing safe to delete.
-				safeHashesToDelete: nil,
-			}
-			docs := &fakeDocumentStore{
-				prevFiles: []fs.FileReader{fs.NewMemFile("logo.png", content)},
-				createErr: tc.createErr,
-			}
+			})
+			// logo.png in v1 still references sharedHash, so deleting the new
+			// version reports nothing safe to delete.
+			meta.safeHashesToDelete = nil
+
+			docs := newFakeDocumentStore()
+			docs.prevFiles = []fs.FileReader{fs.NewMemFile("logo.png", content)}
+			docs.createErr = tc.createErr
 			conn := storeconn.New(docs, meta)
 
 			// The new version adds icon.png with the same content as v1's
@@ -173,13 +77,112 @@ func TestConn_AddDocumentVersion_RollbackKeepsSharedBlob(t *testing.T) {
 			)
 
 			require.Error(t, err)                     // the failure surfaces to the caller
-			require.True(t, meta.deleteVersionCalled) // the metadata version was rolled back
-			for _, hashes := range docs.deletedHashes {
-				require.NotContains(t, hashes, sharedHash,
-					"rollback must not delete a blob whose hash is shared with a sibling version")
-			}
+			require.NotEmpty(t, meta.deletedVersions) // the metadata version was rolled back
+			require.NotContains(t, docs.deletedHashes, sharedHash,
+				"rollback must not delete a blob whose hash is shared with a sibling version")
 		})
 	}
+}
+
+// TestConn_AddDocumentVersion_RollsBackOnPanic verifies that a panic from a
+// store after the metadata version is committed is rolled back like an error.
+//
+// The rollback runs from a deferred closure keyed on the returned error, and a
+// panic is not one, so it would travel past the rollback and leave exactly the
+// committed-metadata-without-file-content state RestoreDocument has to detect
+// and repair — while the caller sees a panic instead of an error.
+func TestConn_AddDocumentVersion_RollsBackOnPanic(t *testing.T) {
+	ctx := context.Background()
+	docID := uu.IDv4()
+	companyID := uu.IDv4()
+	userID := uu.IDv4()
+	content := []byte("a content")
+	v1 := docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+	newVersion := docdb.MustVersionTimeFromString("2024-01-02_00-00-00.000")
+
+	meta := newFakeMetadataStore(&docdb.VersionInfo{
+		DocID:     docID,
+		CompanyID: companyID,
+		Version:   v1,
+		Files: map[string]docdb.FileInfo{
+			"a.txt": {Name: "a.txt", Size: int64(len(content)), Hash: docdb.ContentHash(content)},
+		},
+	})
+	docs := newFakeDocumentStore()
+	docs.prevFiles = []fs.FileReader{fs.NewMemFile("a.txt", content)}
+	docs.panicOn = &newVersion // the blob write panics after the metadata commit
+	conn := storeconn.New(docs, meta)
+
+	err := conn.AddDocumentVersion(ctx, docID, userID, "add b",
+		func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+			return &docdb.CreateVersionResult{
+				Version:    newVersion,
+				WriteFiles: []fs.FileReader{fs.NewMemFile("b.txt", []byte("b content"))},
+			}, nil
+		},
+		func(context.Context, *docdb.VersionInfo) error { return nil },
+	)
+
+	// The panic reaches the caller as an error carrying its value, not as a panic.
+	require.ErrorContains(t, err, "document store blew up")
+	require.Equal(t, []docdb.VersionTime{newVersion}, meta.deletedVersions,
+		"the version committed before the panic must be rolled back")
+	require.NotContains(t, meta.stored, newVersion)
+}
+
+// TestConn_AddDocumentVersion_RollsBackACancelledWrite verifies that a write
+// aborted by context cancellation is rolled back rather than left half-written.
+//
+// Cancellation is precisely the case that leaves a document with a committed
+// metadata version and no file content: an HTTP handler whose client hung up, a
+// worker shutting down. Running the cleanup on the same cancelled context made
+// every delete of that cleanup fail too, so the partial state survived — and
+// was then misread by RestoreDocument's skip logic on the next run. The
+// rollback therefore runs on rollbackCtx, which is context.WithoutCancel of the
+// caller's context plus a deadline of its own.
+func TestConn_AddDocumentVersion_RollsBackACancelledWrite(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	docID := uu.IDv4()
+	companyID := uu.IDv4()
+	userID := uu.IDv4()
+	content := []byte("a content")
+	v1 := docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+	newVersion := docdb.MustVersionTimeFromString("2024-01-02_00-00-00.000")
+
+	meta := newFakeMetadataStore(&docdb.VersionInfo{
+		DocID:     docID,
+		CompanyID: companyID,
+		Version:   v1,
+		Files: map[string]docdb.FileInfo{
+			"a.txt": {Name: "a.txt", Size: int64(len(content)), Hash: docdb.ContentHash(content)},
+		},
+	})
+	docs := newFakeDocumentStore()
+	docs.prevFiles = []fs.FileReader{fs.NewMemFile("a.txt", content)}
+	// The caller is cancelled during the blob write, after the metadata version
+	// has been committed.
+	docs.cancelWrite = cancel
+	conn := storeconn.New(docs, meta)
+
+	err := conn.AddDocumentVersion(ctx, docID, userID, "add b",
+		func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+			return &docdb.CreateVersionResult{
+				Version:    newVersion,
+				WriteFiles: []fs.FileReader{fs.NewMemFile("b.txt", []byte("b content"))},
+			}, nil
+		},
+		func(context.Context, *docdb.VersionInfo) error { return nil },
+	)
+
+	require.ErrorIs(t, err, context.Canceled)
+	// The cleanup must have run despite the cancellation, so the committed
+	// version is gone rather than left pointing at file content that was never
+	// written.
+	require.Equal(t, []docdb.VersionTime{newVersion}, meta.deletedVersions,
+		"a cancelled write must still roll back its metadata version")
+	require.NotContains(t, meta.stored, newVersion)
 }
 
 // TestConn_CreateDocument_RollbackDeletesOrphanedBlobs verifies that when
@@ -195,24 +198,73 @@ func TestConn_CreateDocument_RollbackDeletesOrphanedBlobs(t *testing.T) {
 	userID := uu.IDv4()
 	content := []byte("genesis content")
 
-	meta := &fakeMetadataStore{
-		createVersionErr: errors.New("metadata insert failed"),
-	}
-	docs := &fakeDocumentStore{} // CreateDocumentVersion succeeds (writes the blob)
+	meta := newFakeMetadataStore()
+	meta.createVersionErr = errors.New("metadata insert failed")
+	docs := newFakeDocumentStore() // CreateDocumentVersion succeeds (writes the blob)
 	conn := storeconn.New(docs, meta)
 
 	err := conn.CreateDocument(ctx, companyID, docID, userID, "genesis",
-		docdb.NewVersionTime(),
+		docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000"),
 		[]fs.FileReader{fs.NewMemFile("a.txt", content)},
 		func(context.Context, *docdb.VersionInfo) error { return nil },
 	)
 
 	require.Error(t, err) // the failure surfaces to the caller
-	require.True(t, docs.deleteDocumentCalled,
+	require.Positive(t, docs.deleteDocumentCalls,
 		"rollback must delete the blobs written before the metadata insert failed")
 	// The metadata insert never succeeded (versionInfo is nil), so the surgical
 	// metadata rollback must not run — there is nothing this call inserted.
-	require.False(t, meta.deleteVersionCalled, "must not delete metadata when nothing was inserted")
+	require.Empty(t, meta.deletedVersions, "must not delete metadata when nothing was inserted")
+}
+
+// TestConn_CreateDocument_RollsBackOnPanic verifies that a panic from a store or
+// from onNewVersion is converted into an error first, so the rollback that only
+// runs on an error actually runs.
+//
+// CreateDocument looked like it already did this, but its
+// errs.RecoverPanicAsErrorWithFuncParams sat inside the rollback closure, where
+// recover returns nil: a deferred function only recovers when it calls recover
+// itself. The panic escaped with the half-created document left behind.
+func TestConn_CreateDocument_RollsBackOnPanic(t *testing.T) {
+	version := docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+
+	t.Run("metadata store panics after the blobs were written", func(t *testing.T) {
+		docID := uu.IDv4()
+		meta := newFakeMetadataStore()
+		meta.panicOnCreateVersion = true
+		docs := newFakeDocumentStore()
+		conn := storeconn.New(docs, meta)
+
+		err := conn.CreateDocument(context.Background(), uu.IDv4(), docID, uu.IDv4(), "genesis",
+			version,
+			[]fs.FileReader{fs.NewMemFile("a.txt", []byte("genesis content"))},
+			func(context.Context, *docdb.VersionInfo) error { return nil },
+		)
+
+		require.ErrorContains(t, err, "metadata store blew up")
+		require.Positive(t, docs.deleteDocumentCalls, "the written blobs must be deleted")
+		require.Empty(t, docs.stored, "no orphaned blob may be left behind")
+		// Nothing was inserted, so there is no metadata version to remove.
+		require.Empty(t, meta.deletedVersions)
+	})
+
+	t.Run("onNewVersion panics after the metadata version was committed", func(t *testing.T) {
+		docID := uu.IDv4()
+		meta := newFakeMetadataStore()
+		docs := newFakeDocumentStore()
+		conn := storeconn.New(docs, meta)
+
+		err := conn.CreateDocument(context.Background(), uu.IDv4(), docID, uu.IDv4(), "genesis",
+			version,
+			[]fs.FileReader{fs.NewMemFile("a.txt", []byte("genesis content"))},
+			func(context.Context, *docdb.VersionInfo) error { panic("onNewVersion blew up") },
+		)
+
+		require.ErrorContains(t, err, "onNewVersion blew up")
+		require.Positive(t, docs.deleteDocumentCalls, "the written blobs must be deleted")
+		require.Equal(t, []docdb.VersionTime{version}, meta.deletedVersions,
+			"the committed metadata version must be rolled back, and only that one")
+	})
 }
 
 // TestConn_CreateDocument_RollbackDeletesOnlyCreatedVersion verifies that when a
@@ -226,10 +278,10 @@ func TestConn_CreateDocument_RollbackDeletesOnlyCreatedVersion(t *testing.T) {
 	docID := uu.IDv4()
 	companyID := uu.IDv4()
 	userID := uu.IDv4()
-	version := docdb.NewVersionTime()
+	version := docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
 
-	meta := &fakeMetadataStore{} // CreateDocumentVersion succeeds (versionInfo != nil)
-	docs := &fakeDocumentStore{}
+	meta := newFakeMetadataStore() // CreateDocumentVersion succeeds (versionInfo != nil)
+	docs := newFakeDocumentStore()
 	conn := storeconn.New(docs, meta)
 
 	err := conn.CreateDocument(ctx, companyID, docID, userID, "genesis",
@@ -239,10 +291,9 @@ func TestConn_CreateDocument_RollbackDeletesOnlyCreatedVersion(t *testing.T) {
 	)
 
 	require.Error(t, err)
-	require.True(t, meta.deleteVersionCalled, "rollback must delete the committed metadata version")
-	require.Equal(t, version, meta.deletedVersion,
+	require.Equal(t, []docdb.VersionTime{version}, meta.deletedVersions,
 		"rollback must target exactly the version this call created, not the whole document")
-	require.True(t, docs.deleteDocumentCalled, "rollback must delete the written blobs")
+	require.Positive(t, docs.deleteDocumentCalls, "rollback must delete the written blobs")
 }
 
 // TestConn_CreateDocument_ExistingDocumentRefused verifies that creating a
@@ -255,20 +306,21 @@ func TestConn_CreateDocument_ExistingDocumentRefused(t *testing.T) {
 	companyID := uu.IDv4()
 	userID := uu.IDv4()
 
-	meta := &fakeMetadataStore{}
-	docs := &fakeDocumentStore{exists: true} // the document already exists
+	meta := newFakeMetadataStore()
+	// The document already exists: the store holds a file for it.
+	docs := newFakeDocumentStore(docdb.FileInfo{Name: "a.txt", Hash: docdb.ContentHash([]byte("x"))})
 	conn := storeconn.New(docs, meta)
 
 	err := conn.CreateDocument(ctx, companyID, docID, userID, "genesis",
-		docdb.NewVersionTime(),
+		docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000"),
 		[]fs.FileReader{fs.NewMemFile("a.txt", []byte("x"))},
 		func(context.Context, *docdb.VersionInfo) error { return nil },
 	)
 
 	require.ErrorIs(t, err, docdb.NewErrDocumentAlreadyExists(docID))
 	// The pre-existing document must be left untouched: no rollback at all.
-	require.False(t, docs.deleteDocumentCalled, "must not delete blobs of an existing document")
-	require.False(t, meta.deleteVersionCalled, "must not delete metadata of an existing document")
+	require.Zero(t, docs.deleteDocumentCalls, "must not delete blobs of an existing document")
+	require.Empty(t, meta.deletedVersions, "must not delete metadata of an existing document")
 }
 
 // TestConn_CreateDocument_ConcurrentLoserKeepsWinnerBlobs verifies that when a
@@ -283,16 +335,15 @@ func TestConn_CreateDocument_ConcurrentLoserKeepsWinnerBlobs(t *testing.T) {
 	companyID := uu.IDv4()
 	userID := uu.IDv4()
 
-	meta := &fakeMetadataStore{
-		// The winner already committed the genesis version; this loser's insert
-		// hits the one-genesis-per-document unique index.
-		createVersionErr: docdb.NewErrDocumentAlreadyExists(docID),
-	}
-	docs := &fakeDocumentStore{} // CreateDocumentVersion succeeds (writes the shared blob)
+	meta := newFakeMetadataStore()
+	// The winner already committed the genesis version; this loser's insert
+	// hits the one-genesis-per-document unique index.
+	meta.createVersionErr = docdb.NewErrDocumentAlreadyExists(docID)
+	docs := newFakeDocumentStore() // CreateDocumentVersion succeeds (writes the shared blob)
 	conn := storeconn.New(docs, meta)
 
 	err := conn.CreateDocument(ctx, companyID, docID, userID, "genesis",
-		docdb.NewVersionTime(),
+		docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000"),
 		[]fs.FileReader{fs.NewMemFile("a.txt", []byte("genesis content"))},
 		func(context.Context, *docdb.VersionInfo) error { return nil },
 	)
@@ -300,9 +351,9 @@ func TestConn_CreateDocument_ConcurrentLoserKeepsWinnerBlobs(t *testing.T) {
 	require.ErrorIs(t, err, docdb.NewErrDocumentAlreadyExists(docID))
 	// The winner owns the (identical, content-addressed) blobs: the loser must
 	// not delete them, and never inserted metadata to roll back either.
-	require.False(t, docs.deleteDocumentCalled,
+	require.Zero(t, docs.deleteDocumentCalls,
 		"loser must not delete the winner's shared content-addressed blobs")
-	require.False(t, meta.deleteVersionCalled, "must not delete metadata when nothing was inserted")
+	require.Empty(t, meta.deletedVersions, "must not delete metadata when nothing was inserted")
 }
 
 // TestConn_CreateDocument_RollbackIgnoresNotFound verifies that when a genesis
@@ -316,22 +367,22 @@ func TestConn_CreateDocument_RollbackIgnoresNotFound(t *testing.T) {
 	companyID := uu.IDv4()
 	userID := uu.IDv4()
 
-	meta := &fakeMetadataStore{}
-	docs := &fakeDocumentStore{
-		createErr:         errors.New("blob write failed"),
-		deleteDocumentErr: docdb.NewErrDocumentNotFound(docID),
-	}
+	meta := newFakeMetadataStore()
+	// The blob write fails, so the store holds nothing and its DeleteDocument
+	// answers the rollback with not-found.
+	docs := newFakeDocumentStore()
+	docs.createErr = errors.New("blob write failed")
 	conn := storeconn.New(docs, meta)
 
 	err := conn.CreateDocument(ctx, companyID, docID, userID, "genesis",
-		docdb.NewVersionTime(),
+		docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000"),
 		[]fs.FileReader{fs.NewMemFile("a.txt", []byte("genesis content"))},
 		func(context.Context, *docdb.VersionInfo) error { return nil },
 	)
 
 	require.Error(t, err)
 	require.ErrorContains(t, err, "blob write failed")
-	require.True(t, docs.deleteDocumentCalled) // the rollback still attempted cleanup
+	require.Positive(t, docs.deleteDocumentCalls) // the rollback still attempted cleanup
 	// The spurious not-found from the rollback delete must not leak out.
 	require.NotErrorIs(t, err, os.ErrNotExist)
 }

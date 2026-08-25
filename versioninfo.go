@@ -100,6 +100,67 @@ func (vi *VersionInfo) EqualFiles(other *VersionInfo) bool {
 	return true
 }
 
+// ChangesNothing reports whether committing vi after prev with companyID as
+// the document's new company would record no change at all: the same file set
+// as prev, and the same company. Such a version must be rejected with
+// ErrNoChanges instead of being created.
+//
+// A version with the same files as its predecessor is still a change if it
+// moves the document to another company: that is how a move is recorded, as a
+// version that changes nothing but the company.
+//
+// Every Conn implementation must ask here instead of repeating the comparison,
+// for the same reason SetFileDeltas exists: this is the only enforcement of the
+// rule — HashedDocument.Validate deliberately accepts such a version, because
+// DeleteDocumentVersion and SetDocumentCompanyID can leave one behind and a
+// backup has to be able to represent what a store holds — and a versions-exist
+// MetadataStore compares the result across implementations, so a divergence
+// fails a migration mid-run rather than at build time.
+func (vi *VersionInfo) ChangesNothing(prev *VersionInfo, companyID uu.ID) bool {
+	return prev != nil && vi.EqualFiles(prev) && companyID == prev.CompanyID
+}
+
+// SetFileDeltas derives AddedFiles, ModifiedFiles, and RemovedFiles by
+// comparing vi.Files, the complete file set of this version, against prevFiles,
+// the complete file set of the previous version. Pass a nil prevFiles for the
+// first version of a document, which reports every file as added; a nil and an
+// empty prevFiles are equivalent.
+//
+// Only the map keys (the filenames) and FileInfo.Hash are compared, so a caller
+// that knows just the filenames and content hashes of the previous version can
+// build prevFiles without looking up the file sizes.
+//
+// The three lists are replaced rather than appended to, and are sorted by
+// filename so the result never depends on map iteration order. A list without
+// entries is left nil instead of an empty slice.
+//
+// Every implementation must derive its change lists here instead of repeating
+// the comparison, because those lists are compared across implementations: a
+// document copied from one Conn to another has its VersionInfo verified
+// against the already stored one, so a divergent derivation would fail a
+// migration mid-run rather than at build time.
+func (vi *VersionInfo) SetFileDeltas(prevFiles map[string]FileInfo) {
+	vi.AddedFiles = nil
+	vi.ModifiedFiles = nil
+	vi.RemovedFiles = nil
+	for filename, file := range vi.Files {
+		switch prevFile, inPrev := prevFiles[filename]; {
+		case !inPrev:
+			vi.AddedFiles = append(vi.AddedFiles, filename)
+		case prevFile.Hash != file.Hash:
+			vi.ModifiedFiles = append(vi.ModifiedFiles, filename)
+		}
+	}
+	for filename := range prevFiles {
+		if _, inThis := vi.Files[filename]; !inThis {
+			vi.RemovedFiles = append(vi.RemovedFiles, filename)
+		}
+	}
+	slices.Sort(vi.AddedFiles)
+	slices.Sort(vi.ModifiedFiles)
+	slices.Sort(vi.RemovedFiles)
+}
+
 // Equal reports whether vi and other describe the same committed version:
 // identical scalar metadata (company, document, version, previous version,
 // commit user and reason), the same added/removed/modified filename sets

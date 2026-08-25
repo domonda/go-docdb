@@ -16,7 +16,11 @@ import (
 // It is used for backup and restore operations via ReadHashedDocument
 // and Conn.RestoreDocument.
 type HashedDocument struct {
-	ID          uu.ID
+	ID uu.ID
+	// CompanyID is the company that currently owns the document, which is the
+	// company of its latest version: a document is only listed under that
+	// company. Earlier versions can name a different company, see
+	// HashedVersion.CompanyID.
 	CompanyID   uu.ID
 	HashedFiles map[string][]byte              // content hash -> file data
 	Versions    map[VersionTime]*HashedVersion // version timestamp -> version metadata
@@ -24,6 +28,17 @@ type HashedDocument struct {
 
 // HashedVersion holds the metadata for a single version within a HashedDocument.
 type HashedVersion struct {
+	// CompanyID is the company that owned the document when this version was
+	// committed. A document is moved between companies by committing a new
+	// version that names the new company, so the versions before the move keep
+	// naming the previous one and the move stays visible in the document's
+	// history.
+	//
+	// uu.IDNil means the version inherits HashedDocument.CompanyID, so a
+	// HashedDocument of a document that was never moved can leave it unset.
+	// The latest version must name the document's current company (see
+	// Validate).
+	CompanyID    uu.ID
 	CommitUserID uu.ID
 	CommitReason string
 	FileHashes   map[string]string // filename -> content hash
@@ -34,10 +49,28 @@ type HashedVersion struct {
 // nil HashedVersion entries, and FileHashes references that have no corresponding
 // entry in HashedFiles. All encountered problems are joined with errors.Join.
 //
+// The joined problems are built with fmt.Errorf rather than errs.Errorf, as in
+// CreateVersionResult.Validate: this reports every problem of one value at
+// once, and a call stack per problem would repeat the same frames as many times
+// as there are problems. The caller attaches one where the error propagates —
+// Conn.RestoreDocument implementations wrap it with errs.WrapWithFuncParams.
+//
 // It also enforces the document version invariants: every version must contain
 // at least one file (a document cannot be created empty, and no version may
-// remove all files), and every version after the first must differ from its
-// predecessor (no change-less versions).
+// remove all files), and the latest version must name the document's current
+// CompanyID.
+//
+// A version whose files and company are identical to its predecessor's is NOT
+// rejected. Creating one is refused where versions are created — Conn.
+// AddDocumentVersion returns ErrNoChanges — but a stored document can end up
+// holding one anyway, through operations that are documented to do exactly
+// that: DeleteDocumentVersion removing the middle of v0(F), v1(G), v2(F)
+// leaves two adjacent versions with the same files, and SetDocumentCompanyID
+// rewrites the company of versions that only differ from their predecessor in
+// naming another company. Rejecting such a document here would not undo it —
+// it would only make it impossible to back up, sync or migrate for good, since
+// every RestoreDocument starts by calling this. A backup has to be able to
+// represent what a store actually holds.
 func (doc *HashedDocument) Validate() error {
 	if doc == nil {
 		return errors.New("nil HashedDocument")
@@ -60,6 +93,16 @@ func (doc *HashedDocument) Validate() error {
 			err = errors.Join(err, fmt.Errorf("HashedDocument version %s has nil HashedVersion", v))
 			continue
 		}
+		// A version may leave CompanyID unset to inherit the document's, but a
+		// version that names one has to name a valid one: both restore
+		// implementations persist it as committed history, and localfsdb files
+		// a document under a directory named after it, which enumeration then
+		// cannot parse.
+		if hv.CompanyID != uu.IDNil {
+			if e := hv.CompanyID.Validate(); e != nil {
+				err = errors.Join(err, fmt.Errorf("HashedDocument version %s has an invalid CompanyID: %w", v, e))
+			}
+		}
 		for filename, hash := range hv.FileHashes {
 			if _, ok := doc.HashedFiles[hash]; !ok {
 				err = errors.Join(err, fmt.Errorf(
@@ -71,34 +114,92 @@ func (doc *HashedDocument) Validate() error {
 	}
 
 	// Ordered version invariants: every version must contain at least one file
-	// (no version may remove all files), and every version after the first must
-	// differ from its predecessor. VersionTimes returns the versions sorted
-	// ascending. Nil HashedVersions were already reported above and are skipped
-	// here to avoid a nil deref.
+	// (no version may remove all files), and the latest one must name the
+	// document's company. VersionTimes returns the versions sorted ascending.
+	// Nil HashedVersions were already reported above and are skipped here to
+	// avoid a nil deref.
 	sorted := doc.VersionTimes()
-	for i, v := range sorted {
-		hv := doc.Versions[v]
-		if hv == nil {
-			continue
-		}
-		if len(hv.FileHashes) == 0 {
+	for _, v := range sorted {
+		if hv := doc.Versions[v]; hv != nil && len(hv.FileHashes) == 0 {
 			err = errors.Join(err, fmt.Errorf("HashedDocument version %s has no files", v))
 		}
-		if i > 0 {
-			if prev := doc.Versions[sorted[i-1]]; prev != nil && maps.Equal(hv.FileHashes, prev.FileHashes) {
-				err = errors.Join(err, fmt.Errorf(
-					"HashedDocument version %s is identical to previous version %s (no change)",
-					v, sorted[i-1],
-				))
-			}
+	}
+	// The company of the latest version is the document's current company:
+	// a store that keeps no separate owner marker derives the owner from
+	// its latest version, so a backup naming two different companies for it
+	// would restore a document owned by whichever of the two that store
+	// happens to report.
+	if len(sorted) > 0 {
+		latest := sorted[len(sorted)-1]
+		if doc.VersionCompanyID(latest) != doc.CompanyID {
+			err = errors.Join(err, fmt.Errorf(
+				"HashedDocument latest version %s has CompanyID %s but the document has %s",
+				latest, doc.VersionCompanyID(latest), doc.CompanyID,
+			))
 		}
 	}
 	return err
 }
 
+// VersionCompanyID returns the company that owned the document at the passed
+// version: the version's own CompanyID, or the document's CompanyID if the
+// version does not name one (see HashedVersion.CompanyID).
+//
+// Returns the document's CompanyID for a version the document does not have,
+// and uu.IDNil for a nil receiver.
+func (doc *HashedDocument) VersionCompanyID(versionTime VersionTime) uu.ID {
+	if doc == nil {
+		return uu.IDNil
+	}
+	if hv := doc.Versions[versionTime]; hv != nil && !hv.CompanyID.IsNil() {
+		return hv.CompanyID
+	}
+	return doc.CompanyID
+}
+
+// CheckRestoreCompanyID returns an error if doc must not be restored into an
+// already existing document that is owned by destCompanyID and has destVersions
+// as its versions in ascending order.
+//
+// The company of the existing document is compared against the company doc
+// names for the same version, which is its latest one, and only against
+// doc.CompanyID if doc does not have that version. Comparing the current
+// companies of both sides instead would refuse a backup whose newer versions
+// move the document to another company — the restore of a move — while
+// accepting one that renames the company of versions the destination already
+// has.
+//
+// It is used by Conn.RestoreDocument implementations for recreate=false, where
+// the restore merges into the existing document instead of replacing it.
+func CheckRestoreCompanyID(doc *HashedDocument, destVersions []VersionTime, destCompanyID uu.ID) error {
+	expected := doc.CompanyID
+	if len(destVersions) > 0 {
+		destLatest := destVersions[len(destVersions)-1]
+		if _, ok := doc.Versions[destLatest]; ok {
+			expected = doc.VersionCompanyID(destLatest)
+		}
+	}
+	if destCompanyID != expected {
+		return errs.Errorf(
+			"cannot restore document %s into existing document with different companyID: backup %s != on-disk %s",
+			doc.ID, expected, destCompanyID,
+		)
+	}
+	return nil
+}
+
 // ReadHashedDocument reads a complete document with all versions and file content
 // from a Conn into a HashedDocument. It validates file sizes and content hashes
 // against the VersionInfo metadata.
+//
+// Every version keeps the company it was committed with, so a document that was
+// moved between companies is backed up with its move history intact. The
+// exception is the latest version, which is read as owned by the company the
+// Conn reports for the document: an implementation that keeps a separate owner
+// marker can have that marker point at a company the latest version does not
+// name (Conn.SetDocumentCompanyID moves the marker without committing a
+// version), and the document's current owner is what an implementation without
+// such a marker has to derive from its latest version.
 func ReadHashedDocument(ctx context.Context, conn Conn, docID uu.ID) (doc *HashedDocument, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, conn, docID)
 
@@ -122,6 +223,7 @@ func ReadHashedDocument(ctx context.Context, conn Conn, docID uu.ID) (doc *Hashe
 			return nil, err
 		}
 		v := &HashedVersion{
+			CompanyID:    versionInfo.CompanyID,
 			CommitUserID: versionInfo.CommitUserID,
 			CommitReason: versionInfo.CommitReason,
 			FileHashes:   make(map[string]string),
@@ -162,6 +264,14 @@ func ReadHashedDocument(ctx context.Context, conn Conn, docID uu.ID) (doc *Hashe
 		doc.Versions[version] = v
 	}
 
+	// DocumentVersions returns the versions ascending, so the last one is the
+	// latest: the version that names the document's current company. See the
+	// doc comment above for why the Conn's answer wins over what the version
+	// itself recorded.
+	if len(versions) > 0 {
+		doc.Versions[versions[len(versions)-1]].CompanyID = doc.CompanyID
+	}
+
 	return doc, nil
 }
 
@@ -184,10 +294,17 @@ func ReadHashedDocument(ctx context.Context, conn Conn, docID uu.ID) (doc *Hashe
 //     srcConn is untouched, so the document is missing on destConn only until
 //     the sync is retried.
 //   - recreate=false (additive merge): the document is created on destConn
-//     if missing, otherwise existing versions are kept and only versions
-//     not already present on destConn are added. If the document exists,
-//     its CompanyID on destConn must equal the one on srcConn, otherwise
-//     the call fails without changing anything.
+//     if missing, otherwise versions already present there with all of their
+//     file content are kept as-is and everything else is written — including
+//     the missing files of a version whose metadata destConn already has, so
+//     an interrupted sync is resumed rather than mistaken for a finished one.
+//     If the document exists, its CompanyID on destConn must equal the one
+//     srcConn names for the latest version destConn has, otherwise the call
+//     fails without changing anything (see CheckRestoreCompanyID).
+//
+// Every version is written with the company it was committed with, so a
+// document moved between companies keeps its move history, and the CompanyID on
+// destConn after the call is the one of the latest version it holds.
 //
 // Returns wrapped ErrDocumentNotFound if the document does not exist on
 // srcConn, and wrapped ErrNotImplemented if destConn does not support
@@ -259,7 +376,11 @@ func SyncAllCompanyDocuments(ctx context.Context, srcConn, destConn Conn, compan
 }
 
 // VersionTimes returns the version timestamps of the document sorted in ascending order.
+// Returns nil for a nil receiver.
 func (doc *HashedDocument) VersionTimes() []VersionTime {
+	if doc == nil {
+		return nil
+	}
 	return slices.SortedFunc(maps.Keys(doc.Versions), func(a, b VersionTime) int {
 		return a.Compare(b)
 	})
@@ -269,34 +390,45 @@ func (doc *HashedDocument) VersionTimes() []VersionTime {
 // by comparing against the previous version to compute added, modified,
 // and removed files.
 //
+// VersionInfo.CompanyID is the company of that version (see VersionCompanyID),
+// not the document's current company, so restoring a document that was moved
+// between companies reproduces the move instead of filing every version under
+// the current owner.
+//
 // It returns ErrDocumentVersionNotFound if the version does not exist in the
 // document, and a different error if the document is internally inconsistent
 // (a version references a file hash that is missing from HashedFiles), so
 // corruption is never reported as a missing version. Callers that want to
 // detect such inconsistencies up-front should use Validate.
+//
+// Returns an error for a nil receiver.
 func (doc *HashedDocument) VersionInfo(versionTime VersionTime) (*VersionInfo, error) {
+	if doc == nil {
+		return nil, errs.New("nil HashedDocument")
+	}
 	var (
 		prevVersionTime *VersionTime
 		prevVersion     *HashedVersion
-		version         *HashedVersion
 	)
-	versions := doc.VersionTimes()
-	for i, v := range versions {
-		if v.Equal(versionTime) {
-			if i > 0 {
-				prevVersionTime = &versions[i-1]
-				prevVersion = doc.Versions[*prevVersionTime]
-			}
-			version = doc.Versions[versionTime]
-			break
-		}
-	}
+	version := doc.Versions[versionTime]
 	if version == nil {
 		return nil, NewErrDocumentVersionNotFound(doc.ID, versionTime)
 	}
+	// The predecessor is the greatest version older than versionTime, which one
+	// pass over the map finds without sorting. Sorting every version to look at
+	// a single neighbor made a restore, which calls this once per version, sort
+	// the whole version list once per version.
+	for v := range doc.Versions {
+		if v.Before(versionTime) && (prevVersionTime == nil || v.After(*prevVersionTime)) {
+			prevVersionTime = &v
+		}
+	}
+	if prevVersionTime != nil {
+		prevVersion = doc.Versions[*prevVersionTime]
+	}
 
 	info := &VersionInfo{
-		CompanyID:    doc.CompanyID,
+		CompanyID:    doc.VersionCompanyID(versionTime),
 		DocID:        doc.ID,
 		Version:      versionTime,
 		PrevVersion:  prevVersionTime,
@@ -320,26 +452,18 @@ func (doc *HashedDocument) VersionInfo(versionTime VersionTime) (*VersionInfo, e
 			Size: int64(len(data)),
 			Hash: hash,
 		}
-		if prevVersion == nil {
-			info.AddedFiles = append(info.AddedFiles, filename)
-		} else {
-			prevHash, ok := prevVersion.FileHashes[filename]
-			if !ok {
-				info.AddedFiles = append(info.AddedFiles, filename)
-			} else if prevHash != hash {
-				info.ModifiedFiles = append(info.ModifiedFiles, filename)
-			}
-		}
 	}
+	// SetFileDeltas compares only filenames and hashes, so the previous
+	// version's FileInfos are built without looking its file sizes up in
+	// HashedFiles: a predecessor referencing a hash without content is not
+	// this version's problem to report.
+	var prevFiles map[string]FileInfo
 	if prevVersion != nil {
-		for prevFilename := range prevVersion.FileHashes {
-			if _, ok := version.FileHashes[prevFilename]; !ok {
-				info.RemovedFiles = append(info.RemovedFiles, prevFilename)
-			}
+		prevFiles = make(map[string]FileInfo, len(prevVersion.FileHashes))
+		for filename, hash := range prevVersion.FileHashes {
+			prevFiles[filename] = FileInfo{Name: filename, Hash: hash}
 		}
 	}
-	slices.Sort(info.AddedFiles)
-	slices.Sort(info.ModifiedFiles)
-	slices.Sort(info.RemovedFiles)
+	info.SetFileDeltas(prevFiles)
 	return info, nil
 }

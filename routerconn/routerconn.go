@@ -16,6 +16,15 @@
 // across backends. Both callbacks must return one of the connections passed as
 // allConns, and connForCompanyID and connForDocID must resolve a document and
 // its owning company to the same backend.
+//
+// Changing a document's company is therefore refused when the new company
+// resolves to another backend: for SetDocumentCompanyID, for a version that
+// names a docdb.CreateVersionResult.NewCompanyID, and for a RestoreDocument
+// whose backup moves the document to such a company while another backend still
+// holds it. Moving a document to a company on another backend is a migration —
+// every version copied over and the original deleted — not a company change,
+// and doing the company change alone would leave the document on a backend that
+// no longer answers for its company.
 package routerconn
 
 import (
@@ -24,6 +33,7 @@ import (
 	"github.com/ungerik/go-fs"
 
 	"github.com/domonda/go-docdb"
+	"github.com/domonda/go-errs"
 	"github.com/domonda/go-types/uu"
 )
 
@@ -117,7 +127,50 @@ func (r *routerConn) SetDocumentCompanyID(ctx context.Context, docID, companyID 
 	if err != nil {
 		return err
 	}
+	if err = r.checkCompanyOnConn(ctx, docID, companyID, conn); err != nil {
+		return err
+	}
 	return conn.SetDocumentCompanyID(ctx, docID, companyID)
+}
+
+// checkCompanyOnConn returns an error if moving docID to companyID would leave
+// the document on a backend that is not the one connForCompanyID resolves its
+// new company to.
+//
+// routerconn never splits a document across backends and its callbacks must
+// resolve a document and its owning company to the same one (see the package
+// doc). A move to a company on another backend breaks that: the document stays
+// where it is while CompanyDocumentIDs of the new company asks the other
+// backend, which does not list it — so a company-wide sync or migration skips
+// it without reporting anything. Carrying the document over would be a copy of
+// every version plus a delete of the original, which is a migration, not a
+// company change; refusing tells the caller to run one instead of silently
+// stranding the document.
+//
+// The backends are compared by identity, which is what the package already
+// requires of the callbacks: both must return one of the connections passed as
+// allConns.
+func (r *routerConn) checkCompanyOnConn(ctx context.Context, docID, companyID uu.ID, docConn docdb.Conn) error {
+	companyConn, err := r.connForCompanyID(ctx, companyID)
+	if err != nil {
+		return err
+	}
+	if companyConn != docConn {
+		return errCrossBackendMove(docID, companyID, companyConn, docConn)
+	}
+	return nil
+}
+
+// errCrossBackendMove reports a document that would end up on docConn while its
+// company is answered by companyConn.
+//
+// The backends are reported by type, not by value: a backend prints its whole
+// configuration when it has no String method of its own.
+func errCrossBackendMove(docID, companyID uu.ID, companyConn, docConn docdb.Conn) error {
+	return errs.Errorf(
+		"cannot move document %s to company %s: the company routes to backend %T but the document is on backend %T, and routerconn cannot span the two — migrate the document instead",
+		docID, companyID, companyConn, docConn,
+	)
 }
 
 func (r *routerConn) DocumentVersions(ctx context.Context, docID uu.ID) ([]docdb.VersionTime, error) {
@@ -194,10 +247,35 @@ func (r *routerConn) CreateDocument(ctx context.Context, companyID, docID, userI
 	return conn.CreateDocument(ctx, companyID, docID, userID, reason, version, files, onNewVersion)
 }
 
+// AddDocumentVersion routes by docID, and refuses a version that would move the
+// document to a company on another backend.
+//
+// A version can change the document's company via
+// docdb.CreateVersionResult.NewCompanyID, which docdb.Conn documents as the way
+// to move a document between companies. That company is only known once
+// createVersion has run, so the check is wrapped around the callback rather
+// than done up front: returning the error from there aborts the version and
+// rolls back atomically, leaving the document where it is instead of committed
+// on the wrong backend.
 func (r *routerConn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reason string, createVersion docdb.CreateVersionFunc, onNewVersion docdb.OnNewVersionFunc) error {
 	conn, err := r.connForDocID(ctx, docID)
 	if err != nil {
 		return err
+	}
+	if createVersion != nil {
+		inner := createVersion
+		createVersion = func(ctx context.Context, docID uu.ID, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+			result, err := inner(ctx, docID, prevVersion, prevFiles)
+			if err != nil || result == nil {
+				return result, err
+			}
+			if result.NewCompanyID.IsNotNull() {
+				if err = r.checkCompanyOnConn(ctx, docID, result.NewCompanyID.Get(), conn); err != nil {
+					return nil, err
+				}
+			}
+			return result, nil
+		}
 	}
 	return conn.AddDocumentVersion(ctx, docID, userID, reason, createVersion, onNewVersion)
 }
@@ -206,11 +284,66 @@ func (r *routerConn) AddMultiDocumentVersion(ctx context.Context, docIDs uu.IDSl
 	return docdb.AddMultiDocumentVersionImpl(ctx, r, docIDs, userID, reason, createVersion, onNewVersion)
 }
 
-// RestoreDocument routes by doc.CompanyID, consistent with CreateDocument.
+// RestoreDocument routes by doc.CompanyID, consistent with CreateDocument, and
+// refuses a backup that would leave a second copy of the document on another
+// backend.
+//
+// doc.CompanyID is the company of the backup's latest version, which can be one
+// the document was moved to after this router last saw it: a backup whose newer
+// versions move the document is restored as that move rather than refused as a
+// company mismatch (see docdb.CheckRestoreCompanyID). Restoring it on the new
+// company's backend while the original stays where it is splits the document
+// across backends, which routerconn never does — and neither copy is reported
+// as wrong anywhere afterwards: every operation keyed by the document keeps
+// going to the backend connForDocID names, while the other one answers
+// CompanyDocumentIDs for the company the backup moved it to.
 func (r *routerConn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, recreate bool) error {
 	conn, err := r.connForCompanyID(ctx, doc.CompanyID)
 	if err != nil {
 		return err
 	}
+	otherConn, err := r.otherConnWithDocument(ctx, doc.ID, conn)
+	if err != nil {
+		return err
+	}
+	if otherConn != nil {
+		return errCrossBackendMove(doc.ID, doc.CompanyID, conn, otherConn)
+	}
 	return conn.RestoreDocument(ctx, doc, recreate)
+}
+
+// otherConnWithDocument returns the backend other than docConn that holds
+// docID, or nil if none does.
+//
+// It answers the question connForDocID answers for every other operation, by
+// asking the backends instead of the callback: RestoreDocument routes by
+// company and can create the document, and connForDocID cannot be asked about a
+// document that does not exist yet — the reason CreateDocument routes by
+// company as well.
+//
+// The other backends are only asked when docConn does not already hold the
+// document, which is the common case of a merge-restore into the backend the
+// document is on, and not at all for a router over a single backend, where
+// nothing can span.
+func (r *routerConn) otherConnWithDocument(ctx context.Context, docID uu.ID, docConn docdb.Conn) (docdb.Conn, error) {
+	if len(r.allConns) == 1 {
+		return nil, nil
+	}
+	exists, err := docConn.DocumentExists(ctx, docID)
+	if err != nil || exists {
+		return nil, err
+	}
+	for _, conn := range r.allConns {
+		if conn == docConn {
+			continue
+		}
+		exists, err = conn.DocumentExists(ctx, docID)
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			return conn, nil
+		}
+	}
+	return nil, nil
 }

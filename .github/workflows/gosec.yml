@@ -13,8 +13,8 @@ jobs:
       GO111MODULE: on
     steps:
     - name: Checkout Source
-      uses: actions/checkout@v6
+      uses: actions/checkout@v6.1.0
     - name: Run Gosec Security Scanner
-      uses: securego/gosec@master
+      uses: securego/gosec@v2.28.0
       with:
         args: ./...

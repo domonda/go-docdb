@@ -37,7 +37,7 @@ use the backend it is best suited to:
 
 The cost of splitting is that a logical operation ("create a version") now spans
 two systems that have no shared transaction. The `conn` type in
-[storeconn.go](storeconn.go) is the layer that pays that cost: it sequences the
+[conn.go](conn.go) is the layer that pays that cost: it sequences the
 two stores and rolls back across them on failure.
 
 ## What `New` returns
@@ -76,8 +76,8 @@ The two interfaces are defined in [documentstore.go](documentstore.go) and
 | ----------------------------------------- | --------------- |
 | Raw file bytes, keyed by content hash     | `DocumentStore` |
 | Deduplication of identical content        | `DocumentStore` |
-| Existence of a document (any blobs?)      | `DocumentStore` |
-| Enumerate all document IDs                | `DocumentStore` |
+| Existence of a document's blobs           | `DocumentStore` |
+| Per-file presence check (name + hash)     | `DocumentStore` |
 | Company ownership + the company index     | `MetadataStore` |
 | Version timestamps and their ordering     | `MetadataStore` |
 | Per-version file list + added/mod/removed | `MetadataStore` |
@@ -87,14 +87,29 @@ The two interfaces are defined in [documentstore.go](documentstore.go) and
 The pass-through methods map directly onto this table:
 
 ```go
-func (c *conn) DocumentExists(ctx, docID)        { return c.documentStore.DocumentExists(...) }
-
 func (c *conn) CompanyIDs(ctx)                   { return c.metadataStore.CompanyIDs(...) }
 func (c *conn) DocumentCompanyID(ctx, docID)     { return c.metadataStore.DocumentCompanyID(...) }
 func (c *conn) DocumentVersions(ctx, docID)      { return c.metadataStore.DocumentVersions(...) }
 func (c *conn) LatestDocumentVersionInfo(ctx, …) { return c.metadataStore.LatestDocumentVersionInfo(...) }
 // …etc
 ```
+
+`DocumentExists` is the one existence question that is **not** a pass-through: it
+reports a document that *either* store holds. The two stores are written and
+deleted one after the other, and a `MetadataStore` can be populated on its own by
+a migration that has not copied the file content over yet, so a document can
+exist as metadata without a single stored object. Every other method keyed by a
+document already answers for such a document — `DocumentVersions`,
+`DocumentCompanyID` and `LatestDocumentVersionInfo` return its metadata,
+`DeleteDocument` deletes it, and `RestoreDocument` exists to repair it — so
+reporting it as non-existent made a caller guarding on `DocumentExists` skip
+exactly the half-written document it has to repair. The `MetadataStore` has no
+existence method of its own, so `conn` asks `DocumentVersions` and reads
+`ErrDocumentNotFound` as the negative answer.
+
+`RestoreDocument` and `CreateDocument` keep asking
+`documentStore.DocumentExists` directly, because what they decide from that
+answer is whether any *file content* is there.
 
 ## How the two halves map together
 
@@ -153,7 +168,7 @@ design is correct; each write method below is built around them.
 
 ### `CreateDocument` (genesis version)
 
-[storeconn.go](storeconn.go) `CreateDocument`:
+[conn.go](conn.go) `CreateDocument`:
 
 1. **Validate** version, non-empty file set, non-nil callback.
 2. **Existence guard:** `documentStore.DocumentExists(docID)`. If blobs already
@@ -187,7 +202,7 @@ The deferred rollback is deliberately asymmetric about the *already-exists* case
 
 ### `AddDocumentVersion` (append to existing document)
 
-[storeconn.go](storeconn.go) `AddDocumentVersion`:
+[conn.go](conn.go) `AddDocumentVersion`:
 
 1. **Validate** IDs and callbacks; fetch `LatestDocumentVersionInfo` from
    metadata.
@@ -196,11 +211,14 @@ The deferred rollback is deliberately asymmetric about the *already-exists* case
 3. **Run `createVersion`** (wrapped to recover panics) to get the new version's
    `WriteFiles` / `RemoveFiles` / optional new company ID. Enforce the returned
    version is strictly *after* the latest.
-4. Classify each written file as **added** vs **modified** by checking the prior
-   provider, and compute the **resulting full file set** (previous − removed +
-   added/modified). Reject removing *all* files — every version must keep at least
-   one. This full set is passed to the metadata store as `Files` so it does not
-   re-derive the carry-forward set.
+4. Compute the **resulting full file set** (previous − removed + written) and
+   reject removing *all* files — every version must keep at least one. Derive
+   the **added/modified/removed** lists from it with `VersionInfo.SetFileDeltas`
+   against the previous version's file set, so they match every other
+   implementation: a file rewritten with byte-identical content is not a
+   modification, and removing a file the previous version did not have removes
+   nothing. The full set is passed to the metadata store as `Files` so it does
+   not re-derive the carry-forward set.
 5. **Write metadata first**, then **write blobs**. (Note the order is the
    opposite of `CreateDocument`: here the document already exists, so the metadata
    row is the thing that defines the new version, and it is written first.)
@@ -216,7 +234,7 @@ the blobs are intentionally left rather than risk deleting shared content.
 
 ### `RestoreDocument` (rebuild from a `HashedDocument` backup)
 
-[storeconn.go](storeconn.go) `RestoreDocument` replays each version of an
+[conn.go](conn.go) `RestoreDocument` replays each version of an
 in-memory backup. It supports two modes:
 
 - **`recreate=true`** — delete any existing document first, then rebuild. This is
@@ -225,16 +243,50 @@ in-memory backup. It supports two modes:
   failure leaves the document absent until retried. Safe for the `SyncDocument`
   flow where the source still holds the data.
 - **`recreate=false`** — additive merge: create if missing; otherwise keep
-  existing versions and add only backup versions whose timestamp is not already on
-  disk. CompanyID mismatch aborts without changes.
+  versions that are fully stored and write what is missing. The company check is
+  `docdb.CheckRestoreCompanyID`, which compares the stored company against the
+  one the backup names for the destination's own latest version, so a backup
+  whose newer versions move the document is restored as that move rather than
+  refused as a mismatch. A real mismatch aborts without changes.
+
+A version is only skipped when the `MetadataStore` holds it **and** the
+`DocumentStore` holds every one of its files, which `versionsFullyStored` checks
+with a single `DocumentHashFilesExist` call for all candidate files of the
+document. Skipping on the `MetadataStore`'s version list alone is wrong whenever
+the two stores were not populated together — copying into a fresh `DocumentStore`
+that reuses a `MetadataStore` already holding every version (see
+`pgstore.ContextWithMetadataStoreVersionsExist`) is exactly that case: an
+interrupted copy leaves the document with some files written, and every version
+would look like it had already been restored. A version whose metadata exists but
+whose files do not gets its files written; the duplicate metadata insert that a
+non-verifying store rejects is expected there and does not fail the restore, and
+that version stays out of the rollback because this call did not create it.
 
 For middle versions it calls `metadataStore.CreateDocumentVersion` **directly**
 (not `conn.AddDocumentVersion`) so the strictly-after ordering check is bypassed —
 restoring versions out of "latest" order is expected. It diffs each version
 against the *backup's* predecessor (not the DB's latest) to compute
 added/modified/removed, and passes the version's authoritative full file set as
-`Files`. A rollback removes versions created during the call (newest first), or
-drops the whole document if it was created fresh here.
+`Files`. A rollback drops the whole document if it was created fresh here;
+otherwise it removes the versions created during the call (newest first) and the
+file content this call uploaded, and nothing else.
+
+Three rules make that "nothing else" true:
+
+- **The versions go through `metadataStore.DeleteDocumentVersion`, not
+  `conn.DeleteDocumentVersion`.** The composite one also deletes the hashes the
+  removed version alone references, and a version this call created can reference
+  content it never wrote — files the `DocumentStore` already held, which is
+  exactly why nothing was uploaded for it.
+- **The content is deleted by name *and* hash**, through
+  `DocumentHashFilesExist`'s mirror `DeleteDocumentHashFiles`. A hash does not
+  identify one object: a document holding the same bytes under two names holds
+  two, so a restore that uploads `b.txt` with the content of an already-stored
+  `a.txt` shares its hash, and a hash-only delete would take both.
+- **A failed metadata delete stops the content delete.** A version that is still
+  committed while its content is gone cannot be told apart from corruption by any
+  reader. An orphaned object can: the presence check of the next restore finds
+  it, and a content-addressed write of the same bytes overwrites it.
 
 ### Deletion
 
@@ -255,6 +307,12 @@ The metadata store is the authority on which hashes are safe to delete:
 remaining version references. Only those blobs are deleted, so shared content
 survives.
 
+`DeleteDocumentHashes` matches on the hash alone and therefore removes every
+file with that content, whatever its name — which is what removing a version's
+content needs. `DeleteDocumentHashFiles` matches `Name` and `Hash` together, for
+a caller undoing exactly the files it wrote. Picking the wrong one is how a
+rollback deletes an object it never created.
+
 ## Ordering & rollback summary
 
 The recurring rule across every orchestrated write:
@@ -264,9 +322,14 @@ The recurring rule across every orchestrated write:
   version).
 - **Guard before you can clean up** — `CreateDocument`'s existence check is what
   makes deleting blobs on rollback safe.
-- **Roll back by hash safety, not by name** — never delete a blob whose
-  content hash might be shared; always ask the metadata store which hashes are
-  exclusively the removed version's.
+- **Roll back only what you can prove is yours.** Two different questions, two
+  different deletes. Removing a *version's* content is a hash question — ask the
+  metadata store which hashes no remaining version references and delete those
+  with `DeleteDocumentHashes`. Undoing your *own uploads* is a name-and-hash
+  question — a document can hold the same bytes under two names, so record what
+  you wrote as `(name, hash)` pairs and delete them with
+  `DeleteDocumentHashFiles`. Using the first for the second deletes an object the
+  caller never wrote.
 - **Never let cleanup mask the cause** — rollback errors are `errors.Join`ed onto
   the original error, and expected not-found results are ignored.
 
@@ -299,6 +362,32 @@ is the serialization point for concurrent `CreateDocument` calls on the same
 `docID`: the loser receives `ErrDocumentAlreadyExists`, and (as described above)
 its rollback deliberately leaves the shared, content-addressed blobs in place
 rather than corrupting the winner's document.
+
+Concurrent `AddDocumentVersion` calls are serialized the same way, by the chain
+itself. `AddDocumentVersion` reads the latest version, carries its file set
+forward, applies its own changes and inserts — so two callers doing that at once
+both build their result from the same predecessor, and whichever inserts second
+writes a file set that never saw the first one's changes. Nothing about that
+second insert looks wrong on its own: its version timestamp is unique and it is
+not a genesis. A document's versions are a chain, so a version has at most one
+successor, and a `MetadataStore` must refuse a second version naming an
+already-used `PreviousVersion` with `docdb.ErrDocumentChanged` — the optimistic
+concurrency conflict the type was declared for. The loser redoes its work from
+the new latest version. `pgstore` enforces this with the unique index
+`document_version_one_successor_per_version_idx` on `(document_id, prev_version)`;
+`localfsdb` needs no equivalent because it serializes writers per document with a
+mutex, which `storeconn` cannot do — its writers are separate processes sharing
+Postgres and S3.
+
+The one existing version that may be re-chained onto a new one is the successor
+named by `CreateDocumentVersionInput.RelinkSuccessor`, and only `RestoreDocument`
+names one, to undo the relink `DeleteDocumentVersion` performed when the version
+being restored was removed. It is named rather than found because no property of
+the stored rows identifies it: adopting whichever version chains off the same
+predecessor and sorts later would capture exactly the concurrent append that has
+to be refused, and version timestamps do not order the inserts either — a
+`CreateVersionFunc` stamps its version when it starts, so a slower writer can
+hold the earlier timestamp.
 
 ## Read-only wrapping
 

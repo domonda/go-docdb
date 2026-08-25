@@ -78,9 +78,11 @@ Each version directory contains a complete snapshot of the document at that poin
 
 #### Key Files
 
-- **`company.id`**: Contains the UUID of the company that owns this document as plain text. Written when a document is created or when the company is changed via `SetDocumentCompanyID()`.
+- **`company.id`**: Contains the UUID of the company that owns this document as plain text — the company of its latest version. Written when a document is created, when a new version names another company via `CreateVersionResult.NewCompanyID` (which is how a document is moved between companies), when the company is changed via `SetDocumentCompanyID()`, and when deleting the latest version or merging a restore hands the document to the company of the version that becomes the latest one.
 
 - **`{version-timestamp}/`**: Directory containing all files for a specific document version. The directory name is a UTC timestamp using `docdb.VersionTime` formatted with `VersionTimeFormat` (`2006-01-02_15-04-05.000`), e.g., `2024-01-15_10-30-45.123`.
+
+  A version's files are exactly what `docdb.DirFileProvider` reports for this directory, which **skips hidden entries (dot-prefixed names, plus the hidden attribute on Windows) and sub-directories**. A stray `.DS_Store`, the temp file of an interrupted rsync, or an NFS silly-rename is therefore never tracked as a version file, on both the write and the read path. Because of that, `CreateDocument`, `AddDocumentVersion` and `RestoreDocument` reject a version whose files are all hidden: it would commit a version tracking nothing, which no version may be.
 
 - **`{version-timestamp}.json`**: VersionInfo metadata file containing:
   - `CompanyID`: Company UUID
@@ -151,7 +153,7 @@ companies/
         └── (empty)           # Empty marker directory
 ```
 
-The existence of the directory `companies/{company-uuid}/{doc-uuid-path}/` indicates that document `{doc-uuid}` belongs to company `{company-uuid}`.
+The existence of the directory `companies/{company-uuid}/{doc-uuid-path}/` indicates that document `{doc-uuid}` belongs to company `{company-uuid}`. A document has exactly one such marker at a time: moving it between companies removes the marker under the previous company and creates one under the new one, so `CompanyDocumentIDs` lists a moved document under its current company only, never under both.
 
 ## Document Version Creation Flow
 
@@ -168,7 +170,7 @@ When `CreateDocument()` is called:
 7. **Write VersionInfo**: `documents/{doc-uuid-path}/{version-timestamp}.json` is written
 8. **Call callback**: The required `OnNewVersionFunc` is invoked
 
-If any step fails, cleanup logic removes all created directories.
+If any step fails, cleanup logic removes all created directories. A panic from a file read or from `OnNewVersionFunc` is recovered into the returned error (`errs.RecoverPanicAsError`, deferred *after* the rollback so it runs first and the rollback sees a non-nil error), so a panicking callback no longer leaves a half-created document on disk.
 
 ### Adding a Version to an Existing Document
 
@@ -181,7 +183,7 @@ When `AddDocumentVersion()` is called:
 5. **Copy unchanged files**: Files from previous version that aren't being modified or deleted are copied
 6. **Write new files**: Files returned by the callback are copied into the new version directory
 7. **Generate VersionInfo**: Compare with previous version to identify added/modified/removed files
-8. **Check for changes**: If files are identical to previous version, return `docdb.ErrNoChanges`
+8. **Check for changes**: If the files *and* the company are identical to the previous version, return `docdb.ErrNoChanges`. A version that changes nothing but the company is how a document is moved between companies, so it is a change
 9. **Write VersionInfo**: `documents/{doc-uuid-path}/{new-version-timestamp}.json` is written
 10. **Update company if changed**: If the callback returned a new company ID, update `company.id` and company mapping directories
 11. **Call callback**: The required `OnNewVersionFunc` is invoked
@@ -197,14 +199,26 @@ If an error occurs, the new version directory and info file are removed during c
 - **`DeleteDocument()`**: Removes the document directory and the company mapping entry.
 - **`DeleteDocumentVersion()`**: Removes a single version directory and its `.json` info file. If no versions remain after deletion, the document directory and company mapping are also removed.
 
+  The deleted version's **successor is chained onto the deleted version's own predecessor**, so no version is left naming one the document no longer has. This is what `pgstore` does in the same call, and `RestoreDocument` on both implementations undoes exactly this relink when the version is restored (see `storeconn.CreateDocumentVersionInput.RelinkSuccessor`). Successors are found by the predecessor they name rather than by their place in the version order, and every match is relinked, because nothing on this store refuses two versions naming the same predecessor. Deleting a *genesis* version relinks nothing, also as `pgstore` does: it has no predecessor to hand the successor to, which is what lets a merge-restore take the earliest version back as the genesis it was.
+
+  The predecessor is read from the version's `.json` info file *before* the version is removed. An unreadable info file is refused rather than deleted with the relink skipped, since that file is the only record of the predecessor; removing it by hand makes the delete go through with nothing left to relink.
+
+  The document is re-assigned to the company of the version that becomes the latest one **only when the deleted version was the latest one**. A document belongs to the company of its latest version, so deleting the version that moved it must move it back — but re-deriving on every delete would overwrite a `company.id` that `SetDocumentCompanyID` moved without committing a version, a marker that deliberately names a company no version names.
+
 ### Restoring a Document
 
 `RestoreDocument()` rebuilds a document from an in-memory `docdb.HashedDocument` backup (see the root README's Backup & Restore section). It holds the per-document write mutex and writes each version's files and `VersionInfo` JSON directly under the document directory, creating `company.id` and the company mapping when the document does not yet exist. The `recreate` flag controls how an existing document is handled:
 
 - **`recreate=true` (replace)**: if the document directory already exists, it and its company mapping are removed first, then the document is recreated entirely from the backup. The on-disk `company.id` after the call equals the backup's `CompanyID`.
-- **`recreate=false` (additive merge)**: the document is created if missing; otherwise existing versions are kept and only backup versions whose timestamp is not already on disk are added. The on-disk `company.id` must equal the backup's `CompanyID`, otherwise the call fails without changing anything.
+- **`recreate=false` (additive merge)**: the document is created if missing; otherwise existing versions are kept and only backup versions whose timestamp is not already on disk are added. The company check is `docdb.CheckRestoreCompanyID`, which compares the on-disk `company.id` against the company the backup names for the *document's own latest version on disk* — not against the backup's current `CompanyID`. That is what lets a backup whose newer versions move the document be restored as the move it is; a real mismatch fails the call without changing anything.
 
-If an error occurs, the version directories and info files created during the call are removed during cleanup.
+Every version is written with the company of *that* version (`HashedDocument.VersionCompanyID`), so a document moved between companies keeps its move history instead of having every version filed under its current company.
+
+A version filled back into the middle of an existing chain **takes back the successor** that `DeleteDocumentVersion` relinked onto its predecessor, the same way `storeconn` does through `CreateDocumentVersionInput.RelinkSuccessor`. Only a version of the backup is ever taken over, and only while it still chains off that same predecessor, so a version the destination has but the backup does not is kept as-is. The successor handed over is the backup's next version that the destination actually holds, not simply the next one in the backup: a destination missing a run of adjacent versions would otherwise name one that is not there and relink nothing, forking the chain.
+
+After a merge, `company.id` is re-derived from the document's latest version **only when this call wrote the version that is now the latest one** — a merge that wrote nothing, or only versions below the latest one on disk, changed nothing about who owns the document, and re-deriving would undo a `SetDocumentCompanyID` move that was never committed as a version.
+
+If an error occurs, the version directories and info files created during the call are removed during cleanup, and a relinked successor's info file is restored to its original bytes — it is a version this call did not create and must not remove.
 
 ## Concurrency & Safety
 

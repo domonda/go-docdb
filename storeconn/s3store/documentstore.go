@@ -57,6 +57,51 @@ func (s *docStore) DocumentExists(ctx context.Context, docID uu.ID) (exists bool
 	return false, err
 }
 
+// DocumentHashFilesExist reports for every passed file whether an object with
+// that filename and content hash exists under the docID prefix.
+//
+// It lists the document's objects once and answers every file from that
+// listing, instead of issuing a HeadObject per file: the caller asks about the
+// files of a whole document at once, and a document's objects fit into few
+// paginated List calls, while a per-file check would be one round trip each.
+func (s *docStore) DocumentHashFilesExist(ctx context.Context, docID uu.ID, files []docdb.FileInfo) (map[docdb.FileInfo]bool, error) {
+	exist := make(map[docdb.FileInfo]bool, len(files))
+	if len(files) == 0 {
+		return exist, nil
+	}
+
+	keySet, err := s.documentObjectKeySet(ctx, docID)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, file := range files {
+		_, exist[file] = keySet[Key(docID, file.Name, file.Hash)]
+	}
+
+	return exist, nil
+}
+
+// documentObjectKeySet returns the keys of every object stored under the docID
+// prefix as a set, so a caller can decide whether the document holds a given
+// (filename, content hash) pair with one List instead of a HeadObject per file.
+//
+// Both DocumentHashFilesExist and DeleteDocumentHashFiles answer that same
+// question, and they have to answer it identically: a file is addressed by name
+// and hash together, so a copy of this enumeration that drifted would let the
+// restore rollback delete objects the caller never wrote.
+func (s *docStore) documentObjectKeySet(ctx context.Context, docID uu.ID) (map[string]struct{}, error) {
+	keys, err := s.listObjectKeys(ctx, docID.String()+"/")
+	if err != nil {
+		return nil, err
+	}
+	keySet := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		keySet[key] = struct{}{}
+	}
+	return keySet, nil
+}
+
 // CreateDocumentVersion uploads each of the passed files as a separate S3 object
 // keyed by "<docID>/<filename>/<contentHash>". Filenames containing "/"
 // are rejected because "/" is the key separator. The version argument is
@@ -170,6 +215,43 @@ func (s *docStore) DeleteDocumentHashes(ctx context.Context, docID uu.ID, hashes
 	}
 
 	objectsToDelete := filterKeysByHash(keys, hashes)
+	if len(objectsToDelete) == 0 {
+		return nil
+	}
+
+	return s.deleteObjectKeys(ctx, objectsToDelete)
+}
+
+// DeleteDocumentHashFiles removes the objects of the passed files under the
+// docID prefix, matching name and content hash together.
+// Returns docdb.ErrDocumentNotFound if the document has no objects at all.
+// Files that match no stored object are silently ignored.
+//
+// An object key is "<docID>/<filename>/<hash>", so the wanted keys are built
+// directly and intersected with what is stored, rather than filtered by hash
+// the way DeleteDocumentHashes does it: the same content under two filenames is
+// two objects, and deleting by hash alone would remove both.
+func (s *docStore) DeleteDocumentHashFiles(ctx context.Context, docID uu.ID, files []docdb.FileInfo) error {
+	keySet, err := s.documentObjectKeySet(ctx, docID)
+	if err != nil {
+		return err
+	}
+	if len(keySet) == 0 {
+		return docdb.NewErrDocumentNotFound(docID)
+	}
+	if len(files) == 0 {
+		return nil
+	}
+
+	var objectsToDelete []string
+	for _, file := range files {
+		key := Key(docID, file.Name, file.Hash)
+		if _, ok := keySet[key]; ok {
+			objectsToDelete = append(objectsToDelete, key)
+			// Drop it so the same file passed twice is not deleted twice.
+			delete(keySet, key)
+		}
+	}
 	if len(objectsToDelete) == 0 {
 		return nil
 	}

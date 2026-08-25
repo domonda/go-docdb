@@ -359,3 +359,97 @@ func TestVersionInfo_Equal_ComparesEveryField(t *testing.T) {
 	assert.Equal(t, fieldsComparedByEqual, got,
 		"VersionInfo field count changed — update VersionInfo.Equal to compare the new field, then update this guard")
 }
+
+// TestVersionInfo_SetFileDeltas pins the shared derivation of the change
+// lists. Every Conn implementation derives them here, and a document copied
+// between implementations has its VersionInfo compared against the already
+// stored one, so a difference in this derivation would not fail a test but a
+// migration, halfway through a company's documents.
+func TestVersionInfo_SetFileDeltas(t *testing.T) {
+	files := func(nameHash ...string) map[string]FileInfo {
+		m := make(map[string]FileInfo, len(nameHash)/2)
+		for i := 0; i < len(nameHash); i += 2 {
+			m[nameHash[i]] = FileInfo{Name: nameHash[i], Size: 1, Hash: nameHash[i+1]}
+		}
+		return m
+	}
+
+	for _, tc := range []struct {
+		name         string
+		versionFiles map[string]FileInfo
+		prevFiles    map[string]FileInfo
+		wantAdded    []string
+		wantModified []string
+		wantRemoved  []string
+	}{
+		{
+			// The first version of a document has no predecessor:
+			// all of its files are added.
+			name:         "nil prevFiles adds everything",
+			versionFiles: files("b.pdf", "hashB", "a.pdf", "hashA"),
+			prevFiles:    nil,
+			wantAdded:    []string{"a.pdf", "b.pdf"},
+		},
+		{
+			// A nil and an empty predecessor must not describe
+			// different versions.
+			name:         "empty prevFiles adds everything",
+			versionFiles: files("a.pdf", "hashA"),
+			prevFiles:    map[string]FileInfo{},
+			wantAdded:    []string{"a.pdf"},
+		},
+		{
+			name:         "unchanged files are not listed",
+			versionFiles: files("a.pdf", "hashA", "b.pdf", "hashB"),
+			prevFiles:    files("a.pdf", "hashA", "b.pdf", "hashB"),
+		},
+		{
+			// Only the hash decides whether a file counts as modified,
+			// so a version that rewrites a file with identical content
+			// does not claim a change.
+			name:         "same name and hash with different size is unchanged",
+			versionFiles: map[string]FileInfo{"a.pdf": {Name: "a.pdf", Size: 100, Hash: "hashA"}},
+			prevFiles:    map[string]FileInfo{"a.pdf": {Name: "a.pdf", Size: 999, Hash: "hashA"}},
+		},
+		{
+			name:         "added, modified and removed together",
+			versionFiles: files("keep.pdf", "hashK", "mod.pdf", "hashM2", "new.pdf", "hashN"),
+			prevFiles:    files("keep.pdf", "hashK", "mod.pdf", "hashM1", "gone.pdf", "hashG"),
+			wantAdded:    []string{"new.pdf"},
+			wantModified: []string{"mod.pdf"},
+			wantRemoved:  []string{"gone.pdf"},
+		},
+		{
+			name:         "all files removed",
+			versionFiles: nil,
+			prevFiles:    files("a.pdf", "hashA", "b.pdf", "hashB"),
+			wantRemoved:  []string{"a.pdf", "b.pdf"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vi := &VersionInfo{Files: tc.versionFiles}
+			vi.SetFileDeltas(tc.prevFiles)
+
+			// Sorted, not just set-equal: the lists are persisted as-is
+			// (JSON file, Postgres array), so they must not depend on
+			// map iteration order.
+			assert.Equal(t, tc.wantAdded, vi.AddedFiles)
+			assert.Equal(t, tc.wantModified, vi.ModifiedFiles)
+			assert.Equal(t, tc.wantRemoved, vi.RemovedFiles)
+		})
+	}
+}
+
+// TestVersionInfo_SetFileDeltas_ReplacesLists documents that the lists are
+// replaced instead of appended to, and that a list without entries stays nil:
+// callers compare these lists directly and persist them.
+func TestVersionInfo_SetFileDeltas_ReplacesLists(t *testing.T) {
+	vi := baseVersionInfo()
+	vi.Files = map[string]FileInfo{"a.pdf": {Name: "a.pdf", Size: 100, Hash: "hashA"}}
+
+	vi.SetFileDeltas(map[string]FileInfo{"a.pdf": {Name: "a.pdf", Size: 100, Hash: "hashA"}})
+
+	assert.Nil(t, vi.AddedFiles)
+	assert.Nil(t, vi.ModifiedFiles)
+	assert.Nil(t, vi.RemovedFiles)
+}

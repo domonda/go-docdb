@@ -3,6 +3,7 @@ package integrationtests
 import (
 	"context"
 	"fmt"
+	"iter"
 	"os"
 	"strings"
 	"testing"
@@ -70,6 +71,27 @@ func syncBackends() []syncBackend {
 	}
 }
 
+// backendPairs yields every source/destination backend combination. Pass
+// skipSharedBackend to leave out storeconn->storeconn, where both sides are one
+// backend: it cannot hold the same docID under two companies, so neither a
+// per-document conflict nor a destination lagging behind the source's move can
+// be set up there. Both exclusions used to be written out separately at each
+// call site, and they have to agree.
+func backendPairs(skipSharedBackend bool) iter.Seq2[syncBackend, syncBackend] {
+	return func(yield func(src, dst syncBackend) bool) {
+		for _, src := range syncBackends() {
+			for _, dst := range syncBackends() {
+				if skipSharedBackend && src.storeconn && dst.storeconn {
+					continue
+				}
+				if !yield(src, dst) {
+					return
+				}
+			}
+		}
+	}
+}
+
 // syncTestContext returns the context used by a sync test. When any backend is
 // the storeconn backend the context must carry the Postgres test transaction
 // so that every metadata write is rolled back on t.Cleanup. Tests that only
@@ -124,6 +146,7 @@ func assertSyncedDocEqual(t *testing.T, ctx context.Context, conn docdb.Conn, wa
 	for v, wantVer := range want.Versions {
 		gotVer, ok := got.Versions[v]
 		require.Truef(t, ok, "version %s missing after sync", v)
+		require.Equal(t, wantVer.CompanyID, gotVer.CompanyID)
 		require.Equal(t, wantVer.CommitUserID, gotVer.CommitUserID)
 		require.Equal(t, wantVer.CommitReason, gotVer.CommitReason)
 		require.Equal(t, wantVer.FileHashes, gotVer.FileHashes)
@@ -150,28 +173,26 @@ func countDocIDsInError(err error, docIDs uu.IDSlice) int {
 // TestSyncDocument syncs a multi-version document for every combination of
 // localfsdb and storeconn as source and destination connection.
 func TestSyncDocument(t *testing.T) {
-	for _, src := range syncBackends() {
-		for _, dst := range syncBackends() {
-			t.Run(src.name+" to "+dst.name, func(t *testing.T) {
-				ctx := syncTestContext(t, src, dst)
-				srcConn := src.newConn(t)
-				dstConn := dst.newConn(t)
+	for src, dst := range backendPairs(false) {
+		t.Run(src.name+" to "+dst.name, func(t *testing.T) {
+			ctx := syncTestContext(t, src, dst)
+			srcConn := src.newConn(t)
+			dstConn := dst.newConn(t)
 
-				companyID := uu.IDv7()
-				docID := uu.IDv7()
-				userID := uu.IDv7()
+			companyID := uu.IDv7()
+			docID := uu.IDv7()
+			userID := uu.IDv7()
 
-				createSyncTestDoc(t, ctx, srcConn, companyID, docID, userID, "doc")
+			createSyncTestDoc(t, ctx, srcConn, companyID, docID, userID, "doc")
 
-				want, err := docdb.ReadHashedDocument(ctx, srcConn, docID)
-				require.NoError(t, err)
+			want, err := docdb.ReadHashedDocument(ctx, srcConn, docID)
+			require.NoError(t, err)
 
-				err = docdb.SyncDocument(ctx, srcConn, dstConn, docID, true)
-				require.NoError(t, err)
+			err = docdb.SyncDocument(ctx, srcConn, dstConn, docID, true)
+			require.NoError(t, err)
 
-				assertSyncedDocEqual(t, ctx, dstConn, want)
-			})
-		}
+			assertSyncedDocEqual(t, ctx, dstConn, want)
+		})
 	}
 }
 
@@ -203,91 +224,77 @@ func TestSyncAllCompanyDocuments(t *testing.T) {
 	// Happy path: every document of the company is synced for all four
 	// source/destination backend combinations.
 	t.Run("syncs every document of the company", func(t *testing.T) {
-		for _, src := range syncBackends() {
-			for _, dst := range syncBackends() {
-				t.Run(src.name+" to "+dst.name, func(t *testing.T) {
-					ctx := syncTestContext(t, src, dst)
-					srcConn := src.newConn(t)
-					dstConn := dst.newConn(t)
+		for src, dst := range backendPairs(false) {
+			t.Run(src.name+" to "+dst.name, func(t *testing.T) {
+				ctx := syncTestContext(t, src, dst)
+				srcConn := src.newConn(t)
+				dstConn := dst.newConn(t)
 
-					companyID := uu.IDv7()
-					userID := uu.IDv7()
+				companyID := uu.IDv7()
+				userID := uu.IDv7()
 
-					companyDocIDs := uu.IDSlice{uu.IDv7(), uu.IDv7(), uu.IDv7()}
-					for i, docID := range companyDocIDs {
-						createSyncTestDoc(t, ctx, srcConn, companyID, docID, userID, fmt.Sprintf("doc%d", i))
-					}
+				companyDocIDs := uu.IDSlice{uu.IDv7(), uu.IDv7(), uu.IDv7()}
+				for i, docID := range companyDocIDs {
+					createSyncTestDoc(t, ctx, srcConn, companyID, docID, userID, fmt.Sprintf("doc%d", i))
+				}
 
-					// A document owned by a different company that
-					// SyncAllCompanyDocuments must not touch.
-					otherCompanyID := uu.IDv7()
-					otherDocID := uu.IDv7()
-					createSyncTestDoc(t, ctx, srcConn, otherCompanyID, otherDocID, userID, "other-company")
+				// A document owned by a different company that
+				// SyncAllCompanyDocuments must not touch.
+				otherCompanyID := uu.IDv7()
+				otherDocID := uu.IDv7()
+				createSyncTestDoc(t, ctx, srcConn, otherCompanyID, otherDocID, userID, "other-company")
 
-					// Record the progress callbacks to assert they report
-					// every document with a correct index and total.
-					type progress struct {
-						docID        uu.ID
-						index, total int
-					}
-					var progressCalls []progress
-					synced, err := docdb.SyncAllCompanyDocuments(ctx, srcConn, dstConn, companyID, true, true,
-						func(_ context.Context, docID uu.ID, index, total int) {
-							progressCalls = append(progressCalls, progress{docID, index, total})
-						},
-					)
+				// Record the progress callbacks to assert they report
+				// every document with a correct index and total.
+				type progress struct {
+					docID        uu.ID
+					index, total int
+				}
+				var progressCalls []progress
+				synced, err := docdb.SyncAllCompanyDocuments(ctx, srcConn, dstConn, companyID, true, true,
+					func(_ context.Context, docID uu.ID, index, total int) {
+						progressCalls = append(progressCalls, progress{docID, index, total})
+					},
+				)
+				require.NoError(t, err)
+				require.ElementsMatch(t, companyDocIDs, synced)
+
+				require.Len(t, progressCalls, len(companyDocIDs))
+				var progressDocIDs uu.IDSlice
+				for i, p := range progressCalls {
+					require.Equal(t, i, p.index)
+					require.Equal(t, len(companyDocIDs), p.total)
+					progressDocIDs = append(progressDocIDs, p.docID)
+				}
+				require.ElementsMatch(t, companyDocIDs, progressDocIDs)
+
+				for _, docID := range companyDocIDs {
+					want, err := docdb.ReadHashedDocument(ctx, srcConn, docID)
 					require.NoError(t, err)
-					require.ElementsMatch(t, companyDocIDs, synced)
+					assertSyncedDocEqual(t, ctx, dstConn, want)
+				}
 
-					require.Len(t, progressCalls, len(companyDocIDs))
-					var progressDocIDs uu.IDSlice
-					for i, p := range progressCalls {
-						require.Equal(t, i, p.index)
-						require.Equal(t, len(companyDocIDs), p.total)
-						progressDocIDs = append(progressDocIDs, p.docID)
-					}
-					require.ElementsMatch(t, companyDocIDs, progressDocIDs)
-
-					for _, docID := range companyDocIDs {
-						want, err := docdb.ReadHashedDocument(ctx, srcConn, docID)
-						require.NoError(t, err)
-						assertSyncedDocEqual(t, ctx, dstConn, want)
-					}
-
-					// When source and destination are distinct backends the
-					// other company's document can only be in dst if it was
-					// wrongly synced. storeconn->storeconn shares one backend,
-					// so the document is present there regardless.
-					if !(src.storeconn && dst.storeconn) {
-						exists, err := dstConn.DocumentExists(ctx, otherDocID)
-						require.NoError(t, err)
-						require.False(t, exists, "document of another company must not be synced")
-					}
-				})
-			}
+				// When source and destination are distinct backends the
+				// other company's document can only be in dst if it was
+				// wrongly synced. storeconn->storeconn shares one backend,
+				// so the document is present there regardless.
+				if !(src.storeconn && dst.storeconn) {
+					exists, err := dstConn.DocumentExists(ctx, otherDocID)
+					require.NoError(t, err)
+					require.False(t, exists, "document of another company must not be synced")
+				}
+			})
 		}
 	})
 
 	// continueOnError combinations exclude storeconn->storeconn: a single
 	// shared backend cannot hold the same docID under two different
 	// companies, which is how a per-document failure is provoked.
-	continueOnErrorBackends := func(yield func(src, dst syncBackend) bool) {
-		for _, src := range syncBackends() {
-			for _, dst := range syncBackends() {
-				if src.storeconn && dst.storeconn {
-					continue
-				}
-				if !yield(src, dst) {
-					return
-				}
-			}
-		}
-	}
 
 	// continueOnError=true: a failing document does not stop the sync, the
 	// other documents are still synced and the error is reported.
 	t.Run("continueOnError=true syncs the documents that do not fail", func(t *testing.T) {
-		for src, dst := range continueOnErrorBackends {
+		for src, dst := range backendPairs(true) {
 			t.Run(src.name+" to "+dst.name, func(t *testing.T) {
 				ctx := syncTestContext(t, src, dst)
 				srcConn := src.newConn(t)
@@ -313,7 +320,7 @@ func TestSyncAllCompanyDocuments(t *testing.T) {
 	// continueOnError=true reports every failure: with all documents failing
 	// the sync still visits each one, so the joined error names all of them.
 	t.Run("continueOnError=true reports every failure", func(t *testing.T) {
-		for src, dst := range continueOnErrorBackends {
+		for src, dst := range backendPairs(true) {
 			t.Run(src.name+" to "+dst.name, func(t *testing.T) {
 				ctx := syncTestContext(t, src, dst)
 				srcConn := src.newConn(t)
@@ -334,7 +341,7 @@ func TestSyncAllCompanyDocuments(t *testing.T) {
 	// continueOnError=false stops at the first failure: with all documents
 	// failing the sync stops after the first, so exactly one is reported.
 	t.Run("continueOnError=false stops at the first failure", func(t *testing.T) {
-		for src, dst := range continueOnErrorBackends {
+		for src, dst := range backendPairs(true) {
 			t.Run(src.name+" to "+dst.name, func(t *testing.T) {
 				ctx := syncTestContext(t, src, dst)
 				srcConn := src.newConn(t)
@@ -351,4 +358,374 @@ func TestSyncAllCompanyDocuments(t *testing.T) {
 			})
 		}
 	})
+}
+
+// TestSyncDocument_ResumesInterruptedCopy covers resuming a copy into a
+// storeconn whose MetadataStore already holds every version of the document,
+// which is the state a migration starts from: the version rows are mirrored
+// into Postgres long before any file content is copied to S3, and the copy runs
+// in versions-exist mode precisely because they are already there.
+//
+// A copy interrupted by a Ctrl-C, a network error, or a crash leaves some of the
+// document's objects in S3. Deciding what to skip from the Postgres version list
+// would then skip every version of such a document, return nil, and let the
+// caller count it as fully synced while S3 is missing files — the cutover would
+// route reads to an incomplete copy.
+//
+// The same resume is covered against both MetadataStore modes, because they
+// reach the already-stored version by different routes: one is told up front
+// that it is there, the other has its insert rejected by the unique index.
+func TestSyncDocument_ResumesInterruptedCopy(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// resumeCtx wraps the context the resuming sync runs under, which is
+		// what selects between the two MetadataStore modes.
+		resumeCtx func(context.Context) context.Context
+	}{
+		// The store is told up front that every version is already there, which
+		// is the mode a migration copies metadata-first in.
+		{"versions-exist mode", pgstore.ContextWithMetadataStoreVersionsExist},
+
+		// The store really inserts, so the resume asks for a version the unique
+		// index already holds, and both stores are read and written inside the
+		// caller's transaction: FixtureCtxWithTestTx supplies one here, and a
+		// migration doing its per-document work transactionally is the same
+		// shape. A unique violation raised directly in that transaction aborts
+		// all of it, so every statement after the tolerated duplicate — the rest
+		// of the restore, the caller's next document, its commit — fails with
+		// "current transaction is aborted", while the restore itself still
+		// returns nil. Reporting success on a dead transaction is the same class
+		// of silent data loss the resume fix exists to remove, so the duplicate
+		// must stay contained to the insert that provoked it. The final read
+		// through the same transaction is what proves it survived.
+		{"inserting store", func(ctx context.Context) context.Context { return ctx }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := pgfixtures.FixtureCtxWithTestTx(t)
+			srcConn := localfsdb.NewTestConn(t)
+			s3fixtures.FixtureCleanBucket(t)
+			documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
+			dstConn := storeconn.New(documentStore, pgstore.NewMetadataStore())
+
+			companyID := uu.IDv7()
+			docID := uu.IDv7()
+			userID := uu.IDv7()
+			createSyncTestDoc(t, ctx, srcConn, companyID, docID, userID, "doc")
+
+			want, err := docdb.ReadHashedDocument(ctx, srcConn, docID)
+			require.NoError(t, err)
+
+			// Copy the document, then delete the second version's blob again:
+			// the metadata of both versions stays in Postgres while S3 holds
+			// only what an interrupted copy would have written.
+			err = docdb.SyncDocument(ctx, srcConn, dstConn, docID, true)
+			require.NoError(t, err)
+
+			versions := want.VersionTimes()
+			require.Len(t, versions, 2)
+			hashOnlyInV2 := want.Versions[versions[1]].FileHashes["b.txt"]
+			err = documentStore.DeleteDocumentHashes(ctx, docID, []string{hashOnlyInV2})
+			require.NoError(t, err)
+
+			// Resuming must write what is missing instead of trusting the
+			// version list.
+			err = docdb.SyncDocument(tc.resumeCtx(ctx), srcConn, dstConn, docID, false)
+			require.NoError(t, err)
+
+			assertSyncedDocEqual(t, ctx, dstConn, want)
+		})
+	}
+}
+
+// createSyncTestDocVersions creates a document on conn with one version per
+// passed filename: the first creates the document, every later one adds its
+// file. The version timestamps are one millisecond apart in the order passed,
+// and returned in that order.
+func createSyncTestDocVersions(t *testing.T, ctx context.Context, conn docdb.Conn, companyID, docID, userID uu.ID, filenames ...string) []docdb.VersionTime {
+	t.Helper()
+	noopOnNew := func(context.Context, *docdb.VersionInfo) error { return nil }
+
+	versions := make([]docdb.VersionTime, len(filenames))
+	for i := range filenames {
+		versions[i] = docdb.MustVersionTimeFromString(fmt.Sprintf("2024-01-01_00-00-00.%03d", i))
+	}
+
+	err := conn.CreateDocument(
+		ctx, companyID, docID, userID, "version 0", versions[0],
+		[]fs.FileReader{fs.NewMemFile(filenames[0], []byte(filenames[0]))},
+		noopOnNew,
+	)
+	require.NoError(t, err)
+
+	for i, filename := range filenames[1:] {
+		version := versions[i+1]
+		err = conn.AddDocumentVersion(
+			ctx, docID, userID, fmt.Sprintf("version %d", i+1),
+			func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+				return &docdb.CreateVersionResult{
+					Version:    version,
+					WriteFiles: []fs.FileReader{fs.NewMemFile(filename, []byte(filename))},
+				}, nil
+			},
+			noopOnNew,
+		)
+		require.NoError(t, err)
+	}
+	return versions
+}
+
+// TestSyncDocumentRefillsMissingMiddleVersions syncs a document into a
+// destination that holds only the versions the source had when it was last
+// synced: two consecutive middle versions were missing then, so the
+// destination chains the last version straight off the first one — a backup
+// carries no predecessor of its own, the chain is derived from the versions it
+// holds.
+//
+// Filling that run back in has to hand the last version over from one restored
+// version to the next: relinking only the version that follows in the backup
+// names one the destination does not have yet, which relinks nothing and leaves
+// two versions naming the same predecessor. Run for every combination of the
+// two implementations, because they detect that fork in opposite ways —
+// pgstore has a unique index that refuses the second version naming an
+// already-used predecessor, localfsdb has nothing that would notice.
+func TestSyncDocumentRefillsMissingMiddleVersions(t *testing.T) {
+	for src, dst := range backendPairs(true) {
+		t.Run(src.name+"->"+dst.name, func(t *testing.T) {
+			ctx := syncTestContext(t, src, dst)
+			srcConn := src.newConn(t)
+			dstConn := dst.newConn(t)
+
+			var (
+				companyID = uu.IDv7()
+				docID     = uu.IDv7()
+				userID    = uu.IDv7()
+			)
+			versions := createSyncTestDocVersions(t, ctx, srcConn, companyID, docID, userID, "a.txt", "b.txt", "c.txt", "d.txt")
+
+			// The whole document, kept as the backup the source is restored
+			// from further down.
+			want, err := docdb.ReadHashedDocument(ctx, srcConn, docID)
+			require.NoError(t, err)
+
+			// Sync the source while two of its middle versions are missing,
+			// which is what the destination was last synced from.
+			for _, version := range versions[1:3] {
+				_, err = srcConn.DeleteDocumentVersion(ctx, docID, version)
+				require.NoError(t, err)
+			}
+			require.NoError(t, docdb.SyncDocument(ctx, srcConn, dstConn, docID, true))
+
+			left, err := dstConn.DocumentVersions(ctx, docID)
+			require.NoError(t, err)
+			require.Equal(t, []docdb.VersionTime{versions[0], versions[3]}, left)
+			lastInfo, err := dstConn.DocumentVersionInfo(ctx, docID, versions[3])
+			require.NoError(t, err)
+			require.Equal(t, &versions[0], lastInfo.PrevVersion, "the destination chains the last version off the first")
+
+			// The source gets the missing versions back and is synced again.
+			require.NoError(t, srcConn.RestoreDocument(ctx, want, true))
+			require.NoError(t, docdb.SyncDocument(ctx, srcConn, dstConn, docID, false))
+
+			assertSyncedDocEqual(t, ctx, dstConn, want)
+			for i, version := range versions {
+				info, err := dstConn.DocumentVersionInfo(ctx, docID, version)
+				require.NoError(t, err)
+				if i == 0 {
+					require.Nil(t, info.PrevVersion, "the first version has no predecessor")
+					continue
+				}
+				require.Equalf(t, &versions[i-1], info.PrevVersion,
+					"version %d must chain off the version before it instead of forking the chain", i)
+			}
+		})
+	}
+}
+
+// moveDocumentToCompany adds a version to docID that changes nothing but the
+// company: this is how a document is moved between companies, and it is what
+// keeps the move visible in the document's history.
+func moveDocumentToCompany(t *testing.T, ctx context.Context, conn docdb.Conn, docID, userID, companyID uu.ID, version docdb.VersionTime) {
+	t.Helper()
+
+	err := conn.AddDocumentVersion(
+		ctx, docID, userID, "USER_DOCUMENT_MOVE",
+		func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+			return &docdb.CreateVersionResult{Version: version, NewCompanyID: companyID.Nullable()}, nil
+		},
+		func(context.Context, *docdb.VersionInfo) error { return nil },
+	)
+	require.NoError(t, err)
+}
+
+// TestMoveDocumentBetweenCompanies runs a move and its undo against both
+// backends, because the two record ownership in completely different ways and
+// still have to answer the same: localfsdb keeps an owner marker beside the
+// versions (company.id plus the per-company directory) and has to rewrite it
+// whenever the latest version changes, while storeconn/pgstore derives the
+// owner from the latest version row and has nothing to rewrite. A divergence
+// here silently sends bulk operations over a company - backups, migrations,
+// exports - to the wrong set of documents on one backend only.
+func TestMoveDocumentBetweenCompanies(t *testing.T) {
+	for _, backend := range syncBackends() {
+		t.Run(backend.name, func(t *testing.T) {
+			ctx := syncTestContext(t, backend)
+			conn := backend.newConn(t)
+
+			var (
+				prevCompanyID = uu.IDv7()
+				companyID     = uu.IDv7()
+				docID         = uu.IDv7()
+				userID        = uu.IDv7()
+				v0            = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+				moveVersion   = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.002")
+			)
+
+			createSyncTestDoc(t, ctx, conn, prevCompanyID, docID, userID, "moved-doc")
+			moveDocumentToCompany(t, ctx, conn, docID, userID, companyID, moveVersion)
+
+			// the document belongs to and is listed under the company of its
+			// latest version, and only under that one
+			gotCompanyID, err := conn.DocumentCompanyID(ctx, docID)
+			require.NoError(t, err)
+			require.Equal(t, companyID, gotCompanyID)
+
+			docIDs, err := conn.CompanyDocumentIDs(ctx, companyID)
+			require.NoError(t, err)
+			require.Equal(t, uu.IDSlice{docID}, docIDs)
+
+			docIDs, err = conn.CompanyDocumentIDs(ctx, prevCompanyID)
+			require.NoError(t, err)
+			require.Nil(t, docIDs, "the company the document was moved away from must not list it")
+
+			// the versions committed before the move keep naming the previous
+			// company: that is what keeps the move visible in the history
+			v0Info, err := conn.DocumentVersionInfo(ctx, docID, v0)
+			require.NoError(t, err)
+			require.Equal(t, prevCompanyID, v0Info.CompanyID)
+
+			// deleting the version that moved the document hands it back to the
+			// company of the version that becomes the latest one
+			leftVersions, err := conn.DeleteDocumentVersion(ctx, docID, moveVersion)
+			require.NoError(t, err)
+			require.NotContains(t, leftVersions, moveVersion)
+
+			gotCompanyID, err = conn.DocumentCompanyID(ctx, docID)
+			require.NoError(t, err)
+			require.Equal(t, prevCompanyID, gotCompanyID, "the document must follow the company of its new latest version")
+
+			docIDs, err = conn.CompanyDocumentIDs(ctx, prevCompanyID)
+			require.NoError(t, err)
+			require.Equal(t, uu.IDSlice{docID}, docIDs)
+
+			docIDs, err = conn.CompanyDocumentIDs(ctx, companyID)
+			require.NoError(t, err)
+			require.Nil(t, docIDs, "the company of the deleted version must not list the document any more")
+		})
+	}
+}
+
+// TestSyncMovedDocument syncs a document that was moved between companies for
+// every combination of localfsdb and storeconn as source and destination.
+//
+// A move is a version that names the new company, so the versions before it
+// keep naming the previous one. A sync that writes the document's current
+// company into every version instead would erase the move from the restored
+// document's history, and the restored metadata would differ from what the
+// source recorded — which a destination that verifies already stored versions
+// against the restore rejects, aborting the sync of the whole company at the
+// first document that was ever moved.
+func TestSyncMovedDocument(t *testing.T) {
+	for src, dst := range backendPairs(false) {
+		t.Run(src.name+" to "+dst.name, func(t *testing.T) {
+			ctx := syncTestContext(t, src, dst)
+			srcConn := src.newConn(t)
+			dstConn := dst.newConn(t)
+
+			prevCompanyID := uu.IDv7()
+			companyID := uu.IDv7()
+			docID := uu.IDv7()
+			userID := uu.IDv7()
+
+			createSyncTestDoc(t, ctx, srcConn, prevCompanyID, docID, userID, "moved-doc")
+			moveDocumentToCompany(t, ctx, srcConn, docID, userID, companyID,
+				docdb.MustVersionTimeFromString("2024-01-01_00-00-00.002"))
+
+			want, err := docdb.ReadHashedDocument(ctx, srcConn, docID)
+			require.NoError(t, err)
+			require.Equal(t, companyID, want.CompanyID)
+			require.Equal(t, prevCompanyID, want.VersionCompanyID(docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")))
+
+			err = docdb.SyncDocument(ctx, srcConn, dstConn, docID, true)
+			require.NoError(t, err)
+
+			// Every version keeps the company it was committed with.
+			assertSyncedDocEqual(t, ctx, dstConn, want)
+
+			// The document belongs to and is listed under the company of
+			// its latest version only.
+			dstCompanyID, err := dstConn.DocumentCompanyID(ctx, docID)
+			require.NoError(t, err)
+			require.Equal(t, companyID, dstCompanyID)
+
+			docIDs, err := dstConn.CompanyDocumentIDs(ctx, companyID)
+			require.NoError(t, err)
+			require.Contains(t, docIDs, docID)
+
+			docIDs, err = dstConn.CompanyDocumentIDs(ctx, prevCompanyID)
+			require.NoError(t, err)
+			require.NotContains(t, docIDs, docID, "the company the document was moved away from must not list it")
+		})
+	}
+}
+
+// TestSyncMovedDocumentIntoDestinationBeforeTheMove syncs a document that was
+// moved after an earlier sync of the same document already copied it under its
+// previous company — the state every incremental sync of an active company runs
+// into.
+//
+// The destination is still owned by the previous company, so a restore that
+// compares the destination's company against the backup's current one would
+// refuse the very move it is there to copy. The comparison is against the
+// company the backup names for the latest version the destination has instead,
+// and the destination follows the move once the newer versions are restored.
+func TestSyncMovedDocumentIntoDestinationBeforeTheMove(t *testing.T) {
+	for src, dst := range backendPairs(true) {
+		t.Run(src.name+" to "+dst.name, func(t *testing.T) {
+			ctx := syncTestContext(t, src, dst)
+			srcConn := src.newConn(t)
+			dstConn := dst.newConn(t)
+
+			prevCompanyID := uu.IDv7()
+			companyID := uu.IDv7()
+			docID := uu.IDv7()
+			userID := uu.IDv7()
+
+			createSyncTestDoc(t, ctx, srcConn, prevCompanyID, docID, userID, "moved-doc")
+
+			// First sync: the destination gets the document as it is before
+			// the move, owned by the previous company.
+			require.NoError(t, docdb.SyncDocument(ctx, srcConn, dstConn, docID, false))
+			dstCompanyID, err := dstConn.DocumentCompanyID(ctx, docID)
+			require.NoError(t, err)
+			require.Equal(t, prevCompanyID, dstCompanyID)
+
+			moveDocumentToCompany(t, ctx, srcConn, docID, userID, companyID,
+				docdb.MustVersionTimeFromString("2024-01-01_00-00-00.002"))
+
+			// Second sync: the move is copied like any other new version.
+			require.NoError(t, docdb.SyncDocument(ctx, srcConn, dstConn, docID, false))
+
+			want, err := docdb.ReadHashedDocument(ctx, srcConn, docID)
+			require.NoError(t, err)
+			assertSyncedDocEqual(t, ctx, dstConn, want)
+
+			dstCompanyID, err = dstConn.DocumentCompanyID(ctx, docID)
+			require.NoError(t, err)
+			require.Equal(t, companyID, dstCompanyID, "the destination must follow the move")
+
+			docIDs, err := dstConn.CompanyDocumentIDs(ctx, prevCompanyID)
+			require.NoError(t, err)
+			require.NotContains(t, docIDs, docID)
+		})
+	}
 }

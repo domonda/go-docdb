@@ -3,6 +3,7 @@ package s3store_test
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -96,7 +97,7 @@ func TestCreateDocumentVersion(t *testing.T) {
 		documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
 		client := s3fixtures.FixtureGlobalS3Client(t)
 		docID := uu.IDv7()
-		version := docdb.NewVersionTime()
+		version := docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
 
 		files := []fs.MemFile{
 			{
@@ -141,7 +142,7 @@ func TestCreateDocumentVersion(t *testing.T) {
 		_, err := documentStore.CreateDocumentVersion(
 			t.Context(),
 			uu.IDv4(),
-			docdb.NewVersionTime(),
+			docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000"),
 			[]fs.FileReader{&fs.MemFile{}},
 		)
 
@@ -485,4 +486,111 @@ func TestDeleteObjectsErr(t *testing.T) {
 		require.Contains(t, err.Error(), "doc/file.pdf/hash")
 		require.Contains(t, err.Error(), "AccessDenied")
 	})
+}
+
+// TestDocumentHashFilesExist covers the per-file presence check a merge-restore
+// uses to decide whether a version was already copied. The store keys objects by
+// filename and content hash, so both must match: a file stored under a different
+// name, or the same name with different content, is not the file being asked
+// about.
+func TestDocumentHashFilesExist(t *testing.T) {
+	documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
+	s3fixtures.FixtureCleanBucket(t)
+	createDocument := s3fixtures.FixtureCreateDocument(t)
+
+	documentID := uu.IDv7()
+	storedData := []byte("stored content")
+	storedHash := docdb.ContentHash(storedData)
+	otherData := []byte("other content")
+	otherHash := docdb.ContentHash(otherData)
+
+	createDocument(documentID, "stored.pdf", storedData)
+
+	// when asked about a mix of present and absent files
+	exist, err := documentStore.DocumentHashFilesExist(t.Context(), documentID, []docdb.FileInfo{
+		{Name: "stored.pdf", Hash: storedHash},
+		{Name: "stored.pdf", Hash: otherHash},   // same name, different content
+		{Name: "renamed.pdf", Hash: storedHash}, // same content, different name
+		{Name: "missing.pdf", Hash: otherHash},
+	})
+
+	// then every passed file is answered under the key it was passed as
+	require.NoError(t, err)
+	require.Equal(t, map[docdb.FileInfo]bool{
+		{Name: "stored.pdf", Hash: storedHash}:  true,
+		{Name: "stored.pdf", Hash: otherHash}:   false,
+		{Name: "renamed.pdf", Hash: storedHash}: false,
+		{Name: "missing.pdf", Hash: otherHash}:  false,
+	}, exist)
+
+	// a document with no objects has none of the files
+	exist, err = documentStore.DocumentHashFilesExist(t.Context(), uu.IDv7(), []docdb.FileInfo{
+		{Name: "stored.pdf", Hash: storedHash},
+	})
+	require.NoError(t, err)
+	require.Equal(t, map[docdb.FileInfo]bool{{Name: "stored.pdf", Hash: storedHash}: false}, exist)
+
+	// no files asked about is not an error and needs no answer
+	exist, err = documentStore.DocumentHashFilesExist(t.Context(), documentID, nil)
+	require.NoError(t, err)
+	require.Empty(t, exist)
+}
+
+// TestDeleteDocumentHashFiles covers the delete that mirrors
+// DocumentHashFilesExist: it matches name and content hash together, so it
+// removes exactly the objects a caller can prove are its own.
+//
+// The case that matters is the same content under two names. A key is
+// "<docID>/<name>/<hash>", so those are two objects; DeleteDocumentHashes
+// matches on the hash component alone and removes both, which is right for
+// deleting a version's content and wrong for undoing one upload.
+func TestDeleteDocumentHashFiles(t *testing.T) {
+	documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
+	s3fixtures.FixtureCleanBucket(t)
+	createDocument := s3fixtures.FixtureCreateDocument(t)
+
+	documentID := uu.IDv7()
+	sharedData := []byte("shared content")
+	sharedHash := docdb.ContentHash(sharedData)
+	otherData := []byte("other content")
+	otherHash := docdb.ContentHash(otherData)
+
+	// kept.pdf and deleted.pdf hold identical content, so they share a hash.
+	createDocument(documentID, "kept.pdf", sharedData)
+	createDocument(documentID, "deleted.pdf", sharedData)
+	createDocument(documentID, "untouched.pdf", otherData)
+
+	// when only one of the two same-content files is deleted by name and hash
+	err := documentStore.DeleteDocumentHashFiles(t.Context(), documentID, []docdb.FileInfo{
+		{Name: "deleted.pdf", Hash: sharedHash},
+		{Name: "absent.pdf", Hash: otherHash}, // matches nothing, ignored
+	})
+	require.NoError(t, err)
+
+	// then the other one survives, unlike under a delete by hash alone
+	exist, err := documentStore.DocumentHashFilesExist(t.Context(), documentID, []docdb.FileInfo{
+		{Name: "kept.pdf", Hash: sharedHash},
+		{Name: "deleted.pdf", Hash: sharedHash},
+		{Name: "untouched.pdf", Hash: otherHash},
+	})
+	require.NoError(t, err)
+	require.Equal(t, map[docdb.FileInfo]bool{
+		{Name: "kept.pdf", Hash: sharedHash}:     true,
+		{Name: "deleted.pdf", Hash: sharedHash}:  false,
+		{Name: "untouched.pdf", Hash: otherHash}: true,
+	}, exist)
+
+	// deleting no files is not an error and removes nothing
+	require.NoError(t, documentStore.DeleteDocumentHashFiles(t.Context(), documentID, nil))
+	exist, err = documentStore.DocumentHashFilesExist(t.Context(), documentID, []docdb.FileInfo{
+		{Name: "kept.pdf", Hash: sharedHash},
+	})
+	require.NoError(t, err)
+	require.Equal(t, map[docdb.FileInfo]bool{{Name: "kept.pdf", Hash: sharedHash}: true}, exist)
+
+	// a document with no objects at all is reported as not found
+	err = documentStore.DeleteDocumentHashFiles(t.Context(), uu.IDv7(), []docdb.FileInfo{
+		{Name: "kept.pdf", Hash: sharedHash},
+	})
+	require.ErrorIs(t, err, os.ErrNotExist)
 }

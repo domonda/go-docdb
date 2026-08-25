@@ -45,7 +45,7 @@ func TestConn(t *testing.T) {
 				"reason",
 				func(ctx context.Context, docID uu.ID, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (*docdb.CreateVersionResult, error) {
 					return &docdb.CreateVersionResult{
-						Version:    docdb.NewVersionTime(),
+						Version:    populator.NextVersion(),
 						WriteFiles: []fs.FileReader{newFile},
 					}, nil
 				},
@@ -88,7 +88,10 @@ func TestConn(t *testing.T) {
 			)
 			populator := pgfixtures.FixturePopulator(t)
 			content := []byte("a")
-			documentVersionFile := populator.DocumentVersionFile(map[string]any{"Hash": docdb.ContentHash(content)})
+			documentVersionFile := populator.DocumentVersionFile(map[string]any{
+				"Hash": docdb.ContentHash(content),
+				"Size": int64(len(content)),
+			})
 			createDocument := s3fixtures.FixtureCreateDocument(t)
 
 			createDocument(
@@ -111,7 +114,7 @@ func TestConn(t *testing.T) {
 				"reason",
 				func(ctx context.Context, docID uu.ID, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (*docdb.CreateVersionResult, error) {
 					return &docdb.CreateVersionResult{
-						Version:    docdb.NewVersionTime(),
+						Version:    populator.NextVersion(),
 						WriteFiles: []fs.FileReader{modifiedFile},
 					}, nil
 				},
@@ -154,7 +157,10 @@ func TestConn(t *testing.T) {
 			)
 			populator := pgfixtures.FixturePopulator(t)
 			content := []byte("a")
-			documentVersionFile := populator.DocumentVersionFile(map[string]any{"Hash": docdb.ContentHash(content)})
+			documentVersionFile := populator.DocumentVersionFile(map[string]any{
+				"Hash": docdb.ContentHash(content),
+				"Size": int64(len(content)),
+			})
 			// A second file in the same version, so removing one still leaves a
 			// file: every version must contain at least one file.
 			populator.DocumentVersionFile(map[string]any{"DocumentVersion": documentVersionFile.DocumentVersion})
@@ -178,7 +184,7 @@ func TestConn(t *testing.T) {
 				"reason",
 				func(ctx context.Context, docID uu.ID, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (*docdb.CreateVersionResult, error) {
 					return &docdb.CreateVersionResult{
-						Version:     docdb.NewVersionTime(),
+						Version:     populator.NextVersion(),
 						RemoveFiles: []string{documentVersionFile.Name},
 					}, nil
 				},
@@ -237,7 +243,7 @@ func TestConn(t *testing.T) {
 				"reason",
 				func(ctx context.Context, docID uu.ID, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (*docdb.CreateVersionResult, error) {
 					return &docdb.CreateVersionResult{
-						Version:      docdb.NewVersionTime(),
+						Version:      populator.NextVersion(),
 						NewCompanyID: uu.NullableID(newCompanyID),
 					}, nil
 				},
@@ -289,7 +295,7 @@ func TestConn(t *testing.T) {
 				"reason",
 				func(ctx context.Context, docID uu.ID, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (*docdb.CreateVersionResult, error) {
 					return &docdb.CreateVersionResult{
-						Version:      docdb.NewVersionTime(),
+						Version:      populator.NextVersion(),
 						WriteFiles:   []fs.FileReader{fs.NewMemFile("doc-a.pdf", []byte("a"))},
 						NewCompanyID: uu.NullableID(newCompanyID),
 					}, nil
@@ -342,7 +348,7 @@ func TestConn(t *testing.T) {
 
 			require.NoError(t, conn.CreateDocument(
 				ctx, companyID, srcDocID, userID, "v0",
-				docdb.NewVersionTime(),
+				docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000"),
 				[]fs.FileReader{fs.NewMemFile("a.txt", []byte("a"))},
 				func(context.Context, *docdb.VersionInfo) error { return nil },
 			))
@@ -350,7 +356,7 @@ func TestConn(t *testing.T) {
 				ctx, srcDocID, userID, "v1",
 				func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
 					return &docdb.CreateVersionResult{
-						Version:    docdb.NewVersionTime(),
+						Version:    docdb.MustVersionTimeFromString("2024-01-01_00-00-02.000"),
 						WriteFiles: []fs.FileReader{fs.NewMemFile("b.txt", []byte("b"))},
 					}, nil
 				},
@@ -395,7 +401,7 @@ func TestConn(t *testing.T) {
 
 			require.NoError(t, conn.CreateDocument(
 				ctx, companyID, docID, userID, "v0",
-				docdb.NewVersionTime(),
+				docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000"),
 				[]fs.FileReader{fs.NewMemFile("a.txt", []byte("a"))},
 				func(context.Context, *docdb.VersionInfo) error { return nil },
 			))
@@ -403,7 +409,7 @@ func TestConn(t *testing.T) {
 				ctx, docID, userID, "v1",
 				func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
 					return &docdb.CreateVersionResult{
-						Version:    docdb.NewVersionTime(),
+						Version:    docdb.MustVersionTimeFromString("2024-01-01_00-00-02.000"),
 						WriteFiles: []fs.FileReader{fs.NewMemFile("b.txt", []byte("b"))},
 					}, nil
 				},
@@ -413,7 +419,7 @@ func TestConn(t *testing.T) {
 				ctx, docID, userID, "v2",
 				func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
 					return &docdb.CreateVersionResult{
-						Version:     docdb.NewVersionTime(),
+						Version:     docdb.MustVersionTimeFromString("2024-01-01_00-00-03.000"),
 						RemoveFiles: []string{"a.txt"},
 					}, nil
 				},
@@ -461,7 +467,7 @@ func TestConn(t *testing.T) {
 
 			require.NoError(t, conn.CreateDocument(
 				ctx, companyID, docID, userID, "v0",
-				docdb.NewVersionTime(),
+				docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000"),
 				[]fs.FileReader{fs.NewMemFile("a.txt", []byte("a"))},
 				func(context.Context, *docdb.VersionInfo) error { return nil },
 			))
@@ -469,7 +475,7 @@ func TestConn(t *testing.T) {
 				ctx, docID, userID, "v1",
 				func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
 					return &docdb.CreateVersionResult{
-						Version:    docdb.NewVersionTime(),
+						Version:    docdb.MustVersionTimeFromString("2024-01-01_00-00-02.000"),
 						WriteFiles: []fs.FileReader{fs.NewMemFile("b.txt", []byte("b"))},
 					}, nil
 				},
@@ -479,7 +485,7 @@ func TestConn(t *testing.T) {
 				ctx, docID, userID, "v2",
 				func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
 					return &docdb.CreateVersionResult{
-						Version:    docdb.NewVersionTime(),
+						Version:    docdb.MustVersionTimeFromString("2024-01-01_00-00-03.000"),
 						WriteFiles: []fs.FileReader{fs.NewMemFile("c.txt", []byte("c"))},
 					}, nil
 				},
@@ -517,4 +523,137 @@ func TestConn(t *testing.T) {
 			require.Nil(t, earliestInfo.PrevVersion, "restored earliest version must have NULL prev_version")
 		})
 	})
+}
+
+// TestAddDocumentVersion_FileDeltasAgreeAcrossImplementations pins that every
+// Conn derives a version's change lists the same way. The lists are not just
+// reported to the caller, they are persisted and then compared across
+// implementations: copying a document into a store that already holds its
+// metadata verifies the VersionInfo a restore would insert against the stored
+// one, so a divergence here fails no test at build time but a migration
+// halfway through a company's documents.
+//
+// The scenario is the one the derivations used to disagree on. storeconn
+// classified the files a CreateVersionFunc wrote by name and passed its
+// RemoveFiles through verbatim, while localfsdb diffed the resulting file set
+// against the previous one by content hash — so a rewrite with byte-identical
+// content and a removal of a file that was never there were recorded as a
+// modification and a removal by one implementation and by neither the other.
+// TestDeleteDocumentVersion_ChainsAgreeAcrossImplementations holds both
+// implementations to the same chain after a delete, which is what a restore of
+// the deleted version has to be able to undo on either of them.
+//
+// Deleting a middle version hands its successor to the version before it, so no
+// version names a predecessor the document no longer has. Deleting a genesis
+// version does not: it has no predecessor to hand the successor to, and leaving
+// the successor naming the removed version is what lets a merge-restore take
+// that version back as the genesis it was, instead of finding a second version
+// without a predecessor.
+func TestDeleteDocumentVersion_ChainsAgreeAcrossImplementations(t *testing.T) {
+	backends := syncBackends()
+	ctx := syncTestContext(t, backends...)
+
+	var (
+		userID    = uu.IDv7()
+		noopOnNew = func(context.Context, *docdb.VersionInfo) error { return nil }
+		v0        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+		v1        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.001")
+		v2        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.002")
+	)
+
+	for _, backend := range backends {
+		conn := backend.newConn(t)
+		docID := uu.IDv7()
+
+		require.NoError(t, conn.CreateDocument(
+			ctx, uu.IDv7(), docID, userID, "v0", v0,
+			[]fs.FileReader{fs.NewMemFile("a.txt", []byte("a"))},
+			noopOnNew,
+		))
+		for _, v := range []struct {
+			version  docdb.VersionTime
+			filename string
+		}{{v1, "b.txt"}, {v2, "c.txt"}} {
+			require.NoError(t, conn.AddDocumentVersion(
+				ctx, docID, userID, v.filename,
+				func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+					return &docdb.CreateVersionResult{
+						Version:    v.version,
+						WriteFiles: []fs.FileReader{fs.NewMemFile(v.filename, []byte(v.filename))},
+					}, nil
+				},
+				noopOnNew,
+			))
+		}
+
+		prevVersionOf := func(version docdb.VersionTime) *docdb.VersionTime {
+			t.Helper()
+			info, err := conn.DocumentVersionInfo(ctx, docID, version)
+			require.NoError(t, err, backend.name)
+			return info.PrevVersion
+		}
+
+		_, err := conn.DeleteDocumentVersion(ctx, docID, v1)
+		require.NoError(t, err, backend.name)
+		require.Equal(t, &v0, prevVersionOf(v2),
+			"%s: the successor of a deleted middle version takes over its predecessor", backend.name)
+
+		_, err = conn.DeleteDocumentVersion(ctx, docID, v0)
+		require.NoError(t, err, backend.name)
+		require.Equal(t, &v0, prevVersionOf(v2),
+			"%s: the successor of a deleted genesis version keeps naming it", backend.name)
+	}
+}
+
+func TestAddDocumentVersion_FileDeltasAgreeAcrossImplementations(t *testing.T) {
+	backends := syncBackends()
+	ctx := syncTestContext(t, backends...)
+
+	var (
+		userID        = uu.IDv7()
+		sameContent   = []byte("byte-identical across both versions")
+		noopOnNew     = func(context.Context, *docdb.VersionInfo) error { return nil }
+		firstVersion  = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+		secondVersion = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.001")
+	)
+
+	for _, backend := range backends {
+		conn := backend.newConn(t)
+		docID := uu.IDv7()
+
+		err := conn.CreateDocument(
+			ctx, uu.IDv7(), docID, userID, "initial version", firstVersion,
+			[]fs.FileReader{fs.NewMemFile("unchanged.txt", sameContent)},
+			noopOnNew,
+		)
+		require.NoError(t, err)
+
+		var info *docdb.VersionInfo
+		err = conn.AddDocumentVersion(
+			ctx, docID, userID, "rewrite unchanged.txt with the same content",
+			func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+				return &docdb.CreateVersionResult{
+					Version: secondVersion,
+					WriteFiles: []fs.FileReader{
+						fs.NewMemFile("unchanged.txt", sameContent),
+						fs.NewMemFile("added.txt", []byte("added content")),
+					},
+					RemoveFiles: []string{"never-there.txt"},
+				}, nil
+			},
+			docdb.CaptureNewVersionInfo(&info),
+		)
+		require.NoError(t, err)
+
+		// Every backend is held to the same literal lists, which is what makes
+		// them identical to each other — the cross-implementation comparison a
+		// restore actually requires. Nil rather than merely empty, because
+		// VersionInfo.SetFileDeltas leaves a list without entries nil and every
+		// implementation derives its change lists there.
+		require.Equal(t, []string{"added.txt"}, info.AddedFiles, backend.name)
+		require.Nil(t, info.ModifiedFiles,
+			"%s: rewriting a file with byte-identical content does not change it", backend.name)
+		require.Nil(t, info.RemovedFiles,
+			"%s: removing a file the previous version never had removes nothing", backend.name)
+	}
 }
