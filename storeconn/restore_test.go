@@ -1,6 +1,7 @@
 package storeconn_test
 
 import (
+	"errors"
 	"os"
 	"testing"
 
@@ -380,12 +381,17 @@ func TestConn_RestoreDocument_RollsBackFileContentOfPreExistingVersions(t *testi
 
 	require.Zero(t, meta.deleteDocumentCalls, "the pre-existing metadata is not this call's to delete")
 	require.False(t, docs.has(doc, v1), "v1's content was uploaded by this call and must be rolled back")
-	// Both hashes: v1's because it was uploaded, and v2's because the upload
+	// Both files: v1's because it was uploaded, and v2's because the upload
 	// that failed may still have stored some of its objects before it did.
+	// Deleted by name and hash together, never by hash alone.
 	require.ElementsMatch(t,
-		[]string{doc.Versions[v1].FileHashes["a.txt"], doc.Versions[v2].FileHashes["b.txt"]},
-		docs.deletedHashes,
+		[]docdb.FileInfo{
+			{Name: "a.txt", Hash: doc.Versions[v1].FileHashes["a.txt"]},
+			{Name: "b.txt", Hash: doc.Versions[v2].FileHashes["b.txt"]},
+		},
+		docs.deletedFiles,
 	)
+	require.Empty(t, docs.deletedHashes, "the rollback must not delete by hash alone")
 }
 
 // TestConn_RestoreDocument_RollbackKeepsPreExistingFileContent is the
@@ -407,4 +413,142 @@ func TestConn_RestoreDocument_RollbackKeepsPreExistingFileContent(t *testing.T) 
 
 	require.NotContains(t, docs.deletedHashes, hashA, "a.txt was already stored before this call")
 	require.True(t, docs.has(doc, v1), "v1 was complete before the call and must stay complete")
+}
+
+// newSharedContentDoc returns a three-version backup in which two filenames
+// hold byte-identical content, so they share a content hash and therefore the
+// hash a rollback would delete by. v1 holds a.txt, v2 adds b.txt with the same
+// content as a.txt, v3 adds c.txt.
+//
+// A carried-forward file plus a rename produces exactly this shape, so it is
+// not an exotic document.
+func newSharedContentDoc(companyID, docID uu.ID) (doc *docdb.HashedDocument, v1, v2, v3 docdb.VersionTime) {
+	v1 = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+	v2 = docdb.MustVersionTimeFromString("2024-01-02_00-00-00.000")
+	v3 = docdb.MustVersionTimeFromString("2024-01-03_00-00-00.000")
+
+	shared := []byte("shared content")
+	other := []byte("content of c")
+	sharedHash := docdb.ContentHash(shared)
+	otherHash := docdb.ContentHash(other)
+
+	doc = &docdb.HashedDocument{
+		ID:          docID,
+		CompanyID:   companyID,
+		HashedFiles: map[string][]byte{sharedHash: shared, otherHash: other},
+		Versions: map[docdb.VersionTime]*docdb.HashedVersion{
+			v1: {CommitUserID: uu.IDv4(), CommitReason: "initial", FileHashes: map[string]string{
+				"a.txt": sharedHash,
+			}},
+			v2: {CommitUserID: uu.IDv4(), CommitReason: "add b", FileHashes: map[string]string{
+				"a.txt": sharedHash,
+				"b.txt": sharedHash,
+			}},
+			v3: {CommitUserID: uu.IDv4(), CommitReason: "add c", FileHashes: map[string]string{
+				"a.txt": sharedHash,
+				"b.txt": sharedHash,
+				"c.txt": otherHash,
+			}},
+		},
+	}
+	return doc, v1, v2, v3
+}
+
+// TestConn_RestoreDocument_RollbackKeepsSameContentUnderAnotherName verifies
+// that the rollback deletes the objects this call wrote and not every object
+// sharing their content hash.
+//
+// A hash does not identify one object: a DocumentStore keys a file by name AND
+// hash, so a document holding the same bytes under two names holds two objects.
+// Rolling back by hash alone deleted both — including the one that was there
+// before the restore started, silently corrupting a version the restore was
+// never touching. That is the failure path of a migration, which is the one
+// path that only runs when something already went wrong.
+func TestConn_RestoreDocument_RollbackKeepsSameContentUnderAnotherName(t *testing.T) {
+	doc, v1, _, v3 := newSharedContentDoc(uu.IDv4(), uu.IDv4())
+	sharedHash := doc.Versions[v1].FileHashes["a.txt"]
+	preExisting := docdb.FileInfo{Name: "a.txt", Hash: sharedHash}
+
+	// a.txt is already stored; b.txt holds the same content under another name
+	// and is not, so the restore writes it and records its hash.
+	docs := newFakeDocumentStore(preExisting)
+	docs.failWriteOf = &v3 // the last version's upload dies
+	meta := newRestoreMetadataStore(t, doc, v1)
+	conn := storeconn.New(docs, meta)
+
+	require.Error(t, conn.RestoreDocument(t.Context(), doc, false))
+
+	require.Contains(t, docs.stored, preExisting,
+		"the object that was there before the restore must survive its rollback")
+	require.NotContains(t, docs.deletedFiles, preExisting,
+		"the rollback must not ask to delete a file it did not write")
+	require.Contains(t, docs.deletedFiles, docdb.FileInfo{Name: "b.txt", Hash: sharedHash},
+		"the file this call did write must be rolled back")
+}
+
+// TestConn_RestoreDocument_RollbackKeepsContentItDidNotWrite verifies that
+// rolling back a version this call created does not delete file content that
+// was already stored for it.
+//
+// Such a version exists whenever the DocumentStore holds a version's files but
+// the MetadataStore does not know the version: nothing is uploaded for it, only
+// its metadata row is created. Rolling that row back through the composite
+// DeleteDocumentVersion also deleted the content hashes the row alone
+// referenced — content this call never wrote, and which the restore found in
+// place. The rollback therefore removes metadata through the MetadataStore and
+// deletes only what it uploaded.
+func TestConn_RestoreDocument_RollbackKeepsContentItDidNotWrite(t *testing.T) {
+	doc, v1, v2 := newRestoreTestDoc(uu.IDv4(), uu.IDv4())
+	a := docdb.FileInfo{Name: "a.txt", Hash: doc.Versions[v1].FileHashes["a.txt"]}
+	b := docdb.FileInfo{Name: "b.txt", Hash: doc.Versions[v2].FileHashes["b.txt"]}
+
+	// Every file is already stored, so the restore uploads nothing and only
+	// creates the metadata the store is missing.
+	docs := newFakeDocumentStore(a, b)
+	meta := newRestoreMetadataStore(t, doc) // knows no version of the document
+	meta.failCreateOf = &v2                 // v1's metadata lands, v2's does not
+	// What the real MetadataStore reports as safe to delete with v1 once v2 is
+	// gone. Following it would delete content this call never wrote.
+	meta.safeHashesToDelete = []string{a.Hash}
+	conn := storeconn.New(docs, meta)
+
+	require.Error(t, conn.RestoreDocument(t.Context(), doc, false))
+
+	require.Equal(t, []docdb.VersionTime{v1}, meta.deletedVersions,
+		"the metadata row this call created must be rolled back")
+	require.Empty(t, meta.stored, "no version metadata may survive the rollback")
+	require.Contains(t, docs.stored, a, "content the restore found in place must survive")
+	require.Contains(t, docs.stored, b)
+	require.Empty(t, docs.deletedFiles, "the rollback wrote nothing, so it may delete nothing")
+}
+
+// TestConn_RestoreDocument_RollbackKeepsBlobsWhenMetadataRollbackFails verifies
+// that file content is left in place when the metadata rollback did not
+// succeed.
+//
+// A version whose metadata delete failed — the MetadataStore went away
+// mid-cleanup — is still committed and still names its files. Deleting those
+// files anyway leaves a version pointing at content that is gone, which no
+// reader can tell apart from corruption. Orphaned objects are the lesser
+// failure: they cost storage, the presence check of the next restore finds
+// them, and a content-addressed write of the same bytes overwrites them.
+func TestConn_RestoreDocument_RollbackKeepsBlobsWhenMetadataRollbackFails(t *testing.T) {
+	doc, v1, v2 := newRestoreTestDoc(uu.IDv4(), uu.IDv4())
+
+	docs := newFakeDocumentStore() // no file content yet
+	docs.failWriteOf = &v2         // v1 is written, then v2's upload dies
+	// v1 is already in the MetadataStore, so the document is not this call's to
+	// drop whole and the rollback goes through the per-version delete below.
+	meta := newRestoreMetadataStore(t, doc, v1)
+	meta.deleteVersionErr = errors.New("metadata store unreachable")
+	conn := storeconn.New(docs, meta)
+
+	err := conn.RestoreDocument(t.Context(), doc, false)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "metadata store unreachable",
+		"the failed metadata rollback must surface, not be swallowed")
+
+	require.Empty(t, docs.deletedFiles,
+		"content must be kept while a version that still names it is committed")
+	require.True(t, docs.has(doc, v1), "v1's uploaded content must still be there")
 }

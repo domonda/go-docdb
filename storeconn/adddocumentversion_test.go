@@ -132,3 +132,74 @@ func TestConn_AddDocumentVersion_CompanyChangeIsAChange(t *testing.T) {
 	require.NotNil(t, committed)
 	require.Equal(t, newCompanyID, committed.CompanyID)
 }
+
+// twoFacedFile returns different content on its second read, which is what a
+// file rewritten between two reads looks like — and what any FileReader that
+// does not guarantee a stable read looks like at any time.
+type twoFacedFile struct {
+	fs.MemFile
+	secondRead []byte
+	reads      *int
+}
+
+func (f twoFacedFile) ReadAll() ([]byte, error) {
+	*f.reads++
+	if *f.reads > 1 {
+		return f.secondRead, nil
+	}
+	return f.FileData, nil
+}
+
+// TestConn_AddDocumentVersion_UploadsTheBytesItHashed verifies that the content
+// handed to the DocumentStore is the content the version's hash was computed
+// from.
+//
+// AddDocumentVersion reads each written file to derive its size and hash, and
+// used to hand the same readers on to the DocumentStore, which read them a
+// second time to upload. A FileReader is not required to return the same bytes
+// twice, and when it does not, the version records the hash of one read while
+// the store holds the other. Files are addressed by content hash, so that
+// object can never be found again under the recorded hash: every later read of
+// the document through ReadHashedDocument fails, silently, until a backup or
+// migration trips over it.
+func TestConn_AddDocumentVersion_UploadsTheBytesItHashed(t *testing.T) {
+	docID := uu.IDv4()
+	companyID := uu.IDv4()
+	content := []byte("a content")
+
+	meta := newFakeMetadataStore(&docdb.VersionInfo{
+		DocID:     docID,
+		CompanyID: companyID,
+		Version:   docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000"),
+		Files: map[string]docdb.FileInfo{
+			"a.txt": {Name: "a.txt", Size: int64(len(content)), Hash: docdb.ContentHash(content)},
+		},
+	})
+	docs := newFakeDocumentStore()
+	docs.prevFiles = []fs.FileReader{fs.NewMemFile("a.txt", content)}
+	conn := storeconn.New(docs, meta)
+
+	var (
+		hashed  = []byte("the bytes the metadata describes")
+		rewrite = []byte("what a second read would have returned")
+		reads   int
+	)
+
+	var committed *docdb.VersionInfo
+	err := conn.AddDocumentVersion(context.Background(), docID, uu.IDv4(), "add b",
+		docdb.CreateVersionWriteFiles(twoFacedFile{
+			MemFile:    fs.MemFile{FileName: "b.txt", FileData: hashed},
+			secondRead: rewrite,
+			reads:      &reads,
+		}),
+		docdb.CaptureNewVersionInfo(&committed),
+	)
+	require.NoError(t, err)
+
+	recorded := committed.Files["b.txt"]
+	require.Equal(t, docdb.ContentHash(hashed), recorded.Hash)
+	require.Contains(t, docs.stored, docdb.FileInfo{Name: "b.txt", Hash: recorded.Hash},
+		"the stored object must be the content the recorded hash names")
+	require.NotContains(t, docs.stored, docdb.FileInfo{Name: "b.txt", Hash: docdb.ContentHash(rewrite)},
+		"a second read of the file must not reach the store")
+}

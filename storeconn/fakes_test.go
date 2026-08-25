@@ -64,6 +64,9 @@ type fakeDocumentStore struct {
 
 	deleteDocumentCalls int
 	deletedHashes       []string
+	// deletedFiles records what DeleteDocumentHashFiles removed, by name and
+	// hash, so a test can assert a rollback deleted exactly its own uploads.
+	deletedFiles []docdb.FileInfo
 }
 
 // newFakeDocumentStore returns a store already holding the passed files, which
@@ -116,6 +119,28 @@ func (d *fakeDocumentStore) DeleteDocumentHashes(ctx context.Context, _ uu.ID, h
 		if slices.Contains(hashes, file.Hash) {
 			delete(d.stored, file)
 		}
+	}
+	return nil
+}
+
+// DeleteDocumentHashFiles deletes exactly the passed (name, hash) pairs, the
+// way an object store keyed by "<docID>/<name>/<hash>" does — unlike
+// DeleteDocumentHashes above, which matches on the hash alone and therefore
+// also removes the same content stored under a different name.
+func (d *fakeDocumentStore) DeleteDocumentHashFiles(ctx context.Context, docID uu.ID, files []docdb.FileInfo) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if len(d.stored) == 0 {
+		return docdb.NewErrDocumentNotFound(docID)
+	}
+	for _, file := range files {
+		// Recorded as requested, not as found: a test asserts which files the
+		// rollback asked to delete, and an upload that failed partway may have
+		// stored none of them. Only the ones actually held are removed.
+		key := docdb.FileInfo{Name: file.Name, Hash: file.Hash}
+		d.deletedFiles = append(d.deletedFiles, key)
+		delete(d.stored, key)
 	}
 	return nil
 }
@@ -181,6 +206,12 @@ type fakeMetadataStore struct {
 	// createVersionErr, when set, is returned by CreateDocumentVersion to
 	// simulate a metadata insert failure after the blobs were written.
 	createVersionErr error
+	// failCreateOf, when set, fails CreateDocumentVersion for that version
+	// only, so a restore can get some versions in before it dies.
+	failCreateOf *docdb.VersionTime
+	// deleteVersionErr, when set, fails DeleteDocumentVersion, modelling a
+	// MetadataStore that goes away during a rollback.
+	deleteVersionErr error
 	// panicOnCreateVersion makes CreateDocumentVersion panic instead of
 	// inserting, modelling a store client that panics rather than returning an
 	// error.
@@ -264,6 +295,9 @@ func (m *fakeMetadataStore) DeleteDocumentVersion(ctx context.Context, _ uu.ID, 
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
+	if m.deleteVersionErr != nil {
+		return nil, nil, m.deleteVersionErr
+	}
 	m.deletedVersions = append(m.deletedVersions, version)
 	delete(m.stored, version)
 	return slices.SortedFunc(maps.Keys(m.stored), docdb.VersionTime.Compare), m.safeHashesToDelete, nil
@@ -275,6 +309,9 @@ func (m *fakeMetadataStore) CreateDocumentVersion(_ context.Context, in storecon
 	}
 	if m.createVersionErr != nil {
 		return nil, m.createVersionErr
+	}
+	if m.failCreateOf != nil && m.failCreateOf.Equal(in.NewVersion) {
+		return nil, errors.New("metadata insert failed")
 	}
 	if stored, ok := m.stored[in.NewVersion]; ok {
 		if m.versionsExist {

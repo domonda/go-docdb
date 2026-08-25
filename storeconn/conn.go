@@ -325,12 +325,23 @@ func (c *conn) AddDocumentVersion(
 	for _, name := range result.RemoveFiles {
 		delete(resultingFiles, name)
 	}
+	// The bytes read here are also what gets uploaded below, rather than
+	// handing the DocumentStore the same readers to read a second time. A
+	// FileReader is not guaranteed to return the same content twice — an fs.File
+	// whose backing file is rewritten between the two reads is enough — and the
+	// version would then record the hash of what was read here while the store
+	// holds what was read there. Files are addressed by content hash, so that
+	// object can never be found again under the recorded hash, and the document
+	// fails every later ReadHashedDocument: silent, and only discovered at the
+	// next backup or migration.
+	writeFiles := make([]fs.FileReader, 0, len(result.WriteFiles))
 	var data []byte
 	for _, file := range result.WriteFiles {
 		data, err = file.ReadAll()
 		if err != nil {
 			return err
 		}
+		writeFiles = append(writeFiles, fs.NewMemFile(file.Name(), data))
 		// Size and Hash both describe the bytes that were just read, rather
 		// than taking the size from a separate file.Size() stat: the two are
 		// not guaranteed to see the same content — an fs.File whose content
@@ -432,7 +443,7 @@ func (c *conn) AddDocumentVersion(
 
 	// The added/modified FileInfos were already computed above to build the
 	// metadata version, so the hashes returned here are not needed again.
-	_, err = c.documentStore.CreateDocumentVersion(ctx, docID, result.Version, result.WriteFiles)
+	_, err = c.documentStore.CreateDocumentVersion(ctx, docID, result.Version, writeFiles)
 	if err != nil {
 		return err
 	}
@@ -570,26 +581,30 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 	var (
 		createdVersions []docdb.VersionTime
 		createdDoc      bool
-		// writtenHashes are the content hashes this call uploads to the
-		// DocumentStore, recorded before each write so a write that fails
-		// partway is cleaned up too.
+		// writtenFiles are the files this call uploads to the DocumentStore, by
+		// name and content hash, recorded before each write so a write that
+		// fails partway is cleaned up too.
 		//
 		// Deleting the versions is not enough to undo the file writes. A
 		// version whose metadata was already stored is not this call's to
 		// remove and never enters createdVersions — which is the whole of a
 		// restore into a MetadataStore in versions-exist mode — so without this
 		// every object uploaded before the failure stayed behind orphaned.
-		// Deleting the versions that are this call's does remove the hashes
-		// only they reference, but leaves any hash it shares with a version
-		// that survives.
 		//
-		// Deleting them all is safe because every one of them was written for a
-		// file the DocumentStore was asked about and reported absent (see
-		// versionsFullyStored), or for a document it held nothing for at all: a
-		// surviving version referencing such a hash was already missing that
-		// file before this call, so removing it restores exactly the state the
-		// call found.
-		writtenHashes []string
+		// Recorded by name and hash rather than by hash alone, because a hash
+		// does not identify one object: a document can hold the same content
+		// under two filenames, and a hash-only delete would remove the object
+		// this call never wrote, corrupting a version the restore was not
+		// touching. Size is deliberately left zero — only Name and Hash address
+		// a file in a DocumentStore, the same convention versionsFullyStored
+		// uses for its keys.
+		//
+		// Deleting exactly these is safe because every one of them was written
+		// for a file the DocumentStore was asked about and reported absent
+		// under that name (see versionsFullyStored), or for a document it held
+		// nothing for at all: removing it restores exactly the state the call
+		// found.
+		writtenFiles []docdb.FileInfo
 	)
 	defer func() {
 		if err == nil {
@@ -601,17 +616,37 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 			err = errors.Join(err, c.DeleteDocument(cleanupCtx, doc.ID))
 			return
 		}
+		// Only the metadata rows are removed here, through the MetadataStore
+		// rather than through the composite DeleteDocumentVersion. That one
+		// also deletes the content hashes the removed version alone referenced,
+		// and a version this call created can reference content it did not
+		// write: files the DocumentStore already held, which is exactly why
+		// nothing was uploaded for it. The content this call is answerable for
+		// is writtenFiles, and nothing else may be deleted.
+		metadataRolledBack := true
 		for i := len(createdVersions) - 1; i >= 0; i-- {
-			_, delErr := c.DeleteDocumentVersion(cleanupCtx, doc.ID, createdVersions[i])
+			_, _, delErr := c.metadataStore.DeleteDocumentVersion(cleanupCtx, doc.ID, createdVersions[i])
 			if delErr != nil {
+				metadataRolledBack = false
 				err = errors.Join(err, delErr)
 			}
 		}
-		if len(writtenHashes) > 0 {
-			// Hashes already removed with their version are silently ignored by
-			// DeleteDocumentHashes, and a not-found document means the deletes
-			// above removed the last of it.
-			delErr := c.documentStore.DeleteDocumentHashes(cleanupCtx, doc.ID, writtenHashes)
+		if !metadataRolledBack {
+			// A version whose metadata delete failed — the MetadataStore went
+			// away mid-cleanup, say — is still committed and still names its
+			// files. Deleting those files now would leave a version pointing at
+			// content that is gone, which no reader can tell apart from
+			// corruption and no later restore detects as missing metadata.
+			// Orphaned objects are the lesser failure: they cost storage, they
+			// are found by the presence check of the next restore, and they are
+			// overwritten by content-addressed writes of the same bytes.
+			return
+		}
+		if len(writtenFiles) > 0 {
+			// Files already removed with their version are silently ignored by
+			// DeleteDocumentHashFiles, and a not-found document means the
+			// deletes above removed the last of it.
+			delErr := c.documentStore.DeleteDocumentHashFiles(cleanupCtx, doc.ID, writtenFiles)
 			if delErr != nil && !errors.Is(delErr, os.ErrNotExist) {
 				err = errors.Join(err, delErr)
 			}
@@ -642,7 +677,7 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 			// document's current one: a document moved between companies keeps
 			// the company of every version it was committed under, and the
 			// versions restored after this one carry the move forward.
-			writtenHashes = appendFileHashes(writtenHashes, files, hv)
+			writtenFiles = appendWrittenFiles(writtenFiles, files, hv)
 			err = c.CreateDocument(ctx, doc.VersionCompanyID(v), doc.ID, hv.CommitUserID, hv.CommitReason, v, files, noopOnNew)
 			if err != nil {
 				return err
@@ -751,7 +786,7 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		// version whose files all turned out to be present, which happens when
 		// the MetadataStore did not know it.
 		if len(files) > 0 {
-			writtenHashes = appendFileHashes(writtenHashes, files, hv)
+			writtenFiles = appendWrittenFiles(writtenFiles, files, hv)
 			_, err = c.documentStore.CreateDocumentVersion(ctx, doc.ID, v, files)
 			if err != nil {
 				return err
@@ -935,8 +970,10 @@ func hashedVersionFilesMissingFrom(doc *docdb.HashedDocument, hv *docdb.HashedVe
 	return files
 }
 
-// appendFileHashes appends the content hash of every passed file to hashes,
-// looked up by filename in hv.
+// appendWrittenFiles records the files of hv that are about to be uploaded, by
+// name and content hash, so a rollback can delete exactly those objects and no
+// others. Size is left zero: only Name and Hash address a file in a
+// DocumentStore.
 //
 // The files are the fs.FileReaders a restore is about to write, which carry
 // their name but not the hash the DocumentStore addresses them by; hv is the
@@ -944,13 +981,13 @@ func hashedVersionFilesMissingFrom(doc *docdb.HashedDocument, hv *docdb.HashedVe
 // A file hv does not name contributes nothing rather than an empty hash: it
 // cannot happen for a file this package materialized, and a bogus entry in the
 // rollback's delete list is worse than a missing one.
-func appendFileHashes(hashes []string, files []fs.FileReader, hv *docdb.HashedVersion) []string {
+func appendWrittenFiles(written []docdb.FileInfo, files []fs.FileReader, hv *docdb.HashedVersion) []docdb.FileInfo {
 	for _, file := range files {
 		if hash, ok := hv.FileHashes[file.Name()]; ok {
-			hashes = append(hashes, hash)
+			written = append(written, docdb.FileInfo{Name: file.Name(), Hash: hash})
 		}
 	}
-	return hashes
+	return written
 }
 
 // markVersionFilesStored records every file of hv as held by the DocumentStore,
