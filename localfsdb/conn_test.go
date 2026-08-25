@@ -1733,3 +1733,65 @@ func TestSyncDocumentMovedBackToPreviousCompany(t *testing.T) {
 	require.Equal(t, []docdb.VersionTime{v0, v1}, versions,
 		"both versions must survive the copy, collapsed or not")
 }
+
+// TestDeleteDocumentVersionWithUnreadableInfoFile asserts that a version whose
+// info JSON cannot be read is still deleted.
+//
+// A crash between writing a version's directory and writing its info file
+// leaves exactly this state, and DeleteDocumentVersion is what cleans it up.
+// Refusing the delete because the file cannot be parsed made those versions the
+// ones that could not be removed: the only way out was deleting the file by
+// hand, and until then every read of the document reported it. The successor is
+// left naming the deleted version, because the predecessor to hand it to was
+// only recorded in the file that is unreadable — the same state a deleted
+// genesis version leaves behind, and one a merge-restore undoes.
+func TestDeleteDocumentVersionWithUnreadableInfoFile(t *testing.T) {
+	var (
+		ctx       = t.Context()
+		companyID = uu.IDFrom("3a4f1c2e-7b8d-4e9a-b1c2-d3e4f5a6b7c8")
+		docID     = uu.IDFrom("11111111-2222-4333-8444-555555555555")
+		userID    = uu.IDFrom("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
+		v0        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+		v1        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.001")
+		v2        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.002")
+	)
+
+	conn, documentsDir, _ := newTestConnDirs(t)
+	require.NoError(t, conn.CreateDocument(
+		ctx, companyID, docID, userID, "v0", v0,
+		newTestMemFiles("f0.txt"), noopOnNew,
+	))
+	for _, version := range []docdb.VersionTime{v1, v2} {
+		filename := "f" + version.String() + ".txt"
+		require.NoError(t, conn.AddDocumentVersion(
+			ctx, docID, userID, "add "+filename,
+			func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+				return &docdb.CreateVersionResult{Version: version, WriteFiles: newTestMemFiles(filename)}, nil
+			},
+			noopOnNew,
+		))
+	}
+
+	// Truncated the way an interrupted write leaves it: the file is there, so
+	// the version is not simply treated as info-less, but it does not parse.
+	docDir := uuiddir.Join(documentsDir, docID)
+	infoFile := docDir.Joinf("%s.json", v1)
+	require.True(t, infoFile.Exists(), "the version info file must exist for this test to mean anything")
+	require.NoError(t, infoFile.WriteAll([]byte(`{"DocID":"`)))
+
+	left, err := conn.DeleteDocumentVersion(ctx, docID, v1)
+	require.NoError(t, err, "a version with an unreadable info file must still be deletable")
+	require.Equal(t, []docdb.VersionTime{v0, v2}, left)
+	require.False(t, infoFile.Exists(), "the unreadable info file must be removed with its version")
+
+	_, err = conn.DocumentVersionInfo(ctx, docID, v1)
+	require.Error(t, err, "the deleted version must be gone")
+
+	// The predecessor was lost with the file, so v2 keeps naming v1 rather than
+	// being chained onto v0 — stated here so the limitation is pinned rather
+	// than discovered.
+	v2Info, err := conn.DocumentVersionInfo(ctx, docID, v2)
+	require.NoError(t, err)
+	require.Equal(t, &v1, v2Info.PrevVersion,
+		"without a readable info file there is no predecessor to relink the successor onto")
+}

@@ -722,3 +722,49 @@ func TestConn_RestoreDocument_GenesisAddedFilesAreSorted(t *testing.T) {
 	require.Equal(t, slices.Sorted(slices.Values(names)), addedNames,
 		"a restored genesis version must persist its AddedFiles sorted by filename, not in map iteration order")
 }
+
+// TestConn_RestoreDocument_KeepsBlobsOfAConcurrentGenesisWinner verifies that a
+// restore which loses the race for a document's genesis version leaves the
+// winner's file content alone.
+//
+// CreateDocument refuses to delete blobs when its metadata insert comes back
+// ErrDocumentAlreadyExists: the objects are content-addressed, so the ones this
+// call uploaded are byte-identical to the winner's and deleting them would
+// strip the content from a document whose metadata is already committed. That
+// guarantee is worth nothing if RestoreDocument's own rollback deletes the same
+// objects a moment later, which is what recording them as this call's writes
+// before the create has succeeded amounts to.
+func TestConn_RestoreDocument_KeepsBlobsOfAConcurrentGenesisWinner(t *testing.T) {
+	companyID := uu.IDv4()
+	docID := uu.IDv4()
+	v1 := docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+	data := []byte("content of a")
+	hash := docdb.ContentHash(data)
+
+	doc := &docdb.HashedDocument{
+		ID:          docID,
+		CompanyID:   companyID,
+		HashedFiles: map[string][]byte{hash: data},
+		Versions: map[docdb.VersionTime]*docdb.HashedVersion{
+			v1: {CommitUserID: uu.IDv4(), CommitReason: "initial", FileHashes: map[string]string{"a.txt": hash}},
+		},
+	}
+
+	// Neither store knows the document, so the restore takes the genesis create
+	// path; the concurrent winner is modelled by the MetadataStore answering
+	// that insert with ErrDocumentAlreadyExists, exactly as the
+	// one-genesis-per-document unique index does.
+	docs := newFakeDocumentStore()
+	meta := newRestoreMetadataStore(t, doc)
+	meta.createVersionErr = docdb.NewErrDocumentAlreadyExists(docID)
+	conn := storeconn.New(docs, meta)
+
+	err := conn.RestoreDocument(t.Context(), doc, false)
+	require.Error(t, err)
+	require.ErrorIs(t, err, docdb.NewErrDocumentAlreadyExists(docID))
+
+	require.Empty(t, docs.deletedFiles,
+		"the blobs are shared with the winner of the genesis race and must not be deleted by the loser's rollback")
+	require.True(t, docs.has(doc, v1),
+		"the winner's file content must still be in the store after the losing restore rolled back")
+}

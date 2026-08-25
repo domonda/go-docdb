@@ -549,23 +549,38 @@ func (c *Conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version d
 	}
 
 	// The predecessor this version's successor has to take over, read before
-	// the version is removed. A version whose info file is missing — a
-	// half-written version, which this method exists to clean up after — names
-	// no predecessor, and its successor is left alone like a genesis delete
-	// leaves it below.
+	// the version is removed. A version whose info file is missing or unreadable
+	// — a half-written version, which this method exists to clean up after —
+	// names no predecessor that can be recovered, and its successor is left
+	// alone like a genesis delete leaves it below.
 	versionInfoFile := docDir.Joinf("%s.json", version)
 	var deletedPrevVersion *docdb.VersionTime
 	if versionInfoFile.Exists() {
 		deletedInfo, infoErr := readAndFixVersionInfoJSON(ctx, versionInfoFile, false)
 		if infoErr != nil {
-			// Refused rather than deleted with the relink skipped: the
-			// predecessor to hand this version's successor to is only recorded
-			// in this file, so deleting without reading it leaves the successor
-			// naming a version that is gone. Removing the unreadable file by
-			// hand makes the delete go through with nothing left to relink.
-			return nil, errs.Errorf("can't read version info file %s to relink the deleted version's successor: %w", versionInfoFile.Path(), infoErr)
+			// Deleted anyway, with the relink skipped, rather than refused. An
+			// unreadable info file is one of the states a crash mid-write
+			// leaves behind, so refusing here made the versions this method
+			// exists to remove the ones it could not remove: the only way out
+			// was deleting the file by hand, and until someone did,
+			// enumVersionDirs reported the version on every read of the
+			// document.
+			//
+			// The predecessor to hand the successor to is recorded in this file
+			// alone, so it is lost with it and the successor keeps naming a
+			// version that is gone. That is the same state a genesis delete
+			// leaves behind, it is visible rather than silent, and a
+			// merge-restore of the deleted version undoes it by taking the
+			// version back.
+			log.ErrorCtx(ctx, "Can't read version info JSON file of the version being deleted, deleting it without relinking its successor...").
+				Err(infoErr).
+				UUID("docID", docID).
+				Stringer("version", version).
+				Str("jsonFile", versionInfoFile.Path()).
+				Log()
+		} else {
+			deletedPrevVersion = deletedInfo.PrevVersion
 		}
-		deletedPrevVersion = deletedInfo.PrevVersion
 	}
 
 	err = versionDir.RemoveRecursive()

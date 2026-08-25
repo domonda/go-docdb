@@ -4,6 +4,7 @@
 package storeconn
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"maps"
@@ -283,6 +284,19 @@ func (c *conn) CreateDocument(
 		writeFiles[i] = fs.NewMemFile(file.Name(), data)
 		addedFiles[i] = &docdb.FileInfo{Name: file.Name(), Size: int64(len(data)), Hash: docdb.ContentHash(data)}
 	}
+	// Sorted by filename, the rule docdb.VersionInfo.SetFileDeltas documents
+	// for every change list. This one is persisted as the version's added
+	// files, and leaving it in the caller's argument order made the same
+	// document created from the same files record a different order here than
+	// in localfsdb, which derives the list through SetFileDeltas. VersionInfo
+	// compares the lists order-insensitively, so the divergence never failed a
+	// comparison — it only ever showed up in the stored data.
+	//
+	// writeFiles deliberately keeps the caller's order: it decides upload
+	// order only, and nothing reads it back.
+	slices.SortFunc(addedFiles, func(a, b *docdb.FileInfo) int {
+		return cmp.Compare(a.Name, b.Name)
+	})
 
 	_, err = c.documentStore.CreateDocumentVersion(ctx, docID, version, writeFiles)
 	if err != nil {
@@ -728,11 +742,28 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 			// document's current one: a document moved between companies keeps
 			// the company of every version it was committed under, and the
 			// versions restored after this one carry the move forward.
-			writtenFiles = append(writtenFiles, filesWritten...)
 			err = c.CreateDocument(ctx, doc.VersionCompanyID(v), doc.ID, hv.CommitUserID, hv.CommitReason, v, files, noopOnNew)
 			if err != nil {
 				return err
 			}
+			// Recorded as this call's writes only once the create has
+			// succeeded, unlike the merge path below, which records them first
+			// because a raw DocumentStore write has no rollback of its own and
+			// may store some of the objects before it fails.
+			//
+			// CreateDocument cleans its own uploads up, and how it does so is
+			// the reason these must not be recorded before it: a metadata
+			// insert answered with ErrDocumentAlreadyExists means a concurrent
+			// writer owns this document's genesis version, so CreateDocument
+			// deliberately leaves the content-addressed objects in place
+			// because they are byte-identical to the winner's. Recording them
+			// beforehand hands exactly those objects to the rollback above,
+			// which deletes them and strips the file content from a document
+			// whose metadata is committed — the corruption CreateDocument
+			// refused to cause. For every other failure it has already deleted
+			// the whole document's blobs itself, so there is nothing left here
+			// to roll back either way.
+			writtenFiles = append(writtenFiles, filesWritten...)
 			docExists = true
 			// Only a document that neither store knew may be dropped whole by
 			// the rollback. If the MetadataStore already held versions of it,
@@ -1036,20 +1067,14 @@ func fileInfosNamed(files map[string]docdb.FileInfo, filenames []string) []*docd
 // the readers, which carry a name but not the hash the store addresses them by,
 // and looking that hash back up.
 //
-// That order is by filename, because it reaches persisted state. The genesis
-// version's files are handed to CreateDocument, which records them as the
-// version's AddedFiles and the MetadataStore stores that list verbatim. Ranging
-// hv.FileHashes directly would commit it in Go's randomized map order, so
-// restoring one backup into two stores would persist two different added_files
-// for the same version — and both would differ from localfsdb, which derives
-// the list through docdb.VersionInfo.SetFileDeltas and sorts it there. This is
-// the rule SetFileDeltas documents, applied on the one path that builds the
-// list without going through it.
+// Neither result is ordered: the files are uploaded independently and addressed
+// by content hash, and the change lists derived from them are sorted where they
+// are persisted — by CreateDocument for a genesis version and by
+// docdb.VersionInfo.SetFileDeltas for every other one.
 func hashedVersionFilesMissingFrom(doc *docdb.HashedDocument, hv *docdb.HashedVersion, stored map[docdb.FileInfo]bool) (files []fs.FileReader, written []docdb.FileInfo) {
 	files = make([]fs.FileReader, 0, len(hv.FileHashes))
 	written = make([]docdb.FileInfo, 0, len(hv.FileHashes))
-	for _, filename := range slices.Sorted(maps.Keys(hv.FileHashes)) {
-		hash := hv.FileHashes[filename]
+	for filename, hash := range hv.FileHashes {
 		if stored[storeKey(filename, hash)] {
 			continue
 		}

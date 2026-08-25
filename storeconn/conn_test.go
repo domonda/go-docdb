@@ -72,3 +72,45 @@ func TestConn_CreateDocument_RecordsTheSizeOfTheHashedBytes(t *testing.T) {
 		"the recorded size must describe the bytes that were hashed, not the FileReader's Size()")
 	require.Equal(t, docdb.ContentHash(content), addedFiles[0].Hash)
 }
+
+// TestConn_CreateDocument_PersistsAddedFilesSorted verifies that a document
+// created directly — not through a restore — records its first version's added
+// files sorted by filename rather than in the order the caller passed them.
+//
+// docdb.VersionInfo.SetFileDeltas sorts every change list it derives and
+// documents why: the lists are compared across implementations, and localfsdb
+// derives its own through SetFileDeltas. CreateDocument records every file as
+// added without going through it, so the same document created from the same
+// files persisted a different order in the two stores. VersionInfo compares
+// the lists order-insensitively, so nothing fails — the divergence only shows
+// up in the stored data.
+func TestConn_CreateDocument_PersistsAddedFilesSorted(t *testing.T) {
+	meta := newFakeMetadataStore()
+	conn := storeconn.New(newFakeDocumentStore(), meta)
+
+	// Passed in an order that is neither sorted nor reverse-sorted, so a
+	// implementation that simply reversed would not pass either.
+	names := []string{"d.txt", "a.txt", "c.txt", "b.txt"}
+	files := make([]fs.FileReader, len(names))
+	for i, name := range names {
+		files[i] = fs.NewMemFile(name, []byte("content of "+name))
+	}
+
+	err := conn.CreateDocument(
+		context.Background(),
+		uu.IDv4(), uu.IDv4(), uu.IDv4(),
+		"genesis",
+		docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000"),
+		files,
+		func(context.Context, *docdb.VersionInfo) error { return nil },
+	)
+	require.NoError(t, err)
+	require.Len(t, meta.createInputs, 1)
+
+	addedNames := make([]string, 0, len(meta.createInputs[0].AddedFiles))
+	for _, file := range meta.createInputs[0].AddedFiles {
+		addedNames = append(addedNames, file.Name)
+	}
+	require.Equal(t, []string{"a.txt", "b.txt", "c.txt", "d.txt"}, addedNames,
+		"added files must be persisted sorted by filename, not in the caller's argument order")
+}
