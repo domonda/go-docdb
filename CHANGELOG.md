@@ -5,6 +5,11 @@ All notable changes to `github.com/domonda/go-docdb` are documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.1.1] - 2026-08-25
+
+### Fixed
+- **`v1.1.0` is now resolvable as the code it was meant to name.** The `v1.1.0` tag was first published on `b70277f` and only afterwards moved to `4f54e7e`, which adds the fix for the restore's version-set keying. The Go module proxy and checksum database had already cached the tag at the first commit and never serve a moved tag, so `@v1.1.0` meant different code depending on whether it was fetched through the proxy or straight from the repository. `v1.1.1` republishes the same tree as `4f54e7e` under a version that has never been cached. No code changes over the tag's current target; upgrade from `v1.1.0` to get the version-set keying fix if it was resolved through the proxy.
+
 ## [v1.1.0] - 2026-08-25
 
 ### Fixed
@@ -266,6 +271,7 @@ Initial release.
 - `ProxyConn` and `DeprecatedConn` (holding deprecated check-out/in methods).
 - `VersionInfo` with `CompanyID`, `LatestDocumentVersionInfo`, and `VersionTime.SetNull`.
 
+[v1.1.1]: https://github.com/domonda/go-docdb/releases/tag/v1.1.1
 [v1.1.0]: https://github.com/domonda/go-docdb/releases/tag/v1.1.0
 [v1.0.1]: https://github.com/domonda/go-docdb/releases/tag/v1.0.1
 [v1.0.0]: https://github.com/domonda/go-docdb/releases/tag/v1.0.0
