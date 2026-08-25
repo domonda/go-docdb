@@ -2,6 +2,7 @@ package localfsdb
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -35,11 +36,54 @@ func TestVersionTimeSetMatchesEqual(t *testing.T) {
 	require.Len(t, set, 1)
 }
 
-// TestVersionTimeKeyIsCompact pins the key format, which is only ever compared
-// and never read, so it is the shortest exact spelling of the truncated instant
-// rather than the human-readable VersionTime.String().
-func TestVersionTimeKeyIsCompact(t *testing.T) {
-	v := docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
-	require.Equal(t, "1704067200000", versionTimeKey(v))
-	require.Less(t, len(versionTimeKey(v)), len(v.String()))
+// TestVersionTimeKeyMatchesEqual pins the contract the key has to satisfy:
+// two versions get the same key exactly when VersionTime.Equal calls them
+// equal. Equal truncates both sides to milliseconds, so every pair below that
+// differs only below a millisecond, or only in location, must collapse onto one
+// key, and every pair that differs by a whole millisecond must not.
+func TestVersionTimeKeyMatchesEqual(t *testing.T) {
+	ms := func(s string) docdb.VersionTime { return docdb.MustVersionTimeFromString(s) }
+
+	for _, tc := range []struct {
+		name string
+		a, b docdb.VersionTime
+	}{
+		{
+			"sub-millisecond digits are dropped, not rounded up",
+			ms("2024-01-01_00-00-00.000"),
+			ms("2024-01-01 00:00:00.0009"),
+		},
+		{
+			"a version read from a store and the same one read from a backup",
+			docdb.VersionTimeFrom(ms("2024-01-01 00:00:00.0005").Time),
+			ms("2024-01-01 00:00:00.0005"),
+		},
+		{
+			"the same instant in another location",
+			ms("2024-01-01_05-00-00.000"),
+			docdb.VersionTime{Time: time.Date(2024, 1, 1, 10, 0, 0, 0, time.FixedZone("X", 5*3600))},
+		},
+		{
+			"before the Unix epoch, where the millisecond count is negative",
+			ms("1960-01-01_00-00-00.000"),
+			ms("1960-01-01 00:00:00.0009"),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.True(t, tc.a.Equal(tc.b), "precondition: the two name the same version")
+			require.Equal(t, versionTimeKey(tc.a), versionTimeKey(tc.b),
+				"versions Equal calls equal must share a key")
+		})
+	}
+
+	t.Run("a whole millisecond apart stays distinct", func(t *testing.T) {
+		a := ms("2024-01-01_00-00-00.000")
+		b := ms("2024-01-01_00-00-00.001")
+		require.False(t, a.Equal(b), "precondition: these are different versions")
+		require.NotEqual(t, versionTimeKey(a), versionTimeKey(b))
+	})
+
+	t.Run("the zero version is a stable key", func(t *testing.T) {
+		require.Equal(t, versionTimeKey(docdb.VersionTime{}), versionTimeKey(docdb.VersionTime{}))
+	})
 }

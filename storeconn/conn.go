@@ -10,7 +10,6 @@ import (
 	"maps"
 	"os"
 	"slices"
-	"strconv"
 	"time"
 
 	"github.com/ungerik/go-fs"
@@ -1116,15 +1115,21 @@ func markVersionFilesStored(hv *docdb.HashedVersion, stored map[docdb.FileInfo]b
 // though Equal reports them equal, and the restore takes the create path for a
 // version that already exists instead of skipping it.
 //
-// Unix milliseconds rather than VersionTime.String(): it is the same
-// equivalence class Equal defines in a third of the bytes, and these keys are
-// only ever compared, never read.
-func versionTimeKey(v docdb.VersionTime) string {
-	return strconv.FormatInt(v.Time.UnixMilli(), 10)
+// The key is the millisecond count itself rather than a formatted timestamp.
+// It is exactly the equivalence class Equal defines: Time.UnixMilli divides a
+// nanosecond count that Go normalizes to be non-negative, so it floors the way
+// Truncate(time.Millisecond) does, for instants before 1970 as well as after.
+// It also names an absolute instant, so it does not depend on the time's
+// location the way VersionTime.String() does — two VersionTimes for the same
+// instant in different locations are Equal and must not miss each other here.
+// And an int64 key costs no allocation per lookup and hashes cheaper than a
+// string. These keys are only ever compared, never read.
+func versionTimeKey(v docdb.VersionTime) int64 {
+	return v.Time.UnixMilli()
 }
 
-func versionTimeSet(versions []docdb.VersionTime) map[string]bool {
-	set := make(map[string]bool, len(versions))
+func versionTimeSet(versions []docdb.VersionTime) map[int64]bool {
+	set := make(map[int64]bool, len(versions))
 	for _, v := range versions {
 		set[versionTimeKey(v)] = true
 	}
