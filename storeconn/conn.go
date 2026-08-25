@@ -727,9 +727,23 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		// and the backup's next version is the only row that may move. The last
 		// version of the backup has no successor to take back and names none.
 		// See CreateDocumentVersionInput.RelinkSuccessor.
+		// The successor to take back is the backup's next version that the
+		// destination actually holds, not simply the next one in the backup.
+		// Two adjacent missing versions otherwise name one that is not there
+		// yet: nothing is relinked, and the insert then collides with whatever
+		// does chain off the predecessor — restoring v1 into a destination
+		// holding v0 and v3 of v0→v1→v2→v3 named the absent v2, left v3 on v0,
+		// and was refused as ErrDocumentChanged. Scanning forward keeps the
+		// guarantee that only a version of the backup may ever move, so a
+		// version the destination has and the backup does not is still never
+		// named, while an additive restore can repair a run of deleted
+		// versions instead of failing on it.
 		var relinkSuccessor *docdb.VersionTime
-		if i+1 < len(versionTimes) {
-			relinkSuccessor = &versionTimes[i+1]
+		for j := i + 1; j < len(versionTimes); j++ {
+			if versionTimeIn(metadataVersions, versionTimes[j]) {
+				relinkSuccessor = &versionTimes[j]
+				break
+			}
 		}
 
 		var vi *docdb.VersionInfo

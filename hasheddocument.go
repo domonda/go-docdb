@@ -93,6 +93,16 @@ func (doc *HashedDocument) Validate() error {
 			err = errors.Join(err, fmt.Errorf("HashedDocument version %s has nil HashedVersion", v))
 			continue
 		}
+		// A version may leave CompanyID unset to inherit the document's, but a
+		// version that names one has to name a valid one: both restore
+		// implementations persist it as committed history, and localfsdb files
+		// a document under a directory named after it, which enumeration then
+		// cannot parse.
+		if hv.CompanyID != uu.IDNil {
+			if e := hv.CompanyID.Validate(); e != nil {
+				err = errors.Join(err, fmt.Errorf("HashedDocument version %s has an invalid CompanyID: %w", v, e))
+			}
+		}
 		for filename, hash := range hv.FileHashes {
 			if _, ok := doc.HashedFiles[hash]; !ok {
 				err = errors.Join(err, fmt.Errorf(

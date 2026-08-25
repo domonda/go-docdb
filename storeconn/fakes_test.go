@@ -221,14 +221,20 @@ type fakeMetadataStore struct {
 	// version being deleted (hashes still shared with a sibling are excluded).
 	safeHashesToDelete []string
 
-	insertedVersions    []docdb.VersionTime
+	insertedVersions []docdb.VersionTime
+	// relinkSuccessors records the RelinkSuccessor each create named, so a test
+	// can assert which successor a restored middle version took back.
+	relinkSuccessors    map[docdb.VersionTime]*docdb.VersionTime
 	deletedVersions     []docdb.VersionTime
 	deleteDocumentCalls int
 }
 
 // newFakeMetadataStore returns a store already holding the passed versions.
 func newFakeMetadataStore(versions ...*docdb.VersionInfo) *fakeMetadataStore {
-	store := &fakeMetadataStore{stored: make(map[docdb.VersionTime]*docdb.VersionInfo, len(versions))}
+	store := &fakeMetadataStore{
+		stored:           make(map[docdb.VersionTime]*docdb.VersionInfo, len(versions)),
+		relinkSuccessors: make(map[docdb.VersionTime]*docdb.VersionTime),
+	}
 	for _, info := range versions {
 		store.companyID = info.CompanyID
 		store.stored[info.Version] = info
@@ -310,6 +316,7 @@ func (m *fakeMetadataStore) CreateDocumentVersion(_ context.Context, in storecon
 	if m.createVersionErr != nil {
 		return nil, m.createVersionErr
 	}
+	m.relinkSuccessors[in.NewVersion] = in.RelinkSuccessor
 	if m.failCreateOf != nil && m.failCreateOf.Equal(in.NewVersion) {
 		return nil, errors.New("metadata insert failed")
 	}

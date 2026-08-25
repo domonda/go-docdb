@@ -2,6 +2,8 @@ package storeconn_test
 
 import (
 	"errors"
+	"fmt"
+	"maps"
 	"os"
 	"testing"
 
@@ -551,4 +553,69 @@ func TestConn_RestoreDocument_RollbackKeepsBlobsWhenMetadataRollbackFails(t *tes
 	require.Empty(t, docs.deletedFiles,
 		"content must be kept while a version that still names it is committed")
 	require.True(t, docs.has(doc, v1), "v1's uploaded content must still be there")
+}
+
+// newFourVersionDoc returns a backup of four versions, each adding one file.
+func newFourVersionDoc(companyID, docID uu.ID) (doc *docdb.HashedDocument, versions [4]docdb.VersionTime) {
+	names := [4]string{"a.txt", "b.txt", "c.txt", "d.txt"}
+	hashed := make(map[string][]byte, 4)
+	doc = &docdb.HashedDocument{
+		ID:        docID,
+		CompanyID: companyID,
+		Versions:  make(map[docdb.VersionTime]*docdb.HashedVersion, 4),
+	}
+	files := make(map[string]string, 4)
+	for i, name := range names {
+		versions[i] = docdb.MustVersionTimeFromString(fmt.Sprintf("2024-01-0%d_00-00-00.000", i+1))
+		data := []byte("content of " + name)
+		hash := docdb.ContentHash(data)
+		hashed[hash] = data
+		files[name] = hash
+
+		carried := make(map[string]string, len(files))
+		maps.Copy(carried, files)
+		doc.Versions[versions[i]] = &docdb.HashedVersion{
+			CommitUserID: uu.IDv4(),
+			CommitReason: "add " + name,
+			FileHashes:   carried,
+		}
+	}
+	doc.HashedFiles = hashed
+	return doc, versions
+}
+
+// TestConn_RestoreDocument_FillsInAdjacentMissingVersions covers an additive
+// restore of a run of deleted versions.
+//
+// A restored middle version has to take back the successor that
+// DeleteDocumentVersion relinked onto its predecessor when it was removed.
+// Naming the backup's immediate next version breaks as soon as two adjacent
+// versions are missing: that one is not on the destination yet, so nothing is
+// relinked, and the insert then collides with the version that does chain off
+// the predecessor — the one-successor-per-version index refuses it as
+// ErrDocumentChanged, and the restore fails on exactly the document it exists
+// to repair.
+func TestConn_RestoreDocument_FillsInAdjacentMissingVersions(t *testing.T) {
+	doc, v := newFourVersionDoc(uu.IDv4(), uu.IDv4())
+
+	// The destination lost v2 and v3, so v4 was relinked onto v1 the way
+	// DeleteDocumentVersion leaves a chain after removing a middle version.
+	docs := newFakeDocumentStore()
+	meta := newRestoreMetadataStore(t, doc, v[0], v[3])
+	conn := storeconn.New(docs, meta)
+
+	require.NoError(t, conn.RestoreDocument(t.Context(), doc, false))
+
+	require.Equal(t, []docdb.VersionTime{v[1], v[2]}, meta.insertedVersions,
+		"both missing versions must be filled in")
+	// v2 names v4: the first version of the backup the destination actually
+	// holds, not the absent v3 that follows it in the backup.
+	require.Equal(t, &v[3], meta.relinkSuccessors[v[1]],
+		"a restored version must take back a successor that is actually stored")
+	// v3 names v4 as well, and takes it back in turn: the relink only moves a
+	// row that still chains off the version being filled in front of, so v4
+	// moves from v2 to v3 and the chain ends up v1→v2→v3→v4 rather than
+	// forking. Naming a successor that is already correctly attached is a
+	// no-op, which is why scanning forward is safe to do on every version.
+	require.Equal(t, &v[3], meta.relinkSuccessors[v[2]])
 }

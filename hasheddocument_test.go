@@ -554,3 +554,41 @@ func TestReadHashedDocument_MovedBetweenCompanies(t *testing.T) {
 		require.Equal(t, prevCompanyID, doc.VersionCompanyID(v0))
 	})
 }
+
+// TestHashedDocumentValidateRejectsInvalidVersionCompanyID covers a per-version
+// company that is set but malformed.
+//
+// uu.IDNil means the version inherits the document's company, so it is the one
+// value that must stay accepted. Any other value is persisted by both restore
+// implementations as committed history, and localfsdb files a document under a
+// directory named after it — which the company enumeration then cannot parse.
+func TestHashedDocumentValidateRejectsInvalidVersionCompanyID(t *testing.T) {
+	companyID := uu.IDv4()
+	docID := uu.IDv4()
+	data := []byte("content of a")
+	hash := ContentHash(data)
+	v0 := MustVersionTimeFromString("2024-01-01_00-00-00.000")
+
+	newDoc := func(versionCompanyID uu.ID) *HashedDocument {
+		return &HashedDocument{
+			ID:          docID,
+			CompanyID:   companyID,
+			HashedFiles: map[string][]byte{hash: data},
+			Versions: map[VersionTime]*HashedVersion{
+				v0: {
+					CompanyID:    versionCompanyID,
+					CommitUserID: uu.IDv4(),
+					CommitReason: "initial",
+					FileHashes:   map[string]string{"a.txt": hash},
+				},
+			},
+		}
+	}
+
+	// unset inherits the document's company and stays valid
+	require.NoError(t, newDoc(uu.IDNil).Validate())
+	// the document's own company named explicitly is valid
+	require.NoError(t, newDoc(companyID).Validate())
+	// a set but malformed company is not
+	require.ErrorContains(t, newDoc(uu.ID{0x01}).Validate(), "invalid CompanyID")
+}
