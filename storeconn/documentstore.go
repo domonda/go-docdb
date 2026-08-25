@@ -61,5 +61,22 @@ type DocumentStore interface {
 	// DeleteDocumentHashes deletes specific content hashes for a document.
 	// Returns ErrDocumentNotFound if the document does not exist.
 	// Hashes that do not match any stored file are silently ignored.
+	//
+	// Every stored file with one of the hashes is deleted, whatever its name.
+	// Use DeleteDocumentHashFiles to delete only the files a caller can prove
+	// are its own.
 	DeleteDocumentHashes(ctx context.Context, docID uu.ID, hashes []string) error
+
+	// DeleteDocumentHashFiles deletes exactly the passed files of a document,
+	// matching on Name and Hash together and never on Size. Files that match no
+	// stored file are silently ignored, and passing none deletes nothing.
+	// Returns ErrDocumentNotFound if the document does not exist.
+	//
+	// This is the delete that mirrors DocumentHashFilesExist, and it exists
+	// because a hash does not identify one file: a document can hold the same
+	// content under two names, so deleting by hash alone removes an object the
+	// caller never wrote. A rollback undoing its own uploads has to name them —
+	// it knows the name it wrote under, and deleting more than that corrupts a
+	// version it was never touching.
+	DeleteDocumentHashFiles(ctx context.Context, docID uu.ID, files []docdb.FileInfo) error
 }

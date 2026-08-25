@@ -206,6 +206,44 @@ func (s *docStore) DeleteDocumentHashes(ctx context.Context, docID uu.ID, hashes
 	return s.deleteObjectKeys(ctx, objectsToDelete)
 }
 
+// DeleteDocumentHashFiles removes the objects of the passed files under the
+// docID prefix, matching name and content hash together.
+// Returns docdb.ErrDocumentNotFound if the document has no objects at all.
+// Files that match no stored object are silently ignored.
+//
+// An object key is "<docID>/<filename>/<hash>", so the wanted keys are built
+// directly and intersected with what is stored, rather than filtered by hash
+// the way DeleteDocumentHashes does it: the same content under two filenames is
+// two objects, and deleting by hash alone would remove both.
+func (s *docStore) DeleteDocumentHashFiles(ctx context.Context, docID uu.ID, files []docdb.FileInfo) error {
+	keys, err := s.listObjectKeys(ctx, docID.String()+"/")
+	if err != nil {
+		return err
+	}
+	if len(keys) == 0 {
+		return docdb.NewErrDocumentNotFound(docID)
+	}
+	if len(files) == 0 {
+		return nil
+	}
+
+	wanted := make(map[string]struct{}, len(files))
+	for _, file := range files {
+		wanted[Key(docID, file.Name, file.Hash)] = struct{}{}
+	}
+	var objectsToDelete []string
+	for _, key := range keys {
+		if _, ok := wanted[key]; ok {
+			objectsToDelete = append(objectsToDelete, key)
+		}
+	}
+	if len(objectsToDelete) == 0 {
+		return nil
+	}
+
+	return s.deleteObjectKeys(ctx, objectsToDelete)
+}
+
 // maxDeleteObjectsPerRequest is the maximum number of objects AWS S3 accepts
 // in a single DeleteObjects request.
 const maxDeleteObjectsPerRequest = 1000
