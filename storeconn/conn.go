@@ -10,6 +10,7 @@ import (
 	"maps"
 	"os"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/ungerik/go-fs"
@@ -724,12 +725,12 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 	skipVersionSet := versionTimeSet(skipVersions)
 	metadataVersionSet := versionTimeSet(metadataVersions)
 	for i, v := range versionTimes {
-		if !recreate && skipVersionSet[v] {
+		if !recreate && skipVersionSet[versionTimeKey(v)] {
 			continue
 		}
 		hv := doc.Versions[v]
 		files, filesWritten := hashedVersionFilesMissingFrom(doc, hv, storedFiles)
-		versionInMetadata := metadataVersionSet[v]
+		versionInMetadata := metadataVersionSet[versionTimeKey(v)]
 
 		// CreateDocument writes a document's genesis version and enforces that
 		// the document does not exist yet, so it only applies while neither
@@ -822,7 +823,7 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		// versions instead of failing on it.
 		var relinkSuccessor *docdb.VersionTime
 		for j := i + 1; j < len(versionTimes); j++ {
-			if metadataVersionSet[versionTimes[j]] {
+			if metadataVersionSet[versionTimeKey(versionTimes[j])] {
 				relinkSuccessor = &versionTimes[j]
 				break
 			}
@@ -1011,7 +1012,7 @@ func (c *conn) versionsFullyStored(ctx context.Context, doc *docdb.HashedDocumen
 	inMetadata := versionTimeSet(metadataVersions)
 	var stored []docdb.VersionTime
 	for _, v := range versionTimes {
-		if !inMetadata[v] {
+		if !inMetadata[versionTimeKey(v)] {
 			continue
 		}
 		fullyStored := true
@@ -1101,10 +1102,31 @@ func markVersionFilesStored(hv *docdb.HashedVersion, stored map[docdb.FileInfo]b
 // number of versions of a document. The slices themselves are kept because they
 // are what MetadataStore.DocumentVersions returns and what the rollback needs in
 // order.
-func versionTimeSet(versions []docdb.VersionTime) map[docdb.VersionTime]bool {
-	set := make(map[docdb.VersionTime]bool, len(versions))
+// versionTimeKey returns the map key a version is looked up by in the sets
+// below: its Unix millisecond count as a decimal string.
+//
+// A docdb.VersionTime must not be used as a map key directly. Map lookup
+// compares the embedded time.Time bitwise, while VersionTime.Equal truncates
+// both sides to milliseconds first — "just to make sure it's comparable", as it
+// puts it — and the versions compared here arrive from two sources that do not
+// agree on precision: VersionTimeFrom, which VersionTime.Scan and localfsdb's
+// directory listing go through, truncates, while VersionTimeFromString, which
+// every version deserialized from a backup goes through, does not. Two
+// VersionTimes naming the same version then miss each other as map keys even
+// though Equal reports them equal, and the restore takes the create path for a
+// version that already exists instead of skipping it.
+//
+// Unix milliseconds rather than VersionTime.String(): it is the same
+// equivalence class Equal defines in a third of the bytes, and these keys are
+// only ever compared, never read.
+func versionTimeKey(v docdb.VersionTime) string {
+	return strconv.FormatInt(v.Time.UnixMilli(), 10)
+}
+
+func versionTimeSet(versions []docdb.VersionTime) map[string]bool {
+	set := make(map[string]bool, len(versions))
 	for _, v := range versions {
-		set[v] = true
+		set[versionTimeKey(v)] = true
 	}
 	return set
 }
