@@ -294,6 +294,34 @@ func TestHashedDocument_Validate(t *testing.T) {
 	}
 }
 
+// TestHashedDocument_NilReceiver pins the nil receiver contract of every
+// *HashedDocument method: methods without an error result return the zero
+// value, methods with one return an error. These are called while walking a
+// backup, so a typed nil reaching them has to fail the one document instead of
+// taking down the restore.
+func TestHashedDocument_NilReceiver(t *testing.T) {
+	var doc *HashedDocument
+	v0 := MustVersionTimeFromString("2024-01-01_00-00-00.000")
+
+	t.Run("VersionCompanyID returns uu.IDNil", func(t *testing.T) {
+		require.Equal(t, uu.IDNil, doc.VersionCompanyID(v0))
+	})
+
+	t.Run("VersionTimes returns nil", func(t *testing.T) {
+		require.Nil(t, doc.VersionTimes())
+	})
+
+	t.Run("VersionInfo returns an error", func(t *testing.T) {
+		info, err := doc.VersionInfo(v0)
+		require.Nil(t, info)
+		require.ErrorContains(t, err, "nil HashedDocument")
+	})
+
+	t.Run("Validate returns an error", func(t *testing.T) {
+		require.ErrorContains(t, doc.Validate(), "nil HashedDocument")
+	})
+}
+
 func TestHashedDocument_VersionInfo(t *testing.T) {
 	v0 := MustVersionTimeFromString("2024-01-01_00-00-00.000")
 	data := []byte("hello")

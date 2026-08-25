@@ -2,6 +2,7 @@ package localfsdb
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -547,14 +548,51 @@ func (c *Conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version d
 		return nil, err
 	}
 
+	// The predecessor this version's successor has to take over, read before
+	// the version is removed. A version whose info file is missing — a
+	// half-written version, which this method exists to clean up after — names
+	// no predecessor, and its successor is left alone like a genesis delete
+	// leaves it below.
+	versionInfoFile := docDir.Joinf("%s.json", version)
+	var deletedPrevVersion *docdb.VersionTime
+	if versionInfoFile.Exists() {
+		deletedInfo, infoErr := readAndFixVersionInfoJSON(ctx, versionInfoFile, false)
+		if infoErr != nil {
+			// Refused rather than deleted with the relink skipped: the
+			// predecessor to hand this version's successor to is only recorded
+			// in this file, so deleting without reading it leaves the successor
+			// naming a version that is gone. Removing the unreadable file by
+			// hand makes the delete go through with nothing left to relink.
+			return nil, errs.Errorf("can't read version info file %s to relink the deleted version's successor: %w", versionInfoFile.Path(), infoErr)
+		}
+		deletedPrevVersion = deletedInfo.PrevVersion
+	}
+
 	err = versionDir.RemoveRecursive()
 	if err != nil {
 		return nil, err
 	}
 
-	versionInfoFile := docDir.Joinf("%s.json", version)
 	if versionInfoFile.Exists() {
 		err = errors.Join(err, versionInfoFile.Remove())
+	}
+
+	// The deleted version's successor is chained onto the deleted version's own
+	// predecessor, so no version is left naming one the document no longer has.
+	// This is what pgstore does in the same call, and RestoreDocument on both
+	// implementations undoes exactly this relink when the version is restored
+	// (see CreateDocumentVersionInput.RelinkSuccessor); leaving the successor on
+	// the removed version instead made the two answer differently for the same
+	// delete, and a caller walking the chain backwards ran into a predecessor
+	// that DocumentVersions does not list.
+	//
+	// Nothing is relinked when the deleted version had no predecessor of its
+	// own, which is the rule pgstore deletes by as well: the successor of a
+	// deleted genesis version keeps naming it, so a merge-restore of the
+	// earliest version takes it back rather than filling a second version in
+	// front of a successor that has already become a genesis itself.
+	if deletedPrevVersion != nil {
+		err = errors.Join(err, relinkSuccessorsOfDeletedVersion(ctx, docDir, docID, version, *deletedPrevVersion))
 	}
 
 	leftVersions, lErr := c.documentVersions(ctx, docID)
@@ -585,7 +623,10 @@ func (c *Conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version d
 		// SetDocumentCompanyID moved without committing a version — that marker
 		// names a company no version of the document names, on purpose, and
 		// deleting a version that cannot affect ownership must leave it alone.
-		latestVersionInfo, _, e := c.latestDocumentVersionInfo(ctx, docID)
+		// leftVersions is ascending and its last entry is the version that
+		// becomes the latest, so its info file is read directly instead of
+		// re-enumerating the document directory to rediscover it.
+		latestVersionInfo, _, e := c.documentVersionInfo(ctx, docID, leftVersions[len(leftVersions)-1])
 		if e == nil {
 			e = c.setDocumentCompanyID(ctx, docID, latestVersionInfo.CompanyID)
 		}
@@ -873,10 +914,7 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 		return err
 	}
 
-	// A version with the same files as its predecessor changes nothing, unless
-	// it moves the document to another company: that is how a move is recorded,
-	// as a version that changes nothing but the company.
-	if versionInfo.EqualFiles(prevVersionInfo) && companyID == prevVersionInfo.CompanyID {
+	if versionInfo.ChangesNothing(prevVersionInfo, companyID) {
 		return docdb.ErrNoChanges
 	}
 
@@ -1097,6 +1135,10 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		createdVersionDirs []fs.File
 		createdInfoFiles   []fs.File
 		relinkedInfoFiles  []relinkedInfoFile
+		// relinkedInfoFileSaved keeps the rollback from saving the same info
+		// file twice, which would put back what this call wrote rather than
+		// what the file held before it.
+		relinkedInfoFileSaved = make(map[fs.File]bool)
 	)
 	defer func() {
 		if err == nil {
@@ -1129,10 +1171,10 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 	var latestWritten *docdb.VersionTime
 
 	versionTimes := doc.VersionTimes()
+	existingVersionSet := versionTimeSet(existingVersions)
 	for i, v := range versionTimes {
-		if !recreate && versionTimeIn(existingVersions, v) {
-			cur := v
-			prevVersion = &cur
+		if !recreate && existingVersionSet[v] {
+			prevVersion = &v
 			prevVersionDir = docDir.Join(v.String())
 			continue
 		}
@@ -1177,28 +1219,48 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 
 		// A version written back into the middle of an existing chain has to
 		// take back the successor that DeleteDocumentVersion relinked to this
-		// version's own predecessor when it was removed. Only the backup's own
-		// next version is considered, and only while it still chains off that
+		// version's own predecessor when it was removed. Only a version of the
+		// backup is ever taken over, and only while it still chains off that
 		// same predecessor, which is the rule storeconn restores by (see
 		// storeconn.CreateDocumentVersionInput.RelinkSuccessor): no property of
 		// a stored version identifies it as this one's successor, and a version
 		// the destination has but the backup does not is kept as-is rather than
 		// adopted.
-		if !recreate && i+1 < len(versionTimes) && versionTimeIn(existingVersions, versionTimes[i+1]) {
-			var relinked *relinkedInfoFile
-			relinked, err = relinkSuccessorInfoFile(ctx, docDir, doc.ID, versionTimes[i+1], prevVersion, v)
-			if err != nil {
-				return err
-			}
-			if relinked != nil {
-				relinkedInfoFiles = append(relinkedInfoFiles, *relinked)
+		//
+		// The successor to take back is the backup's next version that the
+		// destination actually holds, not simply the next one in the backup.
+		// Two adjacent missing versions otherwise name one that is not there
+		// yet: nothing is relinked, and the version that does chain off the
+		// predecessor stays on it — restoring v1 and v2 into a destination
+		// holding v0 and v3 of v0→v1→v2→v3 named the absent v2 while filling
+		// v1 in, left v3 on v0 and forked the chain. Scanning forward relinks
+		// v3 onto v1 and then onto v2 as each of them is filled in, the same
+		// way storeconn's merge-restore does.
+		if !recreate {
+			for j := i + 1; j < len(versionTimes); j++ {
+				if !existingVersionSet[versionTimes[j]] {
+					continue
+				}
+				var relinked *relinkedInfoFile
+				relinked, err = relinkSuccessorInfoFile(ctx, docDir, doc.ID, versionTimes[j], prevVersion, v)
+				if err != nil {
+					return err
+				}
+				// Only the content from before this call can undo it: a
+				// successor that a run of restored versions is filled in front
+				// of is rewritten once per version, and every rewrite but the
+				// first saves what an earlier one of them wrote.
+				if relinked != nil && !relinkedInfoFileSaved[relinked.file] {
+					relinkedInfoFileSaved[relinked.file] = true
+					relinkedInfoFiles = append(relinkedInfoFiles, *relinked)
+				}
+				break
 			}
 		}
 
-		cur := v
-		prevVersion = &cur
+		prevVersion = &v
 		prevVersionDir = versionDir
-		latestWritten = &cur
+		latestWritten = &v
 	}
 
 	// The document belongs to the company of its latest version, which merging
@@ -1241,15 +1303,18 @@ type relinkedInfoFile struct {
 }
 
 // relinkSuccessorInfoFile makes successor name newVersion as its predecessor,
-// but only while it still names prevVersion — the predecessor newVersion was
-// filled in front of. It returns the file's original content so the caller can
-// undo the rewrite, or nil when nothing was rewritten.
+// but only while it still names prevVersion. It returns the file's original
+// content so the caller can undo the rewrite, or nil when nothing was
+// rewritten.
 //
-// A successor that names something else is not the row this restore may move:
-// it either never chained off prevVersion or was already relinked, and taking
-// it over would leave it naming a predecessor whose file set it never derived
-// from. A nil prevVersion means newVersion is the earliest version of the
-// backup and had no predecessor to be filled in after, so nothing is relinked.
+// Both callers hand a successor from one predecessor to another: RestoreDocument
+// gives it to the version it fills in front of it, and DeleteDocumentVersion
+// gives it to the deleted version's own predecessor. A successor that names
+// something else is not the row either of them may move: it never chained off
+// prevVersion or was already relinked, and taking it over would leave it naming
+// a predecessor whose file set it never derived from. A nil prevVersion relinks
+// nothing — for a restore that is the earliest version of the backup, which had
+// no predecessor to be filled in after.
 //
 // Only PrevVersion is rewritten. The successor's added/modified/removed lists
 // still describe its diff against the version it used to chain off, which is
@@ -1266,13 +1331,18 @@ func relinkSuccessorInfoFile(ctx context.Context, docDir fs.File, docID uu.ID, s
 	if !infoFile.Exists() {
 		return nil, nil
 	}
+	// The original content is kept for the rollback, so the VersionInfo is
+	// decoded from those same bytes rather than reading the file a second time.
 	original, err := infoFile.ReadAll()
 	if err != nil {
 		return nil, err
 	}
-	versionInfo, err := readAndFixVersionInfoJSON(ctx, infoFile, false)
+	versionInfo, legacyFormat, err := unmarshalVersionInfoJSON(original)
 	if err != nil {
 		return nil, err
+	}
+	if legacyFormat {
+		log.Info("Loading old VersionInfo format").Str("file", string(infoFile)).Log()
 	}
 	if versionInfo.PrevVersion == nil || !versionInfo.PrevVersion.Equal(*prevVersion) {
 		return nil, nil
@@ -1284,13 +1354,47 @@ func relinkSuccessorInfoFile(ctx context.Context, docDir fs.File, docID uu.ID, s
 	return &relinkedInfoFile{file: infoFile, data: original}, nil
 }
 
-func versionTimeIn(versions []docdb.VersionTime, v docdb.VersionTime) bool {
-	for _, e := range versions {
-		if e.Equal(v) {
-			return true
+// relinkSuccessorsOfDeletedVersion chains every remaining version that names
+// deletedVersion as its predecessor onto prevVersion, which is the predecessor
+// deletedVersion itself named.
+//
+// Successors are found by the predecessor they name rather than by their place
+// in the version order, which is how pgstore finds them too (`where
+// prev_version = <deleted version>`): a version naming anything else is not a
+// successor of the deleted one and keeps the predecessor its file set was
+// derived from. Every match is relinked rather than only the first one found,
+// because localfsdb has no index that refuses two versions naming the same
+// predecessor, so a document can hold more than one of them.
+func relinkSuccessorsOfDeletedVersion(ctx context.Context, docDir fs.File, docID uu.ID, deletedVersion, prevVersion docdb.VersionTime) (err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, docDir, docID, deletedVersion, prevVersion)
+
+	var versions []docdb.VersionTime
+	err = enumVersionDirs(ctx, docDir, docID, func(version docdb.VersionTime, _ fs.File) {
+		versions = append(versions, version)
+	})
+	if err != nil {
+		return err
+	}
+	for _, version := range versions {
+		// The original content is only needed by a caller that can roll its
+		// rewrite back, which a delete cannot: the version it would relink the
+		// successor to is already gone.
+		_, err = relinkSuccessorInfoFile(ctx, docDir, docID, version, &deletedVersion, prevVersion)
+		if err != nil {
+			return err
 		}
 	}
-	return false
+	return nil
+}
+
+// versionTimeSet returns versions as a set for membership tests, so the restore
+// walk below does not scan the whole slice once per version.
+func versionTimeSet(versions []docdb.VersionTime) map[docdb.VersionTime]bool {
+	set := make(map[docdb.VersionTime]bool, len(versions))
+	for _, v := range versions {
+		set[v] = true
+	}
+	return set
 }
 
 // readAndFixVersionInfoJSON reads a VersionInfo from a JSON file.
@@ -1298,19 +1402,18 @@ func versionTimeIn(versions []docdb.VersionTime, v docdb.VersionTime) bool {
 // If writeFixedVersion is true and the legacy field is found, the file is rewritten
 // with the corrected field name.
 func readAndFixVersionInfoJSON(ctx context.Context, file fs.File, writeFixedVersion bool) (versionInfo *docdb.VersionInfo, err error) {
-	var i struct {
-		docdb.VersionInfo
-		ModidfiedFiles []string // with typo
-	}
-	err = file.ReadJSON(ctx, &i)
+	data, err := file.ReadAllContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if len(i.ModidfiedFiles) > 0 && len(i.ModifiedFiles) == 0 {
-		i.ModifiedFiles = i.ModidfiedFiles
+	versionInfo, legacyFormat, err := unmarshalVersionInfoJSON(data)
+	if err != nil {
+		return nil, err
+	}
+	if legacyFormat {
 		if writeFixedVersion {
 			log.Info("Fixing old VersionInfo format").Str("file", string(file)).Log()
-			err = i.VersionInfo.WriteJSON(file)
+			err = versionInfo.WriteJSON(file)
 			if err != nil {
 				return nil, err
 			}
@@ -1318,5 +1421,25 @@ func readAndFixVersionInfoJSON(ctx context.Context, file fs.File, writeFixedVers
 			log.Info("Loading old VersionInfo format").Str("file", string(file)).Log()
 		}
 	}
-	return &i.VersionInfo, nil
+	return versionInfo, nil
+}
+
+// unmarshalVersionInfoJSON decodes a VersionInfo from the JSON content of a
+// version info file, reporting whether it was in the legacy format where
+// ModifiedFiles was misspelled as "ModidfiedFiles". Decoding is separate from
+// reading so a caller that already holds the bytes does not read the file twice.
+func unmarshalVersionInfoJSON(data []byte) (versionInfo *docdb.VersionInfo, legacyFormat bool, err error) {
+	var i struct {
+		docdb.VersionInfo
+		ModidfiedFiles []string // with typo
+	}
+	err = json.Unmarshal(data, &i)
+	if err != nil {
+		return nil, false, fmt.Errorf("%w because: %w", fs.ErrUnmarshalJSON, err)
+	}
+	if len(i.ModidfiedFiles) > 0 && len(i.ModifiedFiles) == 0 {
+		i.ModifiedFiles = i.ModidfiedFiles
+		return &i.VersionInfo, true, nil
+	}
+	return &i.VersionInfo, false, nil
 }

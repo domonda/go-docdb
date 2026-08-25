@@ -29,7 +29,7 @@ func TestCreateDocumentVersion(t *testing.T) {
 		// given
 		t.Parallel()
 		ctx := pgfixtures.FixtureCtxWithTestTx(t)
-		version := docdb.NewVersionTime()
+		version := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
 		docID := uu.IDv7()
 		companyID := uu.IDv7()
 
@@ -126,7 +126,7 @@ func TestCreateDocumentVersionVersionsExistMode(t *testing.T) {
 		docID := uu.IDv7()
 		companyID := uu.IDv7()
 		userID := uu.IDv7()
-		version := docdb.NewVersionTime()
+		version := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
 		addedFiles := []*docdb.FileInfo{fileInfo("a.pdf", "a"), fileInfo("b.pdf", "b")}
 
 		created, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{DocID: docID, CompanyID: companyID, UserID: userID, Reason: "reason", NewVersion: version, AddedFiles: addedFiles})
@@ -170,8 +170,8 @@ func TestCreateDocumentVersionVersionsExistMode(t *testing.T) {
 		docID := uu.IDv7()
 		companyID := uu.IDv7()
 		userID := uu.IDv7()
-		v1 := docdb.NewVersionTime()
-		v2 := docdb.VersionTimeFrom(time.Now().Add(time.Second))
+		v1 := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
+		v2 := docdb.MustVersionTimeFromString("2024-01-01_00-00-02.000")
 
 		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
 			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "v1", NewVersion: v1,
@@ -201,7 +201,7 @@ func TestCreateDocumentVersionVersionsExistMode(t *testing.T) {
 		docID := uu.IDv7()
 		companyID := uu.IDv7()
 		userID := uu.IDv7()
-		version := docdb.NewVersionTime()
+		version := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
 		fileA := fileInfo("a.pdf", "a")
 		fileB := fileInfo("b.pdf", "b")
 
@@ -231,7 +231,7 @@ func TestCreateDocumentVersionVersionsExistMode(t *testing.T) {
 		companyID := uu.IDv7()
 		storedUserID := uu.IDv7()
 		alternateUserID := uu.IDv7()
-		version := docdb.NewVersionTime()
+		version := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
 		addedFiles := []*docdb.FileInfo{fileInfo("a.pdf", "a")}
 
 		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
@@ -263,7 +263,7 @@ func TestCreateDocumentVersionVersionsExistMode(t *testing.T) {
 		docID := uu.IDv7()
 		companyID := uu.IDv7()
 		userID := uu.IDv7()
-		version := docdb.NewVersionTime()
+		version := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
 		addedFiles := []*docdb.FileInfo{fileInfo("a.pdf", "a")}
 
 		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{DocID: docID, CompanyID: companyID, UserID: userID, Reason: "reason", NewVersion: version, AddedFiles: addedFiles})
@@ -284,7 +284,7 @@ func TestCreateDocumentVersionVersionsExistMode(t *testing.T) {
 		docID := uu.IDv7()
 		companyID := uu.IDv7()
 		userID := uu.IDv7()
-		version := docdb.NewVersionTime()
+		version := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
 
 		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
 			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "reason", NewVersion: version,
@@ -309,7 +309,7 @@ func TestCreateDocumentVersionVersionsExistMode(t *testing.T) {
 		ctx := pgfixtures.FixtureCtxWithTestTx(t)
 		docID := uu.IDv7()
 		userID := uu.IDv7()
-		version := docdb.NewVersionTime()
+		version := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
 		addedFiles := []*docdb.FileInfo{fileInfo("a.pdf", "a")}
 
 		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{DocID: docID, CompanyID: uu.IDv7(), UserID: userID, Reason: "reason", NewVersion: version, AddedFiles: addedFiles})
@@ -329,7 +329,7 @@ func TestCreateDocumentVersionVersionsExistMode(t *testing.T) {
 		ctx := pgfixtures.FixtureCtxWithTestTx(t)
 		docID := uu.IDv7()
 		companyID := uu.IDv7()
-		version := docdb.NewVersionTime()
+		version := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
 		addedFiles := []*docdb.FileInfo{fileInfo("a.pdf", "a")}
 
 		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{DocID: docID, CompanyID: companyID, UserID: uu.IDv7(), Reason: "reason", NewVersion: version, AddedFiles: addedFiles})
@@ -350,8 +350,8 @@ func TestCreateDocumentVersionVersionsExistMode(t *testing.T) {
 		docID := uu.IDv7()
 		companyID := uu.IDv7()
 		userID := uu.IDv7()
-		v1 := docdb.NewVersionTime()
-		v2 := docdb.VersionTimeFrom(time.Now().Add(time.Second))
+		v1 := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
+		v2 := docdb.MustVersionTimeFromString("2024-01-01_00-00-02.000")
 
 		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
 			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "v1", NewVersion: v1,
@@ -379,7 +379,7 @@ func TestCreateDocumentVersionVersionsExistMode(t *testing.T) {
 		docID := uu.IDv7()
 		companyID := uu.IDv7()
 		userID := uu.IDv7()
-		version := docdb.NewVersionTime()
+		version := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
 
 		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
 			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "reason", NewVersion: version,
@@ -405,8 +405,8 @@ func TestCreateDocumentVersionVersionsExistMode(t *testing.T) {
 		docID := uu.IDv7()
 		companyID := uu.IDv7()
 		userID := uu.IDv7()
-		v1 := docdb.NewVersionTime()
-		v2 := docdb.VersionTimeFrom(time.Now().Add(time.Second))
+		v1 := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
+		v2 := docdb.MustVersionTimeFromString("2024-01-01_00-00-02.000")
 
 		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
 			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "v1", NewVersion: v1,
@@ -436,8 +436,8 @@ func TestCreateDocumentVersionVersionsExistMode(t *testing.T) {
 		docID := uu.IDv7()
 		companyID := uu.IDv7()
 		userID := uu.IDv7()
-		v1 := docdb.NewVersionTime()
-		v2 := docdb.VersionTimeFrom(time.Now().Add(time.Second))
+		v1 := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
+		v2 := docdb.MustVersionTimeFromString("2024-01-01_00-00-02.000")
 
 		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
 			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "v1", NewVersion: v1,
@@ -468,7 +468,7 @@ func TestCreateDocumentVersionVersionsExistMode(t *testing.T) {
 		assumeCtx := pgstore.ContextWithMetadataStoreVersionsExist(ctx)
 		_, err := store.CreateDocumentVersion(assumeCtx, storeconn.CreateDocumentVersionInput{
 			DocID: uu.IDv7(), CompanyID: uu.IDv7(), UserID: uu.IDv7(), Reason: "reason",
-			NewVersion: docdb.NewVersionTime(), AddedFiles: []*docdb.FileInfo{fileInfo("a.pdf", "a")},
+			NewVersion: docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000"), AddedFiles: []*docdb.FileInfo{fileInfo("a.pdf", "a")},
 		})
 
 		// then
@@ -487,8 +487,8 @@ func TestCreateDocumentVersionMissingPreviousVersion(t *testing.T) {
 	// carried-forward file set must fail explicitly rather than silently treat
 	// the missing previous version as having zero files (which would persist a
 	// new version missing its carried-forward files).
-	missingPrev := docdb.NewVersionTime()
-	newVersion := docdb.VersionTimeFrom(time.Now().Add(time.Second))
+	missingPrev := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
+	newVersion := docdb.MustVersionTimeFromString("2024-01-01_00-00-02.000")
 
 	_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
 		DocID: docID, CompanyID: companyID, UserID: userID, Reason: "reason",
@@ -512,8 +512,8 @@ func TestCreateDocumentVersionWithExplicitFiles(t *testing.T) {
 	// directly and skip the predecessor lookup: a previousVersion that was never
 	// stored (which would otherwise fail with a carry-files-forward not-found
 	// error, see TestCreateDocumentVersionMissingPreviousVersion) is not queried.
-	missingPrev := docdb.NewVersionTime()
-	newVersion := docdb.VersionTimeFrom(time.Now().Add(time.Second))
+	missingPrev := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
+	newVersion := docdb.MustVersionTimeFromString("2024-01-01_00-00-02.000")
 	fileA := docdb.FileInfo{Name: "a.pdf", Size: 1, Hash: docdb.ContentHash([]byte("a"))}
 	fileB := docdb.FileInfo{Name: "b.pdf", Size: 1, Hash: docdb.ContentHash([]byte("b"))}
 	wantFiles := map[string]docdb.FileInfo{fileA.Name: fileA, fileB.Name: fileB}
@@ -544,7 +544,7 @@ func TestCreateDocumentVersionDuplicate(t *testing.T) {
 		docID := uu.IDv7()
 		companyID := uu.IDv7()
 		userID := uu.IDv7()
-		version := docdb.NewVersionTime()
+		version := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
 
 		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
 			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "reason", NewVersion: version, AddedFiles: addedFiles,
@@ -565,8 +565,8 @@ func TestCreateDocumentVersionDuplicate(t *testing.T) {
 		docID := uu.IDv7()
 		companyID := uu.IDv7()
 		userID := uu.IDv7()
-		v1 := docdb.NewVersionTime()
-		v2 := docdb.VersionTimeFrom(time.Now().Add(time.Second))
+		v1 := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
+		v2 := docdb.MustVersionTimeFromString("2024-01-01_00-00-02.000")
 
 		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
 			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "reason", NewVersion: v1, AddedFiles: addedFiles,
@@ -588,8 +588,8 @@ func TestCreateDocumentVersionDuplicate(t *testing.T) {
 		docID := uu.IDv7()
 		companyID := uu.IDv7()
 		userID := uu.IDv7()
-		v1 := docdb.NewVersionTime()
-		v2 := docdb.VersionTimeFrom(time.Now().Add(time.Second))
+		v1 := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
+		v2 := docdb.MustVersionTimeFromString("2024-01-01_00-00-02.000")
 
 		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
 			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "v1", NewVersion: v1, AddedFiles: addedFiles,
@@ -621,7 +621,6 @@ func TestDocumentCompanyID(t *testing.T) {
 		docVersion1 := populator.DocumentVersion()
 		docVersion2 := populator.DocumentVersion(map[string]any{
 			"DocumentID": docVersion1.DocumentID,
-			"Version":    docdb.VersionTimeFrom(time.Now().Add(time.Second)),
 		})
 		ctx := pgfixtures.FixtureCtxWithTestTx(t)
 
@@ -660,7 +659,6 @@ func TestSetDocumentCompanyID(t *testing.T) {
 		docVersion1 := populator.DocumentVersion()
 		populator.DocumentVersion(map[string]any{
 			"DocumentID": docVersion1.DocumentID,
-			"Version":    docdb.VersionTimeFrom(time.Now().Add(time.Second)),
 		})
 		ctx := pgfixtures.FixtureCtxWithTestTx(t)
 
@@ -706,7 +704,6 @@ func TestDocumentVersions(t *testing.T) {
 		docVersion1 := populator.DocumentVersion()
 		docVersion2 := populator.DocumentVersion(map[string]any{
 			"DocumentID": docVersion1.DocumentID,
-			"Version":    docdb.VersionTimeFrom(time.Now().Add(time.Second)),
 		})
 		// not wanted, different doc ID
 		populator.DocumentVersion()
@@ -746,7 +743,6 @@ func TestCompanyDocumentIDs(t *testing.T) {
 		populator.DocumentVersion(map[string]any{
 			"DocumentID": doc1Version1.DocumentID,
 			"CompanyID":  doc1Version1.CompanyID,
-			"Version":    docdb.VersionTimeFrom(time.Now().Add(time.Second)),
 		})
 		doc2Version1 := populator.DocumentVersion(map[string]any{
 			"DocumentID": uu.IDFrom("c7e67e60-9548-43c6-83be-55cb736a5761"),
@@ -795,7 +791,6 @@ func TestCompanyDocumentIDs(t *testing.T) {
 		populator.DocumentVersion(map[string]any{
 			"DocumentID": version1.DocumentID,
 			"CompanyID":  companyID,
-			"Version":    docdb.VersionTimeFrom(time.Now().Add(time.Second)),
 		})
 
 		// when
@@ -824,7 +819,6 @@ func TestCompanyIDs(t *testing.T) {
 		populator.DocumentVersion(map[string]any{
 			"DocumentID": doc1.DocumentID,
 			"CompanyID":  companyA,
-			"Version":    docdb.VersionTimeFrom(time.Now().Add(time.Second)),
 		})
 		populator.DocumentVersion(map[string]any{"CompanyID": companyA})
 		populator.DocumentVersion(map[string]any{"CompanyID": companyC})
@@ -834,11 +828,23 @@ func TestCompanyIDs(t *testing.T) {
 
 		// then
 		require.NoError(t, err)
+		// Narrowed to the companies this test created: CompanyIDs answers for
+		// the whole store, so asserting the full list would make the test
+		// depend on no other test having committed a document version — a
+		// coupling that holds only as long as every test runs inside a
+		// rolled-back transaction.
+		own := slices.DeleteFunc(slices.Clone(companyIDs), func(id uu.ID) bool {
+			return id != companyA && id != companyC
+		})
 		// a3c6... sorts before c7e6..., and companyA appears once despite
 		// owning multiple documents and versions.
-		require.Equal(t, uu.IDSlice{companyA, companyC}, companyIDs)
+		require.Equal(t, uu.IDSlice{companyA, companyC}, own)
 	})
 
+	// Unlike the subtests around it this one cannot be narrowed to its own
+	// data: nil rather than an empty slice is precisely what an empty store
+	// answers, so it asserts on the whole store and holds only as long as no
+	// test commits a document version outside its rolled-back transaction.
 	t.Run("Returns nil if no documents", func(t *testing.T) {
 		// given
 		t.Parallel()
@@ -866,7 +872,6 @@ func TestCompanyIDs(t *testing.T) {
 		populator.DocumentVersion(map[string]any{
 			"DocumentID": version1.DocumentID,
 			"CompanyID":  companyID,
-			"Version":    docdb.VersionTimeFrom(time.Now().Add(time.Second)),
 		})
 
 		// when
@@ -874,7 +879,10 @@ func TestCompanyIDs(t *testing.T) {
 
 		// then
 		require.NoError(t, err)
-		require.Equal(t, uu.IDSlice{companyID}, companyIDs)
+		require.NotContains(t, companyIDs, prevCompanyID,
+			"the company the document was moved away from has no documents left")
+		require.Contains(t, companyIDs, companyID,
+			"the company the document was moved to owns it now")
 	})
 }
 
@@ -888,7 +896,6 @@ func TestLatestDocumentVersion(t *testing.T) {
 		docVersion1 := populator.DocumentVersion()
 		docVersion2 := populator.DocumentVersion(map[string]any{
 			"DocumentID": docVersion1.DocumentID,
-			"Version":    docdb.VersionTimeFrom(time.Now().Add(time.Second)),
 		})
 		// not wanted, different doc ID
 		populator.DocumentVersion()
@@ -993,7 +1000,7 @@ func TestDocumentVersionInfo(t *testing.T) {
 		ctx := pgfixtures.FixtureCtxWithTestTx(t)
 
 		// when
-		_, err := store.DocumentVersionInfo(ctx, uu.IDv7(), docdb.VersionTimeFrom(time.Now()))
+		_, err := store.DocumentVersionInfo(ctx, uu.IDv7(), docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000"))
 
 		// then
 		require.ErrorIs(t, err, sql.ErrNoRows)
@@ -1011,7 +1018,6 @@ func TestLatestDocumentVersionInfo(t *testing.T) {
 
 		docVersion2 := populator.DocumentVersion(map[string]any{
 			"DocumentID": docVersion1File.DocumentVersion.DocumentID,
-			"Version":    docdb.VersionTimeFrom(time.Now().Add(time.Second)),
 		})
 
 		// expected
@@ -1103,7 +1109,6 @@ func TestDeleteDocument(t *testing.T) {
 		doc1Version1 := populator.DocumentVersion()
 		populator.DocumentVersion(map[string]any{
 			"DocumentID": doc1Version1.DocumentID,
-			"Version":    docdb.VersionTimeFrom(time.Now().Add(time.Second)),
 		})
 
 		doc2Version := populator.DocumentVersion()
@@ -1194,15 +1199,16 @@ func TestDeleteDocumentVersion(t *testing.T) {
 		populator := pgfixtures.FixturePopulator(t)
 		versionFile1 := populator.DocumentVersionFile(map[string]any{
 			"Hash": docdb.ContentHash([]byte("b")),
+			"Size": int64(len("b")),
 		})
 		versionFile2 := populator.DocumentVersionFile(map[string]any{
 			"DocumentVersion": versionFile1.DocumentVersion,
 			"Hash":            docdb.ContentHash([]byte("a")),
+			"Size":            int64(len("a")),
 		})
 
 		docVersion2 := populator.DocumentVersion(map[string]any{
 			"DocumentID": versionFile1.DocumentVersion.DocumentID,
-			"Version":    docdb.VersionTimeFrom(time.Now().Add(time.Second)),
 		})
 		versionFile3 := populator.DocumentVersionFile(map[string]any{
 			"DocumentVersion": docVersion2,
@@ -1237,7 +1243,7 @@ func TestDeleteDocumentVersion(t *testing.T) {
 		docID := uu.IDv7()
 
 		// when
-		_, _, err := store.DeleteDocumentVersion(ctx, docID, docdb.VersionTimeFrom(time.Now()))
+		_, _, err := store.DeleteDocumentVersion(ctx, docID, docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000"))
 
 		// then
 		require.ErrorIs(t, err, docdb.NewErrDocumentNotFound(docID))
@@ -1254,24 +1260,26 @@ func TestDeleteDocumentVersion(t *testing.T) {
 		ctx := pgfixtures.FixtureCtxWithTestTx(t)
 		populator := pgfixtures.FixturePopulator(t)
 
-		sharedHash := docdb.ContentHash([]byte("shared content"))
+		sharedContent := []byte("shared content")
+		sharedHash := docdb.ContentHash(sharedContent)
 
 		// version 1 with a single file
 		versionFile1 := populator.DocumentVersionFile(map[string]any{
 			"Name": "shared.pdf",
 			"Hash": sharedHash,
+			"Size": int64(len(sharedContent)),
 		})
 
 		// version 2 of the SAME document carries the same file (same hash) forward
 		docVersion2 := populator.DocumentVersion(map[string]any{
 			"DocumentID": versionFile1.DocumentVersion.DocumentID,
 			"CompanyID":  versionFile1.DocumentVersion.CompanyID,
-			"Version":    docdb.VersionTimeFrom(time.Now().Add(time.Second)),
 		})
 		populator.DocumentVersionFile(map[string]any{
 			"DocumentVersion": docVersion2,
 			"Name":            "shared.pdf",
 			"Hash":            sharedHash,
+			"Size":            int64(len(sharedContent)),
 		})
 
 		// when: delete version 1, whose only file hash is still used by version 2
@@ -1294,14 +1302,15 @@ func TestDeleteDocumentVersion(t *testing.T) {
 		populator := pgfixtures.FixturePopulator(t)
 		versionFile1 := populator.DocumentVersionFile(map[string]any{
 			"Hash": docdb.ContentHash([]byte("b")),
+			"Size": int64(len("b")),
 		})
 		versionFile2 := populator.DocumentVersionFile(map[string]any{
 			"DocumentVersion": versionFile1.DocumentVersion,
 			"Hash":            docdb.ContentHash([]byte("a")),
+			"Size":            int64(len("a")),
 		})
 		docVersion2 := populator.DocumentVersion(map[string]any{
 			"DocumentID": versionFile1.DocumentVersion.DocumentID,
-			"Version":    docdb.VersionTimeFrom(time.Now().Add(time.Second)),
 		})
 		versionFile3 := populator.DocumentVersionFile(map[string]any{
 			"DocumentVersion": docVersion2,
@@ -1339,7 +1348,7 @@ func TestDeleteDocumentVersion(t *testing.T) {
 
 		// when
 		versionsExistCtx := pgstore.ContextWithMetadataStoreVersionsExist(ctx)
-		_, _, err := store.DeleteDocumentVersion(versionsExistCtx, docID, docdb.VersionTimeFrom(time.Now()))
+		_, _, err := store.DeleteDocumentVersion(versionsExistCtx, docID, docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000"))
 
 		// then
 		require.ErrorIs(t, err, docdb.NewErrDocumentNotFound(docID))
@@ -1369,7 +1378,6 @@ func TestDeleteDocumentVersion(t *testing.T) {
 		moveVersion := populator.DocumentVersion(map[string]any{
 			"DocumentID": version1.DocumentID,
 			"CompanyID":  newCompanyID,
-			"Version":    docdb.VersionTimeFrom(time.Now().Add(time.Second)),
 		})
 
 		// the move is in effect: the document belongs to and is listed under
@@ -1424,7 +1432,7 @@ func TestCreateDocumentVersionConcurrentAppend(t *testing.T) {
 	companyID := uu.IDv7()
 	userID := uu.IDv7()
 
-	genesis := docdb.NewVersionTime()
+	genesis := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
 	_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
 		DocID: docID, CompanyID: companyID, UserID: userID, Reason: "genesis", NewVersion: genesis,
 		AddedFiles: []*docdb.FileInfo{{Name: "a.pdf", Size: 1, Hash: docdb.ContentHash([]byte("a"))}},
@@ -1485,7 +1493,7 @@ func TestCreateDocumentVersionConcurrentAppendOutOfOrder(t *testing.T) {
 	companyID := uu.IDv7()
 	userID := uu.IDv7()
 
-	genesis := docdb.NewVersionTime()
+	genesis := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
 	_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
 		DocID: docID, CompanyID: companyID, UserID: userID, Reason: "genesis", NewVersion: genesis,
 		AddedFiles: []*docdb.FileInfo{{Name: "a.pdf", Size: 1, Hash: docdb.ContentHash([]byte("a"))}},
@@ -1546,7 +1554,7 @@ func TestCreateDocumentVersionRelinksOnlyTheNamedSuccessor(t *testing.T) {
 	newDoc := func(t *testing.T, ctx context.Context) (docID, companyID, userID uu.ID, genesis docdb.VersionTime) {
 		t.Helper()
 		docID, companyID, userID = uu.IDv7(), uu.IDv7(), uu.IDv7()
-		genesis = docdb.NewVersionTime()
+		genesis = docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
 		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
 			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "genesis", NewVersion: genesis,
 			AddedFiles: []*docdb.FileInfo{{Name: "a.pdf", Size: 1, Hash: docdb.ContentHash([]byte("a"))}},

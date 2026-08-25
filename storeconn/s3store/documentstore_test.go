@@ -97,7 +97,7 @@ func TestCreateDocumentVersion(t *testing.T) {
 		documentStore := s3fixtures.FixtureGlobalDocumentStore(t)
 		client := s3fixtures.FixtureGlobalS3Client(t)
 		docID := uu.IDv7()
-		version := docdb.NewVersionTime()
+		version := docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
 
 		files := []fs.MemFile{
 			{
@@ -142,7 +142,7 @@ func TestCreateDocumentVersion(t *testing.T) {
 		_, err := documentStore.CreateDocumentVersion(
 			t.Context(),
 			uu.IDv4(),
-			docdb.NewVersionTime(),
+			docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000"),
 			[]fs.FileReader{&fs.MemFile{}},
 		)
 

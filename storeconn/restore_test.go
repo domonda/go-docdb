@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -241,6 +242,48 @@ func TestConn_RestoreDocument_RollsBackOnPanic(t *testing.T) {
 	require.Equal(t, 1, meta.deleteDocumentCalls+len(meta.deletedVersions))
 }
 
+// TestConn_DocumentExists_ReportsEitherStore covers the two half-written states
+// the split stores produce, both of which the rest of this Conn answers for: a
+// document the MetadataStore knows and the DocumentStore does not is what a
+// migration that mirrored the version rows before copying any file content
+// leaves behind, and the mirror of it is what a cancellation between the two
+// writes leaves behind.
+//
+// Reporting either of them as non-existent would make a caller guarding on
+// DocumentExists skip a document whose versions, company and metadata it can
+// read, whose DeleteDocument succeeds, and which RestoreDocument exists to
+// repair.
+func TestConn_DocumentExists_ReportsEitherStore(t *testing.T) {
+	companyID := uu.IDv4()
+	docID := uu.IDv4()
+	doc, v1, _ := newRestoreTestDoc(companyID, docID)
+
+	t.Run("metadata without file content", func(t *testing.T) {
+		conn := storeconn.New(newFakeDocumentStore(), newRestoreMetadataStore(t, doc, v1))
+
+		exists, err := conn.DocumentExists(t.Context(), docID)
+		require.NoError(t, err)
+		require.True(t, exists)
+	})
+
+	t.Run("file content without metadata", func(t *testing.T) {
+		docs := newFakeDocumentStore(docdb.FileInfo{Name: "a.txt", Hash: doc.Versions[v1].FileHashes["a.txt"]})
+		conn := storeconn.New(docs, newRestoreMetadataStore(t, doc))
+
+		exists, err := conn.DocumentExists(t.Context(), docID)
+		require.NoError(t, err)
+		require.True(t, exists)
+	})
+
+	t.Run("neither store", func(t *testing.T) {
+		conn := storeconn.New(newFakeDocumentStore(), newRestoreMetadataStore(t, doc))
+
+		exists, err := conn.DocumentExists(t.Context(), docID)
+		require.NoError(t, err)
+		require.False(t, exists)
+	})
+}
+
 // TestConn_DeleteDocument_DeletesFileContentWithoutMetadata covers a document
 // whose metadata is gone but whose file content is not — what a failure or
 // cancellation between the two deletes, or between the two writes, leaves
@@ -288,8 +331,8 @@ func TestConn_RestoreDocument_RecreateRepairsFileContentWithoutMetadata(t *testi
 // any blob leaves behind, and what a write cancelled between the two steps
 // leaves behind.
 //
-// The up-front delete used to be gated on DocumentExists, which reports only
-// what the DocumentStore holds, so for such a document it was skipped. The loop
+// The up-front delete used to be gated on the DocumentStore's own existence
+// check, which such a document fails, so for it the delete was skipped. The loop
 // then took the genesis path for a version the MetadataStore already had, which
 // the one-genesis-per-document index refuses with ErrDocumentAlreadyExists —
 // and CreateDocument's rollback deliberately keeps the blobs it wrote for that
@@ -566,7 +609,11 @@ func newFourVersionDoc(companyID, docID uu.ID) (doc *docdb.HashedDocument, versi
 	}
 	files := make(map[string]string, 4)
 	for i, name := range names {
-		versions[i] = docdb.MustVersionTimeFromString(fmt.Sprintf("2024-01-0%d_00-00-00.000", i+1))
+		// %02d, not a literal 0 before %d: a fifth name would otherwise format
+		// as "2024-01-010", which MustVersionTimeFromString panics on — turning
+		// the obvious way to grow this fixture into a panic in the helper
+		// rather than a failure in the test that grew it.
+		versions[i] = docdb.MustVersionTimeFromString(fmt.Sprintf("2024-01-%02d_00-00-00.000", i+1))
 		data := []byte("content of " + name)
 		hash := docdb.ContentHash(data)
 		hashed[hash] = data
@@ -618,4 +665,60 @@ func TestConn_RestoreDocument_FillsInAdjacentMissingVersions(t *testing.T) {
 	// forking. Naming a successor that is already correctly attached is a
 	// no-op, which is why scanning forward is safe to do on every version.
 	require.Equal(t, &v[3], meta.relinkSuccessors[v[2]])
+}
+
+// TestConn_RestoreDocument_GenesisAddedFilesAreSorted verifies that restoring a
+// document's genesis version persists its AddedFiles sorted by filename.
+//
+// That list reaches persisted state: the genesis version goes through
+// CreateDocument, which records every file as an added file, and the
+// MetadataStore stores the list verbatim. Built straight from the backup's file
+// map it would be committed in Go's randomized map order, so restoring one
+// backup into two stores would persist two different added_files for the same
+// version — and both would differ from localfsdb, which derives the list
+// through docdb.VersionInfo.SetFileDeltas and sorts it there.
+//
+// Nothing else catches this: VersionInfo.Equal compares the change lists
+// order-insensitively, so a restore verifying itself against an already stored
+// version accepts either order and the divergence only shows up in the database.
+func TestConn_RestoreDocument_GenesisAddedFilesAreSorted(t *testing.T) {
+	companyID := uu.IDv4()
+	docID := uu.IDv4()
+	v1 := docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+
+	// Enough files that map order is sorted only by accident: 8 names have 8!
+	// orders, so an unsorted implementation passes about once in 40320 runs
+	// instead of reliably.
+	names := []string{"h.txt", "c.txt", "f.txt", "a.txt", "g.txt", "b.txt", "e.txt", "d.txt"}
+	hashedFiles := make(map[string][]byte, len(names))
+	fileHashes := make(map[string]string, len(names))
+	for _, name := range names {
+		data := []byte("content of " + name)
+		hash := docdb.ContentHash(data)
+		hashedFiles[hash] = data
+		fileHashes[name] = hash
+	}
+	doc := &docdb.HashedDocument{
+		ID:          docID,
+		CompanyID:   companyID,
+		HashedFiles: hashedFiles,
+		Versions: map[docdb.VersionTime]*docdb.HashedVersion{
+			v1: {CommitUserID: uu.IDv4(), CommitReason: "initial", FileHashes: fileHashes},
+		},
+	}
+
+	// Neither store holds anything, so the version takes the genesis create path.
+	meta := newRestoreMetadataStore(t, doc)
+	conn := storeconn.New(newFakeDocumentStore(), meta)
+
+	err := conn.RestoreDocument(t.Context(), doc, false)
+	require.NoError(t, err)
+
+	require.Len(t, meta.createInputs, 1)
+	addedNames := make([]string, 0, len(meta.createInputs[0].AddedFiles))
+	for _, file := range meta.createInputs[0].AddedFiles {
+		addedNames = append(addedNames, file.Name)
+	}
+	require.Equal(t, slices.Sorted(slices.Values(names)), addedNames,
+		"a restored genesis version must persist its AddedFiles sorted by filename, not in map iteration order")
 }

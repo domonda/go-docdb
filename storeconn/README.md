@@ -76,7 +76,7 @@ The two interfaces are defined in [documentstore.go](documentstore.go) and
 | ----------------------------------------- | --------------- |
 | Raw file bytes, keyed by content hash     | `DocumentStore` |
 | Deduplication of identical content        | `DocumentStore` |
-| Existence of a document (any blobs?)      | `DocumentStore` |
+| Existence of a document's blobs           | `DocumentStore` |
 | Per-file presence check (name + hash)     | `DocumentStore` |
 | Company ownership + the company index     | `MetadataStore` |
 | Version timestamps and their ordering     | `MetadataStore` |
@@ -87,14 +87,29 @@ The two interfaces are defined in [documentstore.go](documentstore.go) and
 The pass-through methods map directly onto this table:
 
 ```go
-func (c *conn) DocumentExists(ctx, docID)        { return c.documentStore.DocumentExists(...) }
-
 func (c *conn) CompanyIDs(ctx)                   { return c.metadataStore.CompanyIDs(...) }
 func (c *conn) DocumentCompanyID(ctx, docID)     { return c.metadataStore.DocumentCompanyID(...) }
 func (c *conn) DocumentVersions(ctx, docID)      { return c.metadataStore.DocumentVersions(...) }
 func (c *conn) LatestDocumentVersionInfo(ctx, …) { return c.metadataStore.LatestDocumentVersionInfo(...) }
 // …etc
 ```
+
+`DocumentExists` is the one existence question that is **not** a pass-through: it
+reports a document that *either* store holds. The two stores are written and
+deleted one after the other, and a `MetadataStore` can be populated on its own by
+a migration that has not copied the file content over yet, so a document can
+exist as metadata without a single stored object. Every other method keyed by a
+document already answers for such a document — `DocumentVersions`,
+`DocumentCompanyID` and `LatestDocumentVersionInfo` return its metadata,
+`DeleteDocument` deletes it, and `RestoreDocument` exists to repair it — so
+reporting it as non-existent made a caller guarding on `DocumentExists` skip
+exactly the half-written document it has to repair. The `MetadataStore` has no
+existence method of its own, so `conn` asks `DocumentVersions` and reads
+`ErrDocumentNotFound` as the negative answer.
+
+`RestoreDocument` and `CreateDocument` keep asking
+`documentStore.DocumentExists` directly, because what they decide from that
+answer is whether any *file content* is there.
 
 ## How the two halves map together
 
@@ -228,8 +243,11 @@ in-memory backup. It supports two modes:
   failure leaves the document absent until retried. Safe for the `SyncDocument`
   flow where the source still holds the data.
 - **`recreate=false`** — additive merge: create if missing; otherwise keep
-  versions that are fully stored and write what is missing. CompanyID mismatch
-  aborts without changes.
+  versions that are fully stored and write what is missing. The company check is
+  `docdb.CheckRestoreCompanyID`, which compares the stored company against the
+  one the backup names for the destination's own latest version, so a backup
+  whose newer versions move the document is restored as that move rather than
+  refused as a mismatch. A real mismatch aborts without changes.
 
 A version is only skipped when the `MetadataStore` holds it **and** the
 `DocumentStore` holds every one of its files, which `versionsFullyStored` checks
@@ -344,6 +362,32 @@ is the serialization point for concurrent `CreateDocument` calls on the same
 `docID`: the loser receives `ErrDocumentAlreadyExists`, and (as described above)
 its rollback deliberately leaves the shared, content-addressed blobs in place
 rather than corrupting the winner's document.
+
+Concurrent `AddDocumentVersion` calls are serialized the same way, by the chain
+itself. `AddDocumentVersion` reads the latest version, carries its file set
+forward, applies its own changes and inserts — so two callers doing that at once
+both build their result from the same predecessor, and whichever inserts second
+writes a file set that never saw the first one's changes. Nothing about that
+second insert looks wrong on its own: its version timestamp is unique and it is
+not a genesis. A document's versions are a chain, so a version has at most one
+successor, and a `MetadataStore` must refuse a second version naming an
+already-used `PreviousVersion` with `docdb.ErrDocumentChanged` — the optimistic
+concurrency conflict the type was declared for. The loser redoes its work from
+the new latest version. `pgstore` enforces this with the unique index
+`document_version_one_successor_per_version_idx` on `(document_id, prev_version)`;
+`localfsdb` needs no equivalent because it serializes writers per document with a
+mutex, which `storeconn` cannot do — its writers are separate processes sharing
+Postgres and S3.
+
+The one existing version that may be re-chained onto a new one is the successor
+named by `CreateDocumentVersionInput.RelinkSuccessor`, and only `RestoreDocument`
+names one, to undo the relink `DeleteDocumentVersion` performed when the version
+being restored was removed. It is named rather than found because no property of
+the stored rows identifies it: adopting whichever version chains off the same
+predecessor and sorts later would capture exactly the concurrent append that has
+to be refused, and version timestamps do not order the inserts either — a
+`CreateVersionFunc` stamps its version when it starts, so a slower writer can
+hold the earlier timestamp.
 
 ## Read-only wrapping
 

@@ -71,6 +71,8 @@ type VersionInfo struct {
 
 `vi.SetFileDeltas(prevFiles map[string]FileInfo)` derives the three change lists by comparing `vi.Files` against the previous version's files (pass `nil` for the first version). Every implementation uses it, so the lists of a document copied from one `Conn` to another match the ones already stored.
 
+`vi.ChangesNothing(prev *VersionInfo, companyID uu.ID)` reports whether committing `vi` after `prev` would record no change at all — the same file set *and* the same company — which every implementation rejects with `ErrNoChanges`. A version with the same files as its predecessor is still a change when it names another company: that is how a document is moved between companies.
+
 ### `FileInfo`
 
 ```go
@@ -181,7 +183,7 @@ type CreateVersionResult struct {
 }
 ```
 
-If `createVersion` or `onNewVersion` returns an error or panics, the version creation is rolled back. Returns `ErrNoChanges` if the resulting file set is identical to the previous version.
+If `createVersion` or `onNewVersion` returns an error or panics, the version creation is rolled back. Returns `ErrNoChanges` if the resulting file set is identical to the previous version *and* the version does not change the company. A version that only changes the company is how a document is moved between companies and is not a change-less version.
 
 **Convenience helpers for common cases:**
 
@@ -197,6 +199,33 @@ err := conn.AddDocumentVersion(ctx, docID, userID, "removed attachment",
     docdb.CaptureNewVersionInfo(&versionInfo))
 ```
 
+### Moving a document between companies
+
+A document belongs to the company of its **latest version**. Move it by committing a version that names the new company in `CreateVersionResult.NewCompanyID`:
+
+```go
+err := conn.AddDocumentVersion(ctx, docID, userID, "moved to acquiring company",
+    func(ctx context.Context, docID uu.ID, prevVersion docdb.VersionTime, prevFiles docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+        return &docdb.CreateVersionResult{
+            Version:      docdb.NewVersionTime(),
+            NewCompanyID: newCompanyID.Nullable(), // no file changes needed
+        }, nil
+    },
+    docdb.CaptureNewVersionInfo(&versionInfo))
+```
+
+The move is a version like any other, which is the point: it is recorded in the document's history, with a commit user and a reason, instead of changing the owner behind it. Four consequences follow.
+
+**A move needs no file changes.** A version that changes nothing but the company is a change, so it does not return `ErrNoChanges` (see `VersionInfo.ChangesNothing`). Files can change in the same version if you want them to.
+
+**Ownership follows the latest version.** `DocumentCompanyID` returns the company of the latest version, and `CompanyDocumentIDs` lists a moved document under its new company only — never under both, and no longer under the previous one, even though the versions committed before the move still name it. Deleting the latest version of a moved document hands it back to the company of the version that becomes the latest one.
+
+**Backups carry the move.** Each `HashedVersion` has its own `CompanyID` (`uu.IDNil` means "inherit the document's"), so `ReadHashedDocument` → `RestoreDocument` and `SyncDocument` reproduce the move history rather than filing every version under the current company. Look a version's company up with `backup.VersionCompanyID(v)`. An additive restore compares companies with `CheckRestoreCompanyID`, which is what lets a backup whose newer versions move the document be restored *as* that move — see [Backup & Restore](#backup--restore).
+
+**`SetDocumentCompanyID` is the other way, and the discouraged one.** It rewrites the owner without committing a version, leaving no record of who moved the document or why, and a company marker that no version names. Prefer the version route; reach for `SetDocumentCompanyID` only to repair an owner that is already wrong.
+
+Under `routerconn`, a move to a company that resolves to a *different* backend is refused rather than committed on the backend the document is on — via `SetDocumentCompanyID`, via a version naming `NewCompanyID`, and via a restore. Carrying a document to another backend is a migration (copy every version, delete the original), not a company change.
+
 ### Adding a version to multiple documents atomically
 
 ```go
@@ -209,7 +238,7 @@ Documents with no file changes are silently skipped. Returns `ErrNoChanges` only
 
 | Error                        | Description                                        |
 | ---------------------------- | -------------------------------------------------- |
-| `ErrNoChanges`               | New version is identical to the previous version   |
+| `ErrNoChanges`               | New version has the same files and the same company as the previous version |
 | `ErrNotImplemented`          | Operation not supported by this `Conn` implementation |
 | `ErrReadonly`                | Write method called on a read-only `Conn`          |
 | `ErrDocumentNotFound`        | No document with the given ID; also matches `os.ErrNotExist`, `sql.ErrNoRows`, `errs.ErrNotFound` |
@@ -217,7 +246,7 @@ Documents with no file changes are silently skipped. Returns `ErrNoChanges` only
 | `ErrDocumentVersionNotFound` | Version not found for the document                 |
 | `ErrDocumentAlreadyExists`   | `CreateDocument` called for an existing document ID |
 | `ErrVersionAlreadyExists`    | Version timestamp already in use                   |
-| `ErrDocumentChanged`         | Optimistic concurrency conflict                    |
+| `ErrDocumentChanged`         | Optimistic concurrency conflict: another writer already appended to the version this call read as the latest one. Redo the work from the new latest version |
 | `ErrPathConflict`            | Filesystem path conflict in `localfsdb`            |
 
 Use `errs.Has[ErrDocumentNotFound](err)` (from `github.com/domonda/go-errs`) to test for a specific error type.
@@ -250,10 +279,24 @@ err = backup.Validate()
 err = conn.RestoreDocument(ctx, backup, recreate)
 ```
 
+`Validate` enforces two version invariants: every version has at least one file, and the latest version names the document's current `CompanyID`. It deliberately does **not** reject a version whose files and company are identical to its predecessor's. Creating one is refused where versions are created (`AddDocumentVersion` returns `ErrNoChanges`), but a stored document can end up holding one anyway — `DeleteDocumentVersion` removing the middle of `v0(F), v1(G), v2(F)` leaves two adjacent versions with the same files. Since every `RestoreDocument` starts by validating, rejecting such a document here would not undo it; it would only make it impossible to back up, sync or migrate. A backup has to be able to represent what a store actually holds.
+
+Each version carries its own company, so a document that was moved between companies is restored with its move history instead of having every version filed under its current company:
+
+```go
+// The company that owned the document at that version: the version's own
+// CompanyID, or the document's if the version does not name one.
+companyID := backup.VersionCompanyID(versionTime)
+```
+
+`HashedVersion.CompanyID` may be left `uu.IDNil`, which means the version inherits `HashedDocument.CompanyID` — so a backup of a document that was never moved can leave it unset everywhere. `Validate` requires the latest version to name `HashedDocument.CompanyID`, because that is the company the document is owned by and listed under.
+
 `recreate` controls how an existing document on the target conn is handled:
 
 - `recreate=true` — replace: if the document already exists it is deleted first, then recreated entirely from the backup. The on-disk `CompanyID` after the call equals `backup.CompanyID`.
-- `recreate=false` — additive merge: the document is created if missing; otherwise a backup version is kept as-is only when it is already stored **with all of its files**, and anything missing is written. An implementation split into a metadata and a file store must not decide this from the metadata alone — existing version metadata does not prove the files were ever written. The on-disk `CompanyID` must equal `backup.CompanyID`, otherwise the call fails without changing anything.
+- `recreate=false` — additive merge: the document is created if missing; otherwise a backup version is kept as-is only when it is already stored **with all of its files**, and anything missing is written. An implementation split into a metadata and a file store must not decide this from the metadata alone — existing version metadata does not prove the files were ever written. Versions on the target that the backup does not have are kept as-is.
+
+The company check for `recreate=false` is `docdb.CheckRestoreCompanyID(doc, destVersions, destCompanyID)`, which every implementation calls instead of repeating it. It compares the target's current company against the company the backup names *for the target's own latest version*, and against `backup.CompanyID` only when the backup does not have that version. Comparing the two current companies instead would refuse a backup whose newer versions move the document — which is the restore of a move — while accepting one that renames the company of versions the target already has. On mismatch the call fails without changing anything.
 
 Backends without restore support return wrapped `ErrNotImplemented`.
 
@@ -294,7 +337,11 @@ Stores and retrieves file content, keyed by content hash so identical content is
 CreateDocumentVersion(ctx, docID, version, files) ([]*docdb.FileInfo, error)
 ```
 
-It also implements `DocumentExists`, `DocumentHashFilesExist`, `DocumentHashFileProvider`, `ReadDocumentHashFile`, `DeleteDocument`, and `DeleteDocumentHashes`. `DocumentHashFilesExist(ctx, docID, files)` reports per file, as a map keyed by the passed `FileInfo`s, whether the store holds it under that name and content hash; because the store does not track versions, that batch check is how a caller finds out whether a whole version is present. `storeconn/s3store` is the reference implementation; uniqueness of the document ID is enforced by the `MetadataStore`, not here.
+It also implements `DocumentExists`, `DocumentHashFilesExist`, `DocumentHashFileProvider`, `ReadDocumentHashFile`, `DeleteDocument`, `DeleteDocumentHashes`, and `DeleteDocumentHashFiles`. `DocumentHashFilesExist(ctx, docID, files)` reports per file, as a map keyed by the passed `FileInfo`s, whether the store holds it under that name and content hash; because the store does not track versions, that batch check is how a caller finds out whether a whole version is present.
+
+The two deletes answer two different questions, and picking the wrong one deletes an object the caller never wrote. `DeleteDocumentHashes(ctx, docID, hashes)` matches on the hash alone and removes every file with that content, whatever its name — which is what removing a whole *version's* content needs. `DeleteDocumentHashFiles(ctx, docID, files)` matches `Name` and `Hash` together, for a rollback undoing exactly the files it uploaded: a document can hold the same bytes under two names, so a hash does not identify one object.
+
+`storeconn/s3store` is the reference implementation; uniqueness of the document ID is enforced by the `MetadataStore`, not here.
 
 ### `MetadataStore` — version metadata
 
@@ -315,14 +362,18 @@ type CreateDocumentVersionInput struct {
     AddedFiles, ModifiedFiles []*docdb.FileInfo
     RemovedFiles              []string
     Files                     map[string]docdb.FileInfo  // optional: pre-resolved full file set
+    RelinkSuccessor           *docdb.VersionTime         // optional: version to chain onto NewVersion
 }
 ```
 
 - A nil `PreviousVersion` writes the first (genesis) version: `prev_version` is stored as NULL and every passed file is recorded as added.
 - A non-nil `PreviousVersion` appends: the store carries that version's files forward, then applies the added/modified/removed deltas.
 - `Files`, when set, is the complete resolved file set. The conn passes it from `AddDocumentVersion`/`RestoreDocument` (which already compute it) so the store skips the predecessor lookup and re-derivation. When nil, the store resolves the set itself from `PreviousVersion` plus the deltas.
+- `RelinkSuccessor`, when set, names the one already stored version that must be re-chained onto `NewVersion` instead of `PreviousVersion`, because this version is being filled back into the middle of an existing chain rather than appended to its end. `DeleteDocumentVersion` chains a deleted version's successor onto the deleted version's own predecessor, so restoring the removed version has to undo exactly that. Only `RestoreDocument` sets it. A named successor that is not stored, or that no longer chains off `PreviousVersion`, relinks nothing and is not an error.
 
 `CreateDocumentVersion` never reads file content — `AddedFiles`/`ModifiedFiles` already carry the `FileInfo` (name, size, hash) the `DocumentStore` computed. `storeconn/pgstore` is the reference implementation.
+
+A document's versions form a chain, so a version has at most one successor. An implementation must refuse a second version naming an already-used `PreviousVersion` with `ErrDocumentChanged` rather than storing it: that is the optimistic concurrency conflict between two `AddDocumentVersion` calls that read the same latest version, and the loser has to redo its work instead of writing a file set that never saw the winner's change. The two cannot be told apart by their version timestamps — a `CreateVersionFunc` stamps its version when it starts, so the writer that inserts second may hold either one. `pgstore` enforces this with the unique index `document_version_one_successor_per_version_idx` on `(document_id, prev_version)`. An already stored version must be reported as `ErrVersionAlreadyExists`, a duplicate genesis as `ErrDocumentAlreadyExists`, which is how `RestoreDocument` resumes a copy whose metadata was written but whose file content was not.
 
 ### Blob-only migration (versions-exist mode)
 
@@ -383,5 +434,5 @@ Document: 0c4e8f2a-…  Company: 7b1d…  Versions: 2
 | `storeconn`         | Split-store `Conn` composing a `DocumentStore` and `MetadataStore` (see [storeconn/README.md](storeconn/README.md)) |
 | `storeconn/s3store` | `DocumentStore` implementation backed by AWS S3    |
 | `storeconn/pgstore` | `MetadataStore` backed by PostgreSQL; supports an immutable versions-exist mode via `ContextWithMetadataStoreVersionsExist` |
-| `routerconn`        | Routing `Conn` selecting a backend per document via a callback |
+| `routerconn`        | Routing `Conn` selecting a backend per document via a callback; refuses a company change that would move a document to a company on another backend |
 | `integrationtests`  | Shared integration test suite runnable against any `Conn` implementation |

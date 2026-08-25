@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/ungerik/go-fs"
 
 	"github.com/domonda/go-types/uu"
 
@@ -31,9 +32,43 @@ func TestConn_CreateDocument_RejectsEmptyFiles(t *testing.T) {
 		context.Background(),
 		uu.IDv4(), uu.IDv4(), uu.IDv4(),
 		"reason",
-		docdb.NewVersionTime(),
+		docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000"),
 		nil, // no files
 		func(context.Context, *docdb.VersionInfo) error { return nil },
 	)
 	require.Error(t, err)
+}
+
+// TestConn_CreateDocument_RecordsTheSizeOfTheHashedBytes verifies that the
+// genesis version records the size of the bytes it hashed, not whatever the
+// FileReader's Size() reports — the same guarantee
+// TestConn_AddDocumentVersion_RecordsTheSizeOfTheHashedBytes makes for every
+// later version.
+//
+// Size and Hash of a stored file have to describe the same content: a version
+// whose Size contradicts its Hash fails every later read of it through
+// ReadHashedDocument, so the document can no longer be backed up, synced or
+// migrated. On the genesis path that condemns the document from its very first
+// version, which is why the guarantee cannot hold for AddDocumentVersion alone.
+func TestConn_CreateDocument_RecordsTheSizeOfTheHashedBytes(t *testing.T) {
+	content := []byte("genesis content")
+	meta := newFakeMetadataStore()
+	conn := storeconn.New(newFakeDocumentStore(), meta)
+
+	err := conn.CreateDocument(
+		context.Background(),
+		uu.IDv4(), uu.IDv4(), uu.IDv4(),
+		"genesis",
+		docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000"),
+		[]fs.FileReader{staleSizeFile{fs.MemFile{FileName: "a.txt", FileData: content}}},
+		func(context.Context, *docdb.VersionInfo) error { return nil },
+	)
+	require.NoError(t, err)
+	require.Len(t, meta.createInputs, 1)
+
+	addedFiles := meta.createInputs[0].AddedFiles
+	require.Len(t, addedFiles, 1)
+	require.Equal(t, int64(len(content)), addedFiles[0].Size,
+		"the recorded size must describe the bytes that were hashed, not the FileReader's Size()")
+	require.Equal(t, docdb.ContentHash(content), addedFiles[0].Hash)
 }

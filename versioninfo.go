@@ -100,6 +100,26 @@ func (vi *VersionInfo) EqualFiles(other *VersionInfo) bool {
 	return true
 }
 
+// ChangesNothing reports whether committing vi after prev with companyID as
+// the document's new company would record no change at all: the same file set
+// as prev, and the same company. Such a version must be rejected with
+// ErrNoChanges instead of being created.
+//
+// A version with the same files as its predecessor is still a change if it
+// moves the document to another company: that is how a move is recorded, as a
+// version that changes nothing but the company.
+//
+// Every Conn implementation must ask here instead of repeating the comparison,
+// for the same reason SetFileDeltas exists: this is the only enforcement of the
+// rule — HashedDocument.Validate deliberately accepts such a version, because
+// DeleteDocumentVersion and SetDocumentCompanyID can leave one behind and a
+// backup has to be able to represent what a store holds — and a versions-exist
+// MetadataStore compares the result across implementations, so a divergence
+// fails a migration mid-run rather than at build time.
+func (vi *VersionInfo) ChangesNothing(prev *VersionInfo, companyID uu.ID) bool {
+	return prev != nil && vi.EqualFiles(prev) && companyID == prev.CompanyID
+}
+
 // SetFileDeltas derives AddedFiles, ModifiedFiles, and RemovedFiles by
 // comparing vi.Files, the complete file set of this version, against prevFiles,
 // the complete file set of the previous version. Pass a nil prevFiles for the

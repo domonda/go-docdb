@@ -171,7 +171,13 @@ func (d *fakeDocumentStore) CreateDocumentVersion(ctx context.Context, _ uu.ID, 
 		info := docdb.FileInfo{Name: file.Name(), Hash: docdb.ContentHash(data)}
 		d.stored[info] = struct{}{}
 		d.writtenFiles = append(d.writtenFiles, info.Name)
-		fileInfos[i] = &docdb.FileInfo{Name: info.Name, Size: int64(len(data)), Hash: info.Hash}
+		// Size comes from the FileReader's stat and Hash from the bytes that
+		// were read, exactly the way the S3 store does it. Deriving Size from
+		// data instead would normalize away the one divergence these fakes
+		// exist to catch: a reader whose Size() disagrees with what ReadAll
+		// returns is how a version gets committed with a Size contradicting
+		// its Hash, and no test could tell that apart from a correct write.
+		fileInfos[i] = &docdb.FileInfo{Name: info.Name, Size: file.Size(), Hash: info.Hash}
 	}
 	return fileInfos, nil
 }
@@ -196,6 +202,10 @@ type fakeMetadataStore struct {
 	companyID uu.ID
 	// stored is the version metadata the store already holds, keyed by version.
 	stored map[docdb.VersionTime]*docdb.VersionInfo
+	// createInputs records every CreateDocumentVersionInput in call order. The
+	// genesis path reports its file set as AddedFiles rather than Files, so the
+	// FileInfos it commits are only observable here.
+	createInputs []storeconn.CreateDocumentVersionInput
 
 	// versionsExist models pgstore.ContextWithMetadataStoreVersionsExist: the
 	// store inserts nothing and verifies instead, so a create for an
@@ -309,9 +319,12 @@ func (m *fakeMetadataStore) DeleteDocumentVersion(ctx context.Context, _ uu.ID, 
 	return slices.SortedFunc(maps.Keys(m.stored), docdb.VersionTime.Compare), m.safeHashesToDelete, nil
 }
 
-func (m *fakeMetadataStore) CreateDocumentVersion(_ context.Context, in storeconn.CreateDocumentVersionInput) (*docdb.VersionInfo, error) {
+func (m *fakeMetadataStore) CreateDocumentVersion(ctx context.Context, in storeconn.CreateDocumentVersionInput) (*docdb.VersionInfo, error) {
 	if m.panicOnCreateVersion {
 		panic("metadata store blew up")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	if m.createVersionErr != nil {
 		return nil, m.createVersionErr
@@ -337,5 +350,6 @@ func (m *fakeMetadataStore) CreateDocumentVersion(_ context.Context, in storecon
 		Files:       in.Files,
 	}
 	m.insertedVersions = append(m.insertedVersions, in.NewVersion)
+	m.createInputs = append(m.createInputs, in)
 	return m.stored[in.NewVersion], nil
 }

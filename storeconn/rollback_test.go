@@ -204,7 +204,7 @@ func TestConn_CreateDocument_RollbackDeletesOrphanedBlobs(t *testing.T) {
 	conn := storeconn.New(docs, meta)
 
 	err := conn.CreateDocument(ctx, companyID, docID, userID, "genesis",
-		docdb.NewVersionTime(),
+		docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000"),
 		[]fs.FileReader{fs.NewMemFile("a.txt", content)},
 		func(context.Context, *docdb.VersionInfo) error { return nil },
 	)
@@ -278,7 +278,7 @@ func TestConn_CreateDocument_RollbackDeletesOnlyCreatedVersion(t *testing.T) {
 	docID := uu.IDv4()
 	companyID := uu.IDv4()
 	userID := uu.IDv4()
-	version := docdb.NewVersionTime()
+	version := docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
 
 	meta := newFakeMetadataStore() // CreateDocumentVersion succeeds (versionInfo != nil)
 	docs := newFakeDocumentStore()
@@ -312,7 +312,7 @@ func TestConn_CreateDocument_ExistingDocumentRefused(t *testing.T) {
 	conn := storeconn.New(docs, meta)
 
 	err := conn.CreateDocument(ctx, companyID, docID, userID, "genesis",
-		docdb.NewVersionTime(),
+		docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000"),
 		[]fs.FileReader{fs.NewMemFile("a.txt", []byte("x"))},
 		func(context.Context, *docdb.VersionInfo) error { return nil },
 	)
@@ -343,7 +343,7 @@ func TestConn_CreateDocument_ConcurrentLoserKeepsWinnerBlobs(t *testing.T) {
 	conn := storeconn.New(docs, meta)
 
 	err := conn.CreateDocument(ctx, companyID, docID, userID, "genesis",
-		docdb.NewVersionTime(),
+		docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000"),
 		[]fs.FileReader{fs.NewMemFile("a.txt", []byte("genesis content"))},
 		func(context.Context, *docdb.VersionInfo) error { return nil },
 	)
@@ -375,7 +375,7 @@ func TestConn_CreateDocument_RollbackIgnoresNotFound(t *testing.T) {
 	conn := storeconn.New(docs, meta)
 
 	err := conn.CreateDocument(ctx, companyID, docID, userID, "genesis",
-		docdb.NewVersionTime(),
+		docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000"),
 		[]fs.FileReader{fs.NewMemFile("a.txt", []byte("genesis content"))},
 		func(context.Context, *docdb.VersionInfo) error { return nil },
 	)

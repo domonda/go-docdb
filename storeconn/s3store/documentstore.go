@@ -70,6 +70,27 @@ func (s *docStore) DocumentHashFilesExist(ctx context.Context, docID uu.ID, file
 		return exist, nil
 	}
 
+	keySet, err := s.documentObjectKeySet(ctx, docID)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, file := range files {
+		_, exist[file] = keySet[Key(docID, file.Name, file.Hash)]
+	}
+
+	return exist, nil
+}
+
+// documentObjectKeySet returns the keys of every object stored under the docID
+// prefix as a set, so a caller can decide whether the document holds a given
+// (filename, content hash) pair with one List instead of a HeadObject per file.
+//
+// Both DocumentHashFilesExist and DeleteDocumentHashFiles answer that same
+// question, and they have to answer it identically: a file is addressed by name
+// and hash together, so a copy of this enumeration that drifted would let the
+// restore rollback delete objects the caller never wrote.
+func (s *docStore) documentObjectKeySet(ctx context.Context, docID uu.ID) (map[string]struct{}, error) {
 	keys, err := s.listObjectKeys(ctx, docID.String()+"/")
 	if err != nil {
 		return nil, err
@@ -78,12 +99,7 @@ func (s *docStore) DocumentHashFilesExist(ctx context.Context, docID uu.ID, file
 	for _, key := range keys {
 		keySet[key] = struct{}{}
 	}
-
-	for _, file := range files {
-		_, exist[file] = keySet[Key(docID, file.Name, file.Hash)]
-	}
-
-	return exist, nil
+	return keySet, nil
 }
 
 // CreateDocumentVersion uploads each of the passed files as a separate S3 object
@@ -216,25 +232,24 @@ func (s *docStore) DeleteDocumentHashes(ctx context.Context, docID uu.ID, hashes
 // the way DeleteDocumentHashes does it: the same content under two filenames is
 // two objects, and deleting by hash alone would remove both.
 func (s *docStore) DeleteDocumentHashFiles(ctx context.Context, docID uu.ID, files []docdb.FileInfo) error {
-	keys, err := s.listObjectKeys(ctx, docID.String()+"/")
+	keySet, err := s.documentObjectKeySet(ctx, docID)
 	if err != nil {
 		return err
 	}
-	if len(keys) == 0 {
+	if len(keySet) == 0 {
 		return docdb.NewErrDocumentNotFound(docID)
 	}
 	if len(files) == 0 {
 		return nil
 	}
 
-	wanted := make(map[string]struct{}, len(files))
-	for _, file := range files {
-		wanted[Key(docID, file.Name, file.Hash)] = struct{}{}
-	}
 	var objectsToDelete []string
-	for _, key := range keys {
-		if _, ok := wanted[key]; ok {
+	for _, file := range files {
+		key := Key(docID, file.Name, file.Hash)
+		if _, ok := keySet[key]; ok {
 			objectsToDelete = append(objectsToDelete, key)
+			// Drop it so the same file passed twice is not deleted twice.
+			delete(keySet, key)
 		}
 	}
 	if len(objectsToDelete) == 0 {

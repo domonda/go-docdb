@@ -53,7 +53,7 @@ func TestRouterConn(t *testing.T) {
 
 	t.Run("routes DocumentVersions by document ID", func(t *testing.T) {
 		docID := uu.IDv7()
-		want := []docdb.VersionTime{docdb.NewVersionTime()}
+		want := []docdb.VersionTime{docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")}
 		backend := &docdb.MockConn{
 			DocumentVersionsMock: func(ctx context.Context, id uu.ID) ([]docdb.VersionTime, error) {
 				return want, nil
@@ -96,7 +96,7 @@ func TestRouterConn(t *testing.T) {
 		}
 		conn := routerconn.New(connFor(companyID, backend), unusedConn(t), backend)
 
-		err := conn.CreateDocument(t.Context(), companyID, docID, uu.IDv7(), "reason", docdb.NewVersionTime(), nil, nil)
+		err := conn.CreateDocument(t.Context(), companyID, docID, uu.IDv7(), "reason", docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000"), nil, nil)
 		require.NoError(t, err)
 		require.True(t, called)
 	})
@@ -192,7 +192,7 @@ func TestRouterConn(t *testing.T) {
 		addVersion := func(called *bool) func(context.Context, uu.ID, uu.ID, string, docdb.CreateVersionFunc, docdb.OnNewVersionFunc) error {
 			return func(ctx context.Context, id, userID uu.ID, reason string, createVersion docdb.CreateVersionFunc, onNewVersion docdb.OnNewVersionFunc) error {
 				*called = true
-				return onNewVersion(ctx, &docdb.VersionInfo{DocID: id, Version: docdb.NewVersionTime()})
+				return onNewVersion(ctx, &docdb.VersionInfo{DocID: id, Version: docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")})
 			}
 		}
 		backendA := &docdb.MockConn{AddDocumentVersionMock: addVersion(&calledA)}
@@ -246,7 +246,7 @@ func TestRouterConn(t *testing.T) {
 			&docdb.MockConn{},
 		)
 
-		err := conn.CreateDocument(t.Context(), uu.IDv7(), uu.IDv7(), uu.IDv7(), "reason", docdb.NewVersionTime(), nil, nil)
+		err := conn.CreateDocument(t.Context(), uu.IDv7(), uu.IDv7(), uu.IDv7(), "reason", docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000"), nil, nil)
 		require.ErrorIs(t, err, wantErr)
 	})
 
@@ -259,10 +259,12 @@ func TestRouterConn(t *testing.T) {
 	})
 }
 
-// TestRouterConnRefusesCrossBackendCompanyMove covers the two ways a document's
-// company can change, both of which route by document ID and would otherwise
-// commit the change on the backend the document is on while the new company
-// belongs to another one.
+// TestRouterConnRefusesCrossBackendCompanyMove covers the ways a document's
+// company can change on a router: the two that route by document ID and would
+// otherwise commit the change on the backend the document is on while the new
+// company belongs to another one, and a restored backup that moves the document
+// to a company on another backend, which routes by that company and would
+// otherwise copy the document onto it.
 //
 // routerconn never splits a document across backends, and a document left on
 // the backend that no longer answers for its company is not reported as broken
@@ -274,7 +276,7 @@ func TestRouterConnRefusesCrossBackendCompanyMove(t *testing.T) {
 		docID     = uu.IDv7()
 		companyA  = uu.IDv7() // on backendA, together with the document
 		companyB  = uu.IDv7() // on backendB
-		newVerion = docdb.NewVersionTime()
+		newVerion = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
 	)
 
 	newConn := func(t *testing.T, backendA, backendB docdb.Conn) docdb.Conn {
@@ -308,7 +310,7 @@ func TestRouterConnRefusesCrossBackendCompanyMove(t *testing.T) {
 				// The company is only known once the callback has run, so the
 				// refusal has to come out of the callback — which is what makes
 				// the version roll back instead of being committed here.
-				_, err := createVersion(ctx, docID, docdb.NewVersionTime(), nil)
+				_, err := createVersion(ctx, docID, docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000"), nil)
 				if err != nil {
 					return err
 				}
@@ -328,7 +330,7 @@ func TestRouterConnRefusesCrossBackendCompanyMove(t *testing.T) {
 		var gotCompanyID uu.NullableID
 		backendA := &docdb.MockConn{
 			AddDocumentVersionMock: func(ctx context.Context, _, _ uu.ID, _ string, createVersion docdb.CreateVersionFunc, _ docdb.OnNewVersionFunc) error {
-				result, err := createVersion(ctx, docID, docdb.NewVersionTime(), nil)
+				result, err := createVersion(ctx, docID, docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000"), nil)
 				if err != nil {
 					return err
 				}
@@ -370,5 +372,74 @@ func TestRouterConnRefusesCrossBackendCompanyMove(t *testing.T) {
 
 		require.NoError(t, conn.SetDocumentCompanyID(t.Context(), docID, companyA))
 		require.True(t, called)
+	})
+	// RestoreDocument routes by the company of the backup's latest version, so
+	// a backup whose newer versions moved the document is routed to the new
+	// company's backend — where the document is not, and restoring it there
+	// would leave the original behind on the backend it is on.
+	t.Run("RestoreDocument of a backup moving the document to another backend", func(t *testing.T) {
+		var restored bool
+		backendA := &docdb.MockConn{
+			DocumentExistsMock: func(_ context.Context, id uu.ID) (bool, error) {
+				require.Equal(t, docID, id)
+				return true, nil
+			},
+		}
+		backendB := &docdb.MockConn{
+			DocumentExistsMock: func(context.Context, uu.ID) (bool, error) { return false, nil },
+			RestoreDocumentMock: func(context.Context, *docdb.HashedDocument, bool) error {
+				restored = true
+				return nil
+			},
+		}
+		conn := newConn(t, backendA, backendB)
+
+		err := conn.RestoreDocument(t.Context(), &docdb.HashedDocument{ID: docID, CompanyID: companyB}, false)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "routerconn cannot span")
+		require.False(t, restored, "the document must not be copied onto the new company's backend")
+	})
+
+	t.Run("RestoreDocument of a document no other backend holds is allowed", func(t *testing.T) {
+		var restored bool
+		notFound := &docdb.MockConn{
+			DocumentExistsMock: func(context.Context, uu.ID) (bool, error) { return false, nil },
+		}
+		backendB := &docdb.MockConn{
+			DocumentExistsMock: func(context.Context, uu.ID) (bool, error) { return false, nil },
+			RestoreDocumentMock: func(_ context.Context, doc *docdb.HashedDocument, _ bool) error {
+				restored = true
+				require.Equal(t, companyB, doc.CompanyID)
+				return nil
+			},
+		}
+		conn := newConn(t, notFound, backendB)
+
+		// The document exists nowhere yet, which is what every first restore of
+		// a document looks like: it is created on its company's backend, the
+		// same way CreateDocument creates one.
+		require.NoError(t, conn.RestoreDocument(t.Context(), &docdb.HashedDocument{ID: docID, CompanyID: companyB}, false))
+		require.True(t, restored)
+	})
+
+	t.Run("RestoreDocument into the backend the document is on is allowed", func(t *testing.T) {
+		var restored bool
+		backendA := &docdb.MockConn{
+			DocumentExistsMock: func(context.Context, uu.ID) (bool, error) { return true, nil },
+			RestoreDocumentMock: func(context.Context, *docdb.HashedDocument, bool) error {
+				restored = true
+				return nil
+			},
+		}
+		backendB := &docdb.MockConn{
+			DocumentExistsMock: func(context.Context, uu.ID) (bool, error) {
+				t.Error("the other backends must not be asked about a document the company's backend holds")
+				return false, nil
+			},
+		}
+		conn := newConn(t, backendA, backendB)
+
+		require.NoError(t, conn.RestoreDocument(t.Context(), &docdb.HashedDocument{ID: docID, CompanyID: companyA}, false))
+		require.True(t, restored)
 	})
 }

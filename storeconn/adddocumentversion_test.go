@@ -18,7 +18,7 @@ import (
 // from fakes_test.go. The version invariant checks run before any store write,
 // so neither fake store needs to be functional beyond the latest-version
 // lookup and the previous-file provider.
-func singleFileBackend(content []byte) (*fakeMetadataStore, docdb.Conn, uu.ID) {
+func singleFileBackend(content []byte) (*fakeMetadataStore, *fakeDocumentStore, docdb.Conn, uu.ID) {
 	docID := uu.IDv4()
 	companyID := uu.IDv4()
 	meta := newFakeMetadataStore(&docdb.VersionInfo{
@@ -31,7 +31,7 @@ func singleFileBackend(content []byte) (*fakeMetadataStore, docdb.Conn, uu.ID) {
 	})
 	docs := newFakeDocumentStore()
 	docs.prevFiles = []fs.FileReader{fs.NewMemFile("a.txt", content)}
-	return meta, storeconn.New(docs, meta), docID
+	return meta, docs, storeconn.New(docs, meta), docID
 }
 
 // TestConn_AddDocumentVersion_RemoveAllFilesRejected verifies that storeconn
@@ -39,7 +39,7 @@ func singleFileBackend(content []byte) (*fakeMetadataStore, docdb.Conn, uu.ID) {
 // metadata.
 func TestConn_AddDocumentVersion_RemoveAllFilesRejected(t *testing.T) {
 	content := []byte("a content")
-	meta, conn, docID := singleFileBackend(content)
+	meta, _, conn, docID := singleFileBackend(content)
 
 	err := conn.AddDocumentVersion(context.Background(), docID, uu.IDv4(), "remove all",
 		docdb.CreateVersionRemoveFiles("a.txt"),
@@ -59,7 +59,7 @@ func TestConn_AddDocumentVersion_RemoveAllFilesRejected(t *testing.T) {
 // backed up, synced or restored.
 func TestConn_AddDocumentVersion_NoChanges(t *testing.T) {
 	content := []byte("a content")
-	meta, conn, docID := singleFileBackend(content)
+	meta, _, conn, docID := singleFileBackend(content)
 
 	// Rewriting the only file with byte-identical content changes nothing.
 	err := conn.AddDocumentVersion(context.Background(), docID, uu.IDv4(), "rewrite identical content",
@@ -90,7 +90,7 @@ func (staleSizeFile) Size() int64 { return 999999 }
 // restored — silent, and only discovered at the next migration.
 func TestConn_AddDocumentVersion_RecordsTheSizeOfTheHashedBytes(t *testing.T) {
 	content := []byte("a content")
-	meta, conn, docID := singleFileBackend(content)
+	meta, _, conn, docID := singleFileBackend(content)
 
 	newContent := []byte("new content of b")
 	var committed *docdb.VersionInfo
@@ -113,7 +113,7 @@ func TestConn_AddDocumentVersion_RecordsTheSizeOfTheHashedBytes(t *testing.T) {
 // what makes the document belong to and be listed under the new company.
 func TestConn_AddDocumentVersion_CompanyChangeIsAChange(t *testing.T) {
 	content := []byte("a content")
-	meta, conn, docID := singleFileBackend(content)
+	meta, _, conn, docID := singleFileBackend(content)
 	newCompanyID := uu.IDv4()
 	newVersion := docdb.MustVersionTimeFromString("2024-01-02_00-00-00.000")
 
@@ -163,21 +163,7 @@ func (f twoFacedFile) ReadAll() ([]byte, error) {
 // the document through ReadHashedDocument fails, silently, until a backup or
 // migration trips over it.
 func TestConn_AddDocumentVersion_UploadsTheBytesItHashed(t *testing.T) {
-	docID := uu.IDv4()
-	companyID := uu.IDv4()
-	content := []byte("a content")
-
-	meta := newFakeMetadataStore(&docdb.VersionInfo{
-		DocID:     docID,
-		CompanyID: companyID,
-		Version:   docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000"),
-		Files: map[string]docdb.FileInfo{
-			"a.txt": {Name: "a.txt", Size: int64(len(content)), Hash: docdb.ContentHash(content)},
-		},
-	})
-	docs := newFakeDocumentStore()
-	docs.prevFiles = []fs.FileReader{fs.NewMemFile("a.txt", content)}
-	conn := storeconn.New(docs, meta)
+	_, docs, conn, docID := singleFileBackend([]byte("a content"))
 
 	var (
 		hashed  = []byte("the bytes the metadata describes")

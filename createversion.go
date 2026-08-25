@@ -53,10 +53,19 @@ type CreateVersionResult struct {
 }
 
 // Validate returns an error if the CreateVersionResult is invalid.
-// It checks that the version timestamp is not null,
+// It checks for a nil receiver, that the version timestamp is not null,
 // that all WriteFiles exist,
 // and that no filename appears in both WriteFiles and RemoveFiles.
+//
+// A nil receiver is reported as an error instead of panicking because Conn
+// implementations validate whatever their caller-supplied CreateVersionFunc
+// returned, at a point where safelyCallCreateVersionFunc has already returned
+// and stopped recovering panics: a callback returning (nil, nil) would take
+// down the process instead of failing the one call.
 func (r *CreateVersionResult) Validate() (err error) {
+	if r == nil {
+		return errs.New("nil CreateVersionResult")
+	}
 	if e := r.Version.Validate(); e != nil {
 		err = errors.Join(err, fmt.Errorf("CreateVersionResult.Version is invalid: %w", e))
 	}

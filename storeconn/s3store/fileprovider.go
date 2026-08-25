@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 
 	"github.com/domonda/go-docdb"
+	"github.com/domonda/go-errs"
 	"github.com/domonda/go-types/uu"
 )
 
@@ -38,7 +39,11 @@ type fileProvider struct {
 
 // HasFile reports whether any of the provider's keys maps to the given
 // filename. It does not touch S3.
+// Returns an error for a nil receiver.
 func (p *fileProvider) HasFile(filename string) (bool, error) {
+	if p == nil {
+		return false, errs.New("nil s3store.fileProvider")
+	}
 	for _, key := range p.keys {
 		if filenameFromKey(key) == filename {
 			return true, nil
@@ -49,7 +54,11 @@ func (p *fileProvider) HasFile(filename string) (bool, error) {
 
 // ListFiles returns the filenames extracted from the provider's keys.
 // It does not touch S3.
+// Returns an error for a nil receiver.
 func (p *fileProvider) ListFiles(ctx context.Context) (filenames []string, err error) {
+	if p == nil {
+		return nil, errs.New("nil s3store.fileProvider")
+	}
 	for _, key := range p.keys {
 		if filename := filenameFromKey(key); filename != "" {
 			filenames = append(filenames, filename)
@@ -61,7 +70,11 @@ func (p *fileProvider) ListFiles(ctx context.Context) (filenames []string, err e
 // ReadFile fetches the object matching the passed filename and returns its
 // full contents. Returns docdb.ErrDocumentFileNotFound if no key matches
 // the filename, or if S3 reports NoSuchKey for the resolved object.
+// Returns an error for a nil receiver.
 func (p *fileProvider) ReadFile(ctx context.Context, filename string) ([]byte, error) {
+	if p == nil {
+		return nil, errs.New("nil s3store.fileProvider")
+	}
 	key := p.findKey(filename)
 	if key == "" {
 		return nil, docdb.NewErrDocumentFileNotFound(p.docID, filename)

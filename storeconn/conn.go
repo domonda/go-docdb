@@ -8,6 +8,7 @@ import (
 	"errors"
 	"maps"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/ungerik/go-fs"
@@ -34,8 +35,34 @@ type conn struct {
 
 var _ docdb.Conn = (*conn)(nil)
 
+// DocumentExists reports a document that either store holds.
+//
+// The two stores are written and deleted one after the other, so a failure or a
+// cancellation between the two steps leaves a document in only one of them, and
+// a MetadataStore can also be populated on its own by a migration that has not
+// copied the file content over yet. Every other method keyed by a document
+// answers such a document from the MetadataStore — DocumentVersions,
+// DocumentCompanyID and LatestDocumentVersionInfo return its metadata and
+// DeleteDocument deletes it — so reporting it as non-existent here would make a
+// caller skip a document the rest of this Conn answers for, including
+// RestoreDocument, which exists to repair exactly that half-written state.
 func (c *conn) DocumentExists(ctx context.Context, docID uu.ID) (exists bool, err error) {
-	return c.documentStore.DocumentExists(ctx, docID)
+	exists, err = c.documentStore.DocumentExists(ctx, docID)
+	if err != nil || exists {
+		return exists, err
+	}
+	// The MetadataStore has no existence check of its own, but
+	// DocumentVersions is documented to report an unknown document as
+	// ErrDocumentNotFound.
+	_, err = c.metadataStore.DocumentVersions(ctx, docID)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.As(err, &docdb.ErrDocumentNotFound{}):
+		return false, nil
+	default:
+		return false, err
+	}
 }
 
 func (c *conn) DocumentVersionFileProvider(ctx context.Context, docID uu.ID, version docdb.VersionTime) (docdb.FileProvider, error) {
@@ -230,10 +257,34 @@ func (c *conn) CreateDocument(
 	// escape with the partial document left behind.
 	defer errs.RecoverPanicAsErrorWithFuncParams(&err, ctx, companyID, docID, userID, reason, version, files, onNewVersion)
 
-	// Writing the blobs returns a FileInfo (name, size, content hash) per file.
-	// The first version records every file as an added file, so reuse these
-	// directly instead of re-reading and re-hashing the files.
-	addedFiles, err := c.documentStore.CreateDocumentVersion(ctx, docID, version, files)
+	// The bytes read here are also what gets uploaded below, rather than
+	// handing the DocumentStore the same readers to read a second time. A
+	// FileReader is not guaranteed to return the same content twice — an fs.File
+	// whose backing file is rewritten between the two reads is enough — and the
+	// version would then record the hash of what was read here while the store
+	// holds what was read there. AddDocumentVersion materializes its written
+	// files the same way and for the same reason.
+	//
+	// Size and Hash both describe the bytes that were just read, rather than
+	// taking the size from a separate file.Size() stat the way the store's
+	// returned FileInfos do: the two are not guaranteed to see the same content,
+	// and a version stored with a Size contradicting its Hash fails every later
+	// read of it in ReadHashedDocument — silently, and only discovered at the
+	// next backup or migration. The first version records every file as an added
+	// file, so these FileInfos are exactly the version's file set.
+	writeFiles := make([]fs.FileReader, len(files))
+	addedFiles := make([]*docdb.FileInfo, len(files))
+	var data []byte
+	for i, file := range files {
+		data, err = file.ReadAll()
+		if err != nil {
+			return err
+		}
+		writeFiles[i] = fs.NewMemFile(file.Name(), data)
+		addedFiles[i] = &docdb.FileInfo{Name: file.Name(), Size: int64(len(data)), Hash: docdb.ContentHash(data)}
+	}
+
+	_, err = c.documentStore.CreateDocumentVersion(ctx, docID, version, writeFiles)
 	if err != nil {
 		return err
 	}
@@ -371,13 +422,7 @@ func (c *conn) AddDocumentVersion(
 	// as a version that changes nothing but the company. localfsdb has always
 	// refused a change-less version this way, and docdb.Conn documents it as
 	// the answer of every implementation.
-	//
-	// This is the only place the rule is enforced. HashedDocument.Validate
-	// deliberately accepts such a version, because DeleteDocumentVersion and
-	// SetDocumentCompanyID can leave one behind and a backup has to be able to
-	// represent what a store holds — so refusing it here is what keeps one from
-	// being created in the first place.
-	if deltas.EqualFiles(latestVersionInfo) && companyID == latestVersionInfo.CompanyID {
+	if deltas.ChangesNothing(latestVersionInfo, companyID) {
 		return docdb.ErrNoChanges
 	}
 
@@ -470,7 +515,11 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		return err
 	}
 
-	docExists, err := c.DocumentExists(ctx, doc.ID)
+	// Asked of the DocumentStore alone, unlike Conn.DocumentExists: every use
+	// of docExists below is about file content — whether any object exists
+	// under the document at all — and the versions the MetadataStore holds are
+	// queried separately as metadataVersions.
+	docExists, err := c.documentStore.DocumentExists(ctx, doc.ID)
 	if err != nil {
 		return err
 	}
@@ -658,13 +707,15 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 	// func params are already added by the WrapWithFuncParams above.
 	defer errs.RecoverPanicAsError(&err)
 
+	skipVersionSet := versionTimeSet(skipVersions)
+	metadataVersionSet := versionTimeSet(metadataVersions)
 	for i, v := range versionTimes {
-		if !recreate && versionTimeIn(skipVersions, v) {
+		if !recreate && skipVersionSet[v] {
 			continue
 		}
 		hv := doc.Versions[v]
-		files := hashedVersionFilesMissingFrom(doc, hv, storedFiles)
-		versionInMetadata := versionTimeIn(metadataVersions, v)
+		files, filesWritten := hashedVersionFilesMissingFrom(doc, hv, storedFiles)
+		versionInMetadata := metadataVersionSet[v]
 
 		// CreateDocument writes a document's genesis version and enforces that
 		// the document does not exist yet, so it only applies while neither
@@ -677,7 +728,7 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 			// document's current one: a document moved between companies keeps
 			// the company of every version it was committed under, and the
 			// versions restored after this one carry the move forward.
-			writtenFiles = appendWrittenFiles(writtenFiles, files, hv)
+			writtenFiles = append(writtenFiles, filesWritten...)
 			err = c.CreateDocument(ctx, doc.VersionCompanyID(v), doc.ID, hv.CommitUserID, hv.CommitReason, v, files, noopOnNew)
 			if err != nil {
 				return err
@@ -740,7 +791,7 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		// versions instead of failing on it.
 		var relinkSuccessor *docdb.VersionTime
 		for j := i + 1; j < len(versionTimes); j++ {
-			if versionTimeIn(metadataVersions, versionTimes[j]) {
+			if metadataVersionSet[versionTimes[j]] {
 				relinkSuccessor = &versionTimes[j]
 				break
 			}
@@ -800,7 +851,7 @@ func (c *conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		// version whose files all turned out to be present, which happens when
 		// the MetadataStore did not know it.
 		if len(files) > 0 {
-			writtenFiles = appendWrittenFiles(writtenFiles, files, hv)
+			writtenFiles = append(writtenFiles, filesWritten...)
 			_, err = c.documentStore.CreateDocumentVersion(ctx, doc.ID, v, files)
 			if err != nil {
 				return err
@@ -907,38 +958,34 @@ func (c *conn) versionsFullyStored(ctx context.Context, doc *docdb.HashedDocumen
 	)
 	for _, v := range versionTimes {
 		for filename, hash := range doc.Versions[v].FileHashes {
-			file := docdb.FileInfo{Name: filename, Hash: hash}
+			file := storeKey(filename, hash)
 			if !asked[file] {
 				asked[file] = true
 				files = append(files, file)
 			}
 		}
 	}
-	exist, err := c.documentStore.DocumentHashFilesExist(ctx, doc.ID, files)
+	// present answers, for every file asked about, whether the store holds it,
+	// so the restore can skip writing those again instead of asking a second
+	// time. A file that was not asked about is absent from the map and reads as
+	// false, which is the same answer a filtered copy of it would give.
+	present, err := c.documentStore.DocumentHashFilesExist(ctx, doc.ID, files)
 	if err != nil {
 		return nil, nil, err
-	}
-
-	// present keeps only the files that are there, so the restore can skip
-	// writing them again instead of asking a second time.
-	present := make(map[docdb.FileInfo]bool, len(files))
-	for file, ok := range exist {
-		if ok {
-			present[file] = true
-		}
 	}
 
 	// Only a version the MetadataStore holds can be skipped: for one it does not
 	// hold, the present files are merely files that need no second write, while
 	// the version itself still has to be created.
+	inMetadata := versionTimeSet(metadataVersions)
 	var stored []docdb.VersionTime
 	for _, v := range versionTimes {
-		if !versionTimeIn(metadataVersions, v) {
+		if !inMetadata[v] {
 			continue
 		}
 		fullyStored := true
 		for filename, hash := range doc.Versions[v].FileHashes {
-			if !present[docdb.FileInfo{Name: filename, Hash: hash}] {
+			if !present[storeKey(filename, hash)] {
 				fullyStored = false
 				break
 			}
@@ -948,6 +995,14 @@ func (c *conn) versionsFullyStored(ctx context.Context, doc *docdb.HashedDocumen
 		}
 	}
 	return stored, present, nil
+}
+
+// storeKey returns the FileInfo that addresses a file in a DocumentStore.
+// Size is deliberately left zero: only Name and Hash identify a file there, so
+// a FileInfo carrying a Size would silently stop matching as a map key and as a
+// DeleteDocumentHashFiles argument.
+func storeKey(name, hash string) docdb.FileInfo {
+	return docdb.FileInfo{Name: name, Hash: hash}
 }
 
 // fileInfosNamed returns the FileInfos of the passed filenames in that order,
@@ -968,40 +1023,40 @@ func fileInfosNamed(files map[string]docdb.FileInfo, filenames []string) []*docd
 
 // hashedVersionFilesMissingFrom materializes the files of a docdb.HashedVersion
 // as in-memory fs.FileReaders backed by the corresponding HashedFiles entries,
-// skipping the ones stored already holds.
+// skipping the ones stored already holds. It returns those same files as the
+// DocumentStore keys they will be written under, so a rollback can delete
+// exactly the objects this call produces and no others.
 //
 // A DocumentStore addresses a file by name and content hash, so a file it
 // already holds under both is the object a write would produce and writing it
 // again only costs the upload. Pass a nil or empty stored to get every file.
-func hashedVersionFilesMissingFrom(doc *docdb.HashedDocument, hv *docdb.HashedVersion, stored map[docdb.FileInfo]bool) []fs.FileReader {
-	files := make([]fs.FileReader, 0, len(hv.FileHashes))
-	for filename, hash := range hv.FileHashes {
-		if stored[docdb.FileInfo{Name: filename, Hash: hash}] {
+//
+// Both results describe the same files in the same order, derived in one pass
+// from hv.FileHashes: deriving the rollback list separately would mean walking
+// the readers, which carry a name but not the hash the store addresses them by,
+// and looking that hash back up.
+//
+// That order is by filename, because it reaches persisted state. The genesis
+// version's files are handed to CreateDocument, which records them as the
+// version's AddedFiles and the MetadataStore stores that list verbatim. Ranging
+// hv.FileHashes directly would commit it in Go's randomized map order, so
+// restoring one backup into two stores would persist two different added_files
+// for the same version — and both would differ from localfsdb, which derives
+// the list through docdb.VersionInfo.SetFileDeltas and sorts it there. This is
+// the rule SetFileDeltas documents, applied on the one path that builds the
+// list without going through it.
+func hashedVersionFilesMissingFrom(doc *docdb.HashedDocument, hv *docdb.HashedVersion, stored map[docdb.FileInfo]bool) (files []fs.FileReader, written []docdb.FileInfo) {
+	files = make([]fs.FileReader, 0, len(hv.FileHashes))
+	written = make([]docdb.FileInfo, 0, len(hv.FileHashes))
+	for _, filename := range slices.Sorted(maps.Keys(hv.FileHashes)) {
+		hash := hv.FileHashes[filename]
+		if stored[storeKey(filename, hash)] {
 			continue
 		}
 		files = append(files, fs.NewMemFile(filename, doc.HashedFiles[hash]))
+		written = append(written, storeKey(filename, hash))
 	}
-	return files
-}
-
-// appendWrittenFiles records the files of hv that are about to be uploaded, by
-// name and content hash, so a rollback can delete exactly those objects and no
-// others. Size is left zero: only Name and Hash address a file in a
-// DocumentStore.
-//
-// The files are the fs.FileReaders a restore is about to write, which carry
-// their name but not the hash the DocumentStore addresses them by; hv is the
-// version they were materialized from, so its FileHashes is where that hash is.
-// A file hv does not name contributes nothing rather than an empty hash: it
-// cannot happen for a file this package materialized, and a bogus entry in the
-// rollback's delete list is worse than a missing one.
-func appendWrittenFiles(written []docdb.FileInfo, files []fs.FileReader, hv *docdb.HashedVersion) []docdb.FileInfo {
-	for _, file := range files {
-		if hash, ok := hv.FileHashes[file.Name()]; ok {
-			written = append(written, docdb.FileInfo{Name: file.Name(), Hash: hash})
-		}
-	}
-	return written
+	return files, written
 }
 
 // markVersionFilesStored records every file of hv as held by the DocumentStore,
@@ -1009,29 +1064,24 @@ func appendWrittenFiles(written []docdb.FileInfo, files []fs.FileReader, hv *doc
 // same content-addressed object again.
 func markVersionFilesStored(hv *docdb.HashedVersion, stored map[docdb.FileInfo]bool) {
 	for filename, hash := range hv.FileHashes {
-		stored[docdb.FileInfo{Name: filename, Hash: hash}] = true
+		stored[storeKey(filename, hash)] = true
 	}
 }
 
-// versionTimeIn reports whether v is one of versions.
+// versionTimeSet returns versions as a set for membership tests.
 //
-// TODO: this is a linear scan used for set membership, and RestoreDocument runs
-// three of them per version — skipVersions and metadataVersions in its loop,
-// plus metadataVersions again inside versionsFullyStored. That is quadratic in
-// the number of versions of a document: restoring one with 2000 versions costs
-// about 12 million VersionTime.Equal calls, for every document of a company-wide
-// migration. Building a map[docdb.VersionTime]bool for each of the two slices
-// once, before the loop, gives the same answers in a single pass. Left as is
-// here because the correctness fixes of this release should not also restructure
-// the restore loop; the slices are what MetadataStore.DocumentVersions returns
-// and what the rollback needs in order.
-func versionTimeIn(versions []docdb.VersionTime, v docdb.VersionTime) bool {
-	for _, e := range versions {
-		if e.Equal(v) {
-			return true
-		}
+// RestoreDocument asks three such questions per version — skipVersions and
+// metadataVersions in its loop, plus metadataVersions again inside
+// versionsFullyStored — which as linear scans made the restore quadratic in the
+// number of versions of a document. The slices themselves are kept because they
+// are what MetadataStore.DocumentVersions returns and what the rollback needs in
+// order.
+func versionTimeSet(versions []docdb.VersionTime) map[docdb.VersionTime]bool {
+	set := make(map[docdb.VersionTime]bool, len(versions))
+	for _, v := range versions {
+		set[v] = true
 	}
-	return false
+	return set
 }
 
 func safelyCallCreateVersionFunc(

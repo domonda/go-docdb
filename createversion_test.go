@@ -46,6 +46,13 @@ func TestCreateVersionResult_Validate(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			// A CreateVersionFunc that returns (nil, nil) must fail the one
+			// call instead of panicking in the Conn that validates its result.
+			name:    "nil receiver",
+			result:  nil,
+			wantErr: true,
+		},
+		{
 			name:    "null version",
 			result:  &CreateVersionResult{},
 			wantErr: true,

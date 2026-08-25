@@ -119,23 +119,22 @@ func (doc *HashedDocument) Validate() error {
 	// Nil HashedVersions were already reported above and are skipped here to
 	// avoid a nil deref.
 	sorted := doc.VersionTimes()
-	for i, v := range sorted {
-		hv := doc.Versions[v]
-		if hv == nil {
-			continue
-		}
-		if len(hv.FileHashes) == 0 {
+	for _, v := range sorted {
+		if hv := doc.Versions[v]; hv != nil && len(hv.FileHashes) == 0 {
 			err = errors.Join(err, fmt.Errorf("HashedDocument version %s has no files", v))
 		}
-		// The company of the latest version is the document's current company:
-		// a store that keeps no separate owner marker derives the owner from
-		// its latest version, so a backup naming two different companies for it
-		// would restore a document owned by whichever of the two that store
-		// happens to report.
-		if i == len(sorted)-1 && doc.VersionCompanyID(v) != doc.CompanyID {
+	}
+	// The company of the latest version is the document's current company:
+	// a store that keeps no separate owner marker derives the owner from
+	// its latest version, so a backup naming two different companies for it
+	// would restore a document owned by whichever of the two that store
+	// happens to report.
+	if len(sorted) > 0 {
+		latest := sorted[len(sorted)-1]
+		if doc.VersionCompanyID(latest) != doc.CompanyID {
 			err = errors.Join(err, fmt.Errorf(
 				"HashedDocument latest version %s has CompanyID %s but the document has %s",
-				v, doc.VersionCompanyID(v), doc.CompanyID,
+				latest, doc.VersionCompanyID(latest), doc.CompanyID,
 			))
 		}
 	}
@@ -146,8 +145,12 @@ func (doc *HashedDocument) Validate() error {
 // version: the version's own CompanyID, or the document's CompanyID if the
 // version does not name one (see HashedVersion.CompanyID).
 //
-// Returns the document's CompanyID for a version the document does not have.
+// Returns the document's CompanyID for a version the document does not have,
+// and uu.IDNil for a nil receiver.
 func (doc *HashedDocument) VersionCompanyID(versionTime VersionTime) uu.ID {
+	if doc == nil {
+		return uu.IDNil
+	}
 	if hv := doc.Versions[versionTime]; hv != nil && !hv.CompanyID.IsNil() {
 		return hv.CompanyID
 	}
@@ -373,7 +376,11 @@ func SyncAllCompanyDocuments(ctx context.Context, srcConn, destConn Conn, compan
 }
 
 // VersionTimes returns the version timestamps of the document sorted in ascending order.
+// Returns nil for a nil receiver.
 func (doc *HashedDocument) VersionTimes() []VersionTime {
+	if doc == nil {
+		return nil
+	}
 	return slices.SortedFunc(maps.Keys(doc.Versions), func(a, b VersionTime) int {
 		return a.Compare(b)
 	})
@@ -393,25 +400,31 @@ func (doc *HashedDocument) VersionTimes() []VersionTime {
 // (a version references a file hash that is missing from HashedFiles), so
 // corruption is never reported as a missing version. Callers that want to
 // detect such inconsistencies up-front should use Validate.
+//
+// Returns an error for a nil receiver.
 func (doc *HashedDocument) VersionInfo(versionTime VersionTime) (*VersionInfo, error) {
+	if doc == nil {
+		return nil, errs.New("nil HashedDocument")
+	}
 	var (
 		prevVersionTime *VersionTime
 		prevVersion     *HashedVersion
-		version         *HashedVersion
 	)
-	versions := doc.VersionTimes()
-	for i, v := range versions {
-		if v.Equal(versionTime) {
-			if i > 0 {
-				prevVersionTime = &versions[i-1]
-				prevVersion = doc.Versions[*prevVersionTime]
-			}
-			version = doc.Versions[versionTime]
-			break
-		}
-	}
+	version := doc.Versions[versionTime]
 	if version == nil {
 		return nil, NewErrDocumentVersionNotFound(doc.ID, versionTime)
+	}
+	// The predecessor is the greatest version older than versionTime, which one
+	// pass over the map finds without sorting. Sorting every version to look at
+	// a single neighbor made a restore, which calls this once per version, sort
+	// the whole version list once per version.
+	for v := range doc.Versions {
+		if v.Before(versionTime) && (prevVersionTime == nil || v.After(*prevVersionTime)) {
+			prevVersionTime = &v
+		}
+	}
+	if prevVersionTime != nil {
+		prevVersion = doc.Versions[*prevVersionTime]
 	}
 
 	info := &VersionInfo{

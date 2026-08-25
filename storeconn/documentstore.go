@@ -34,7 +34,9 @@ type DocumentStore interface {
 	// maps every passed file to that answer and is empty for no passed files.
 	// Only the Name and Hash of a FileInfo are matched, never Size, but the
 	// result is keyed by the passed values, so a caller looks an answer up with
-	// the same FileInfo it passed.
+	// the same FileInfo it passed. The returned map belongs to the caller, so an
+	// implementation must build a fresh one per call rather than hand out shared
+	// state; callers are free to keep and modify it.
 	//
 	// A store does not track versions — files are addressed by name and content
 	// hash — so this is how a caller determines whether a complete version is
