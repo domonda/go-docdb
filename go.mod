@@ -8,7 +8,7 @@ require (
 	github.com/domonda/go-errs v1.0.3
 	github.com/domonda/go-pretty v1.0.0
 	github.com/domonda/go-sqldb/pqconn v1.4.0
-	github.com/domonda/go-types v0.0.0-20260624104403-ee624823deea
+	github.com/domonda/go-types v0.0.0-20260902160716-5c6c50f32fcd
 	github.com/domonda/golog v1.1.1
 	github.com/stretchr/testify v1.11.1
 	github.com/ungerik/go-fs v0.0.0-20260629070125-ad84dc607eca
