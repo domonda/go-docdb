@@ -2122,18 +2122,24 @@ func requirePanicMessage(t *testing.T, f func()) string {
 // the cause in the wrong direction. Each panic must now name what is actually
 // wrong, and which of the two directories it is about.
 func TestNewConnPanicMessagesNameTheRealProblem(t *testing.T) {
-	newDirs := func(t *testing.T) (documentsDir, companiesDir fs.File) {
+	// The store lives one level below the temp dir so the unreadable subtest
+	// can chmod that level instead of the temp dir itself: a run killed
+	// between the chmod and its restore (go test -timeout, SIGINT) skips
+	// t.Cleanup, and a 0o000 temp-dir root is one a CI workspace cannot
+	// delete afterwards.
+	newDirs := func(t *testing.T) (storeDir, documentsDir, companiesDir fs.File) {
 		t.Helper()
-		tmp := fs.File(t.TempDir())
-		documentsDir = tmp.Join("documents")
-		companiesDir = tmp.Join("companies")
+		storeDir = fs.File(t.TempDir()).Join("store")
+		require.NoError(t, storeDir.MakeDir())
+		documentsDir = storeDir.Join("documents")
+		companiesDir = storeDir.Join("companies")
 		require.NoError(t, documentsDir.MakeDir())
 		require.NoError(t, companiesDir.MakeDir())
-		return documentsDir, companiesDir
+		return storeDir, documentsDir, companiesDir
 	}
 
 	t.Run("absent documentsDir", func(t *testing.T) {
-		_, companiesDir := newDirs(t)
+		_, _, companiesDir := newDirs(t)
 		msg := requirePanicMessage(t, func() {
 			localfsdb.NewConn(fs.File(t.TempDir()).Join("absent"), companiesDir)
 		})
@@ -2142,7 +2148,7 @@ func TestNewConnPanicMessagesNameTheRealProblem(t *testing.T) {
 	})
 
 	t.Run("absent companiesDir", func(t *testing.T) {
-		documentsDir, _ := newDirs(t)
+		_, documentsDir, _ := newDirs(t)
 		msg := requirePanicMessage(t, func() {
 			localfsdb.NewConn(documentsDir, fs.File(t.TempDir()).Join("absent"))
 		})
@@ -2152,7 +2158,7 @@ func TestNewConnPanicMessagesNameTheRealProblem(t *testing.T) {
 	})
 
 	t.Run("documentsDir is not a directory", func(t *testing.T) {
-		documentsDir, companiesDir := newDirs(t)
+		_, documentsDir, companiesDir := newDirs(t)
 		notADir := documentsDir.Dir().Join("file-in-the-way")
 		require.NoError(t, notADir.WriteAllString("not a directory"))
 		msg := requirePanicMessage(t, func() {
@@ -2167,17 +2173,19 @@ func TestNewConnPanicMessagesNameTheRealProblem(t *testing.T) {
 	t.Run("unreadable documentsDir", func(t *testing.T) {
 		requirePermissionBitsEnforced(t)
 
-		documentsDir, companiesDir := newDirs(t)
+		storeDir, documentsDir, companiesDir := newDirs(t)
 		// The documents directory is intact; only the directory above it is
-		// made unreadable, the way an unmounted volume or a changed permission
-		// makes a present store impossible to look at.
-		parentDir := documentsDir.Dir()
-		t.Cleanup(func() { restoreDirPermissions(t, parentDir) })
-		require.NoError(t, os.Chmod(parentDir.LocalPath(), 0o000))
+		// made unreadable, the way a changed permission makes a present store
+		// impossible to look at. Restored right after the call rather than
+		// only in the cleanup, so the window in which the tree cannot be
+		// deleted is as short as the assertion itself.
+		t.Cleanup(func() { restoreDirPermissions(t, storeDir) })
+		require.NoError(t, os.Chmod(storeDir.LocalPath(), 0o000))
 
 		msg := requirePanicMessage(t, func() {
 			localfsdb.NewConn(documentsDir, companiesDir)
 		})
+		restoreDirPermissions(t, storeDir)
 		require.Contains(t, msg, "documentsDir")
 		require.Contains(t, msg, "permission denied")
 		require.NotContains(t, msg, "does not exist",
@@ -2216,4 +2224,37 @@ func TestNonDirectoryVersionPathIsNotVersionNotFound(t *testing.T) {
 		"a corrupt version path must surface as the layout error it is")
 	require.False(t, errs.Has[docdb.ErrDocumentVersionNotFound](err),
 		"a version path occupied by a non-directory is not a version that was never written: %v", err)
+}
+
+// TestNonDirectoryAboveDocumentPathIsNotDocumentNotFound covers the other shape
+// of the same corrupt store. go-fs only produces fs.ErrIsNotDirectory when the
+// leaf itself stats as a non-directory; a regular file at one of the four
+// uuiddir levels above it fails the stat with a raw ENOTDIR instead. Callers
+// are told to branch on one error type, so both shapes have to answer to it.
+func TestNonDirectoryAboveDocumentPathIsNotDocumentNotFound(t *testing.T) {
+	var (
+		ctx   = t.Context()
+		docID = uu.IDFrom("11111111-2222-4333-8444-555555555555")
+		v0    = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+	)
+
+	conn, documentsDir, _ := newTestConnDirs(t)
+
+	// documents/11/111/111 is the third of the five uuiddir levels of docID,
+	// two above the document directory itself.
+	midDir := documentsDir.Join("11", "111")
+	require.NoError(t, midDir.MakeAllDirs())
+	require.NoError(t, midDir.Join("111").WriteAllString("not a directory"))
+
+	for _, c := range documentDirCalls(ctx, v0) {
+		t.Run(c.name, func(t *testing.T) {
+			err := c.call(conn, docID)
+			require.True(t, errs.Has[fs.ErrIsNotDirectory](err),
+				"a non-directory above the document path must answer to the same check as one at it: %v", err)
+			require.False(t, errs.Has[docdb.ErrDocumentNotFound](err),
+				"a corrupt store is not a document that was never stored: %v", err)
+			require.NotErrorIs(t, err, os.ErrNotExist,
+				"callers swallow os.ErrNotExist as 'nothing here', which a corrupt store is not: %v", err)
+		})
+	}
 }

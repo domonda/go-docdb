@@ -252,11 +252,16 @@ Documents with no file changes are silently skipped. Returns `ErrNoChanges` only
 Use `errs.Has[ErrDocumentNotFound](err)` (from `github.com/domonda/go-errs`) to test for a specific error type.
 
 A not-found error means the document is known not to be there. A backend that
-could not be asked at all — an unmounted volume, a permission change, an I/O
-error — returns that failure instead, so a caller that treats not-found as
+could not be asked at all — a permission change, an I/O error, a stale NFS
+handle — returns that failure instead, so a caller that treats not-found as
 "nothing here, carry on" cannot act on an absence that was never established.
 The same holds for `DocumentExists`: `(false, nil)` is a positive answer, and
 an unreadable backend returns `(false, err)`.
+
+The one failure this cannot distinguish is a cleanly unmounted volume: the
+mount point is left behind as an empty directory, so paths under it are absent
+rather than unreadable. A store that must survive that needs its own liveness
+marker.
 
 ## Utility Functions
 

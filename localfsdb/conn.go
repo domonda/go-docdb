@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"syscall"
 	"testing"
 
 	"github.com/ungerik/go-fs"
@@ -34,7 +35,7 @@ type Conn struct {
 func NewConn(documentsDir, companiesDir fs.File) *Conn {
 	// CheckIsDir instead of IsDir: IsDir reports a directory that merely could
 	// not be read as "does not exist", which would blame a missing directory
-	// for an unmounted volume or a permission problem.
+	// for a permission problem or an I/O error.
 	if err := documentsDir.CheckIsDir(); err != nil {
 		panic("can't use documentsDir: " + err.Error())
 	}
@@ -103,14 +104,24 @@ func (c *Conn) documentDir(docID uu.ID) fs.File {
 // error for a directory that could not be checked at all.
 //
 // [fs.File.IsDir] collapses every Stat error into false, so a document or
-// version directory that merely could not be read — an unmounted volume, a
-// permission change, an I/O error — used to be reported as one that does not
+// version directory that merely could not be read — a permission change, an
+// I/O error, a stale NFS handle — used to be reported as one that does not
 // exist. Callers treat a not-found error as "nothing here, carry on", which
 // during a storage outage is exactly the wrong thing to do, so only genuine
 // absence may produce one.
 //
+// Note what this cannot see: a cleanly unmounted volume leaves its mount point
+// behind as an empty directory, so every document path under it fails with
+// ENOENT and is indistinguishable from a document that was never stored.
+// Telling those apart needs a liveness marker inside the store, not a better
+// error check.
+//
 // A path that exists but is not a directory is a corrupt store rather than a
-// missing document, so [fs.ErrIsNotDirectory] is propagated as well.
+// missing document and is reported as an [fs.ErrIsNotDirectory] error. go-fs
+// only produces that type when the leaf itself stats as a non-directory; a
+// non-directory higher up the path fails the stat with a raw ENOTDIR instead.
+// Both mean the same broken layout, so the raw one is joined with the typed
+// one and callers have a single thing to test for.
 func checkDir(dir fs.File, notFound error) error {
 	err := dir.CheckIsDir()
 	switch {
@@ -118,6 +129,8 @@ func checkDir(dir fs.File, notFound error) error {
 		return nil
 	case errors.Is(err, os.ErrNotExist):
 		return notFound
+	case errors.Is(err, syscall.ENOTDIR):
+		return errors.Join(fs.NewErrIsNotDirectory(dir), err)
 	default:
 		return err
 	}
@@ -152,12 +165,17 @@ func (c *Conn) DocumentExists(ctx context.Context, docID uu.ID) (exists bool, er
 	// Only a genuine absence is a clean (false, nil): a document directory that
 	// could not be read at all, or a path occupied by a non-directory, is
 	// returned as an error so no caller can mistake an unreadable store for a
-	// store that does not hold the document. See checkDir.
-	err = c.documentDir(docID).CheckIsDir()
+	// store that does not hold the document. checkDir does the same mapping
+	// for the callers that answer with an error instead of a bool, and its
+	// doc comment carries the reasoning and the one case this cannot see.
+	err = checkDir(c.documentDir(docID), docdb.NewErrDocumentNotFound(docID))
 	switch {
 	case err == nil:
 		return true, nil
 	case errors.Is(err, os.ErrNotExist):
+		// Including the ErrDocumentNotFound passed above, which matches
+		// os.ErrNotExist: a document that is not there is this method's
+		// (false, nil), not an error.
 		return false, nil
 	default:
 		return false, err
@@ -653,7 +671,17 @@ func (c *Conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version d
 
 	leftVersions, lErr := c.documentVersions(ctx, docID)
 	err = errors.Join(err, lErr)
-	if len(leftVersions) == 0 {
+	// Gated on lErr: a failed re-enumeration also returns no versions, and
+	// deleting the whole document because the listing failed would act on an
+	// absence that was never established — the same mistake this file stopped
+	// making when it stopped reporting an unreadable directory as not found.
+	//
+	// Defensive rather than test-covered: on a local filesystem the permission
+	// that breaks the listing also breaks the recursive removal below, so the
+	// branch cannot be driven into deleting anything from a test. It is
+	// reachable on a backend where the two can fail independently, such as an
+	// NFS readdir returning ESTALE.
+	if lErr == nil && len(leftVersions) == 0 {
 		// If no versions left, delete the company document entry
 		// and the document directory
 		companyID, e := c.documentCompanyID(ctx, docID)
