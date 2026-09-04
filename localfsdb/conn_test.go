@@ -2644,3 +2644,135 @@ func TestRestoreDocumentUnreadableDocumentPathIsNotAbsent(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []docdb.VersionTime{v0}, versions, "the document must be untouched")
 }
+
+// TestDocumentCompanyIDUnreadableCompanyFileIsNotAFallback locks the outcome of
+// reading a company.id that cannot be read: an error, not the company some
+// older version's doc.json names.
+//
+// This is a behavior lock, not a regression guard — it passes against the
+// check-then-read code too. Reading the file straight through removes a
+// TOCTOU, but the window cannot be opened from a test on a local filesystem:
+// the existence check only collapses when the document directory is
+// untraversable, and then the backward-compatible path it would fall through
+// to cannot enumerate that directory either, so both spellings error. The
+// stale-company answer needs the two to fail independently, which a networked
+// filesystem can do and a temp dir cannot.
+func TestDocumentCompanyIDUnreadableCompanyFileIsNotAFallback(t *testing.T) {
+	requirePermissionBitsEnforced(t)
+
+	var (
+		ctx       = t.Context()
+		companyID = uu.IDFrom("3a4f1c2e-7b8d-4e9a-b1c2-d3e4f5a6b7c8")
+		docID     = uu.IDFrom("11111111-2222-4333-8444-555555555555")
+		userID    = uu.IDFrom("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
+		v0        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+	)
+
+	conn, documentsDir, _ := newTestConnDirs(t)
+	require.NoError(t, conn.CreateDocument(
+		ctx, companyID, docID, userID, "v0", v0,
+		newTestMemFiles("f0.txt"), noopOnNew,
+	))
+
+	companyFile := uuiddir.Join(documentsDir, docID).Join("company.id")
+	require.True(t, companyFile.Exists(), "company.id must exist for this test to mean anything")
+	t.Cleanup(func() {
+		if err := os.Chmod(companyFile.LocalPath(), 0o600); err != nil {
+			t.Errorf("can't restore permissions of %s because of: %s", companyFile.LocalPath(), err)
+		}
+	})
+	require.NoError(t, os.Chmod(companyFile.LocalPath(), 0o000))
+
+	_, err := conn.DocumentCompanyID(ctx, docID)
+	require.ErrorIs(t, err, os.ErrPermission,
+		"a company.id that could not be read must not fall through to the legacy path")
+}
+
+// TestReadDocumentVersionFileUnreadableFileIsNotFileNotFound pins the
+// file-level guard. ErrDocumentFileNotFound matches os.ErrNotExist, so a file
+// the store could not read was handed to callers as one the version simply
+// does not contain — the same collapse as the directory guards, one level
+// further in.
+func TestReadDocumentVersionFileUnreadableFileIsNotFileNotFound(t *testing.T) {
+	requirePermissionBitsEnforced(t)
+
+	var (
+		ctx       = t.Context()
+		companyID = uu.IDFrom("3a4f1c2e-7b8d-4e9a-b1c2-d3e4f5a6b7c8")
+		docID     = uu.IDFrom("11111111-2222-4333-8444-555555555555")
+		userID    = uu.IDFrom("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
+		v0        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+	)
+
+	conn, documentsDir, _ := newTestConnDirs(t)
+	require.NoError(t, conn.CreateDocument(
+		ctx, companyID, docID, userID, "v0", v0,
+		newTestMemFiles("f0.txt"), noopOnNew,
+	))
+
+	// The version directory, not the file: a file stats fine at mode 0o000, so
+	// only an untraversable directory makes the existence check collapse. The
+	// directory itself still stats as a directory from its parent, so
+	// documentAndVersionDir passes and the file lookup inside it is what fails.
+	versionDir := uuiddir.Join(documentsDir, docID).Join(v0.String())
+	require.True(t, versionDir.Join("f0.txt").Exists(), "the version file must exist for this test to mean anything")
+	t.Cleanup(func() { restoreDirPermissions(t, versionDir) })
+	require.NoError(t, os.Chmod(versionDir.LocalPath(), 0o000))
+
+	_, err := conn.ReadDocumentVersionFile(ctx, docID, v0, "f0.txt")
+	require.ErrorIs(t, err, os.ErrPermission)
+	require.False(t, errs.Has[docdb.ErrDocumentFileNotFound](err),
+		"a file that could not be read is not a file the version does not have: %v", err)
+	require.NotErrorIs(t, err, os.ErrNotExist,
+		"callers swallow os.ErrNotExist as 'nothing here', which an unreadable file is not: %v", err)
+
+	// A file the version genuinely does not have is still ErrDocumentFileNotFound.
+	restoreDirPermissions(t, versionDir)
+	_, err = conn.ReadDocumentVersionFile(ctx, docID, v0, "absent.txt")
+	require.True(t, errs.Has[docdb.ErrDocumentFileNotFound](err), "%v", err)
+}
+
+// TestSetDocumentCompanyIDUnreadableCompanyMarkerIsNotAbsent pins the marker
+// side of a company move. The old marker is removed only if it is there, and a
+// marker that could not be stat'ed read as not there — so the move wrote the
+// new mapping and left the old one behind, listing the document under two
+// companies with nothing said about it.
+func TestSetDocumentCompanyIDUnreadableCompanyMarkerIsNotAbsent(t *testing.T) {
+	requirePermissionBitsEnforced(t)
+
+	var (
+		ctx       = t.Context()
+		companyID = uu.IDFrom("3a4f1c2e-7b8d-4e9a-b1c2-d3e4f5a6b7c8")
+		newCompID = uu.IDFrom("9f8e7d6c-5b4a-4210-bedc-ba9876543210")
+		docID     = uu.IDFrom("11111111-2222-4333-8444-555555555555")
+		userID    = uu.IDFrom("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
+		v0        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+	)
+
+	conn, _, companiesDir := newTestConnDirs(t)
+	require.NoError(t, conn.CreateDocument(
+		ctx, companyID, docID, userID, "v0", v0,
+		newTestMemFiles("f0.txt"), noopOnNew,
+	))
+
+	currCompanyDir := companiesDir.Join(companyID.String())
+	require.True(t, uuiddir.Join(currCompanyDir, docID).IsDir(),
+		"the current company marker must exist for this test to mean anything")
+
+	t.Cleanup(func() { restoreDirPermissions(t, currCompanyDir) })
+	require.NoError(t, os.Chmod(currCompanyDir.LocalPath(), 0o000))
+
+	err := conn.SetDocumentCompanyID(ctx, docID, newCompID)
+	restoreDirPermissions(t, currCompanyDir)
+	require.ErrorIs(t, err, os.ErrPermission,
+		"a company marker that could not be looked at must not be treated as one that is not there")
+
+	// The move did not happen, so the document is still under its old company
+	// and under it only.
+	docIDs, err := conn.CompanyDocumentIDs(ctx, newCompID)
+	require.NoError(t, err)
+	require.Empty(t, docIDs, "the new company must not have gained the document")
+	docIDs, err = conn.CompanyDocumentIDs(ctx, companyID)
+	require.NoError(t, err)
+	require.Equal(t, uu.IDSlice{docID}, docIDs)
+}

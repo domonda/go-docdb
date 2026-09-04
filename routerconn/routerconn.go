@@ -17,6 +17,21 @@
 // allConns, and connForCompanyID and connForDocID must resolve a document and
 // its owning company to the same backend.
 //
+// connForDocID must also resolve a document ID it has never seen to the backend
+// that would hold it, rather than failing. DocumentExists is the one routed
+// operation asked about documents that may exist nowhere, and it answers from
+// the backend the callback names; a callback that errors on an unknown ID turns
+// "this document does not exist" into an error instead of the (false, nil) the
+// docdb.Conn contract calls for.
+//
+// Every backend must be reachable for RestoreDocument. It is the one operation
+// routed by company that can create a document, so before restoring it asks the
+// other backends whether any of them already holds it — the check that keeps a
+// document from ending up on two backends. A backend that cannot answer leaves
+// that unresolved, so the restore is refused rather than risking the split. The
+// other operations are routed and never fan out, so an unreachable backend only
+// affects the documents on it.
+//
 // Changing a document's company is therefore refused when the new company
 // resolves to another backend: for SetDocumentCompanyID, for a version that
 // names a docdb.CreateVersionResult.NewCompanyID, and for a RestoreDocument
@@ -76,6 +91,12 @@ type routerConn struct {
 
 var _ docdb.Conn = (*routerConn)(nil)
 
+// DocumentExists answers from the backend connForDocID names for docID, which
+// is authoritative because a document lives on exactly one backend. It is the
+// one routed operation asked about documents that may exist nowhere, so the
+// callback has to name a backend for an ID it has never seen; see the package
+// doc. (false, nil) is that backend's answer, and a backend that could not be
+// asked returns its error rather than a "no".
 func (r *routerConn) DocumentExists(ctx context.Context, docID uu.ID) (exists bool, err error) {
 	conn, err := r.connForDocID(ctx, docID)
 	if err != nil {
@@ -325,6 +346,15 @@ func (r *routerConn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocum
 // document, which is the common case of a merge-restore into the backend the
 // document is on, and not at all for a router over a single backend, where
 // nothing can span.
+//
+// A backend that cannot answer aborts the search. This is the one place a
+// caller pays for another backend being unreachable, and it is deliberate: the
+// question is whether some other backend already holds the document, and an
+// unreachable one leaves that unanswered. Restoring anyway would risk the
+// split across backends this package promises never to make, so an
+// unanswerable question is an error rather than a "no". Before the backends
+// grew the ability to say so, an unreadable one answered (false, nil) and the
+// restore went ahead on an answer nobody had.
 func (r *routerConn) otherConnWithDocument(ctx context.Context, docID uu.ID, docConn docdb.Conn) (docdb.Conn, error) {
 	if len(r.allConns) == 1 {
 		return nil, nil
