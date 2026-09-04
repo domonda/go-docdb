@@ -222,18 +222,26 @@ func (c *Conn) CompanyDocumentIDs(ctx context.Context, companyID uu.ID) (docIDs 
 	defer errs.WrapWithFuncParams(&err, ctx, companyID)
 
 	companyDir := c.companiesDir.Join(companyID.String())
-	info := companyDir.Info()
+	// Not fs.File.Info: it turns every Stat error into a non-existing FileInfo,
+	// so a company directory that merely could not be read was reported as a
+	// company with no documents. This is the enumeration a backup, sync or
+	// cleanup caller drives off, and "no documents" is the answer that
+	// authorizes it to skip or delete the company.
+	err = companyDir.CheckIsDir()
 	switch {
-	case !info.Exists:
+	case err == nil:
+		// Enumerated below.
+	case errors.Is(err, os.ErrNotExist):
 		// No documents have ever been stored for this company, so the company
 		// directory does not exist. Return nil instead of enumerating a missing
 		// directory (which would error), matching the empty-result behavior of
 		// other backends.
 		return nil, nil
-	case !info.IsDir:
-		// The path exists but is not a directory: surface this on-disk
-		// inconsistency instead of silently reporting the company as empty.
-		return nil, errs.Errorf("company path %s exists but is not a directory", companyDir.Path())
+	default:
+		// Includes a path that exists but is not a directory: surface this
+		// on-disk inconsistency instead of silently reporting the company as
+		// empty.
+		return nil, err
 	}
 
 	err = uuiddir.Enum(
@@ -273,7 +281,7 @@ func (c *Conn) latestDocumentVersionInfo(ctx context.Context, docID uu.ID) (vers
 	}
 
 	var latestVersion docdb.VersionTime
-	err = enumVersionDirs(ctx, docDir, docID, func(version docdb.VersionTime, dir fs.File) {
+	skipped, err := enumVersionDirs(ctx, docDir, docID, func(version docdb.VersionTime, dir fs.File) {
 		if version.Time.After(latestVersion.Time) {
 			latestVersion = version
 			versionDir = dir
@@ -284,6 +292,15 @@ func (c *Conn) latestDocumentVersionInfo(ctx context.Context, docID uu.ID) (vers
 	}
 
 	if latestVersion.Time.IsZero() {
+		// Only a document whose directory holds nothing the enumeration had to
+		// skip is genuinely version-less. One whose every version directory was
+		// unaccountable — a half-written version, an unreadable info file — has
+		// versions that could not be read, and reporting that as
+		// ErrDocumentNotFound is the same lie this file stopped telling about
+		// directories it could not stat.
+		if skipped > 0 {
+			return nil, "", errs.Errorf("document %s has no readable version but %d version director(ies) that could not be accounted for", docID, skipped)
+		}
 		return nil, "", errs.Errorf("document %s directory exists but has no version subdirectories: %w", docID, docdb.NewErrDocumentNotFound(docID))
 	}
 
@@ -400,31 +417,44 @@ func (c *Conn) DocumentVersions(ctx context.Context, docID uu.ID) (versions []do
 		return nil, err
 	}
 
-	return c.documentVersions(ctx, docID)
+	versions, _, err = c.documentVersions(ctx, docID)
+	return versions, err
 }
 
-func (c *Conn) documentVersions(ctx context.Context, docID uu.ID) (versions []docdb.VersionTime, err error) {
+// documentVersions returns the document's versions in ascending order together
+// with the number of version directories the enumeration could not account
+// for. See enumVersionDirs: a caller that reads versions can ignore skipped, a
+// caller that acts destructively on an empty result cannot.
+func (c *Conn) documentVersions(ctx context.Context, docID uu.ID) (versions []docdb.VersionTime, skipped int, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
 	docDir := c.documentDir(docID)
 	if err = checkDir(docDir, docdb.NewErrDocumentNotFound(docID)); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	err = enumVersionDirs(ctx, docDir, docID, func(version docdb.VersionTime, dir fs.File) {
+	skipped, err = enumVersionDirs(ctx, docDir, docID, func(version docdb.VersionTime, dir fs.File) {
 		versions = append(versions, version)
 	})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	slices.SortFunc(versions, func(a, b docdb.VersionTime) int { return a.Compare(b) })
-	return versions, nil
+	return versions, skipped, nil
 }
 
-// enumVersionDirs lists version subdirectories of docDir that have
-// a corresponding .json info file. It skips directories that can't be
-// parsed as a VersionTime or are missing the info JSON file.
-func enumVersionDirs(ctx context.Context, docDir fs.File, docID uu.ID, callback func(version docdb.VersionTime, dir fs.File)) error {
-	return docDir.ListDirInfo(func(dirInfo *fs.FileInfo) error {
+// enumVersionDirs lists version subdirectories of docDir that have a
+// corresponding .json info file, calling callback for each, and returns how
+// many subdirectories it could not account for: a name that does not parse as
+// a VersionTime, or a missing or unreadable info JSON file. Those are logged
+// and skipped, because a half-written version is still data and a read must
+// not fail on one.
+//
+// A caller that only reads versions can ignore skipped. A caller that decides
+// something destructive from an empty result must not: skipped > 0 means the
+// enumeration is incomplete, so an empty result does not establish that the
+// document has no versions left.
+func enumVersionDirs(ctx context.Context, docDir fs.File, docID uu.ID, callback func(version docdb.VersionTime, dir fs.File)) (skipped int, err error) {
+	err = docDir.ListDirInfo(func(dirInfo *fs.FileInfo) error {
 		if !dirInfo.IsDir || dirInfo.IsHidden {
 			return nil
 		}
@@ -436,6 +466,7 @@ func enumVersionDirs(ctx context.Context, docDir fs.File, docID uu.ID, callback 
 				Str("dirPath", dirInfo.File.Path()).
 				Err(err).
 				Log()
+			skipped++
 			return nil
 		}
 		infoFile := docDir.Join(version.String() + ".json")
@@ -451,11 +482,13 @@ func enumVersionDirs(ctx context.Context, docDir fs.File, docID uu.ID, callback 
 				Strs("versionFiles", fs.FileNames(versionFiles)).
 				Str("docDir", docDir.Path()).
 				Log()
+			skipped++
 			return nil
 		}
 		callback(version, dirInfo.File)
 		return nil
 	})
+	return skipped, err
 }
 
 func (c *Conn) documentVersionInfo(ctx context.Context, docID uu.ID, version docdb.VersionTime) (versionInfo *docdb.VersionInfo, docDir fs.File, err error) {
@@ -677,19 +710,28 @@ func (c *Conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version d
 		err = errors.Join(err, relinkSuccessorsOfDeletedVersion(ctx, docDir, docID, version, *deletedPrevVersion))
 	}
 
-	leftVersions, lErr := c.documentVersions(ctx, docID)
+	leftVersions, skipped, lErr := c.documentVersions(ctx, docID)
 	err = errors.Join(err, lErr)
-	// A failed re-enumeration also reports no versions left, and neither
-	// branch below may act on that: deleting the whole document because the
-	// listing failed is the same mistake this file stopped making when it
-	// stopped reporting an unreadable directory as not found, and the
-	// company re-derivation would index an empty slice. Spelled as a switch
-	// rather than gating only the first branch, so the empty case is handled
-	// once and cannot fall through to the second.
+	// An empty result is only permission to delete the document when the
+	// enumeration actually established that nothing is left. It does not when
+	// the listing failed, and it does not when the listing succeeded but had
+	// to skip version directories it could not account for — a half-written
+	// version is still data. Neither may reach the company re-derivation
+	// either, which would index an empty slice. Spelled as a switch so the
+	// empty case is decided once and cannot fall through.
 	switch {
 	case lErr != nil:
 		// The versions could not be listed, so nothing is known about what is
 		// left. The error is already joined into err above.
+
+	case len(leftVersions) == 0 && skipped > 0:
+		// Every version directory still in the document was one the
+		// enumeration could not account for: an unparseable name, or a missing
+		// or unreadable info JSON file. Removing the document would take their
+		// file content with it on the strength of a listing that admits it is
+		// incomplete, so the document stays and the caller is told why instead
+		// of being handed a silent success.
+		err = errors.Join(err, errs.Errorf("document %s has %d version director(ies) that could not be accounted for, so it was not removed as empty", docID, skipped))
 
 	case len(leftVersions) == 0:
 		// If no versions left, delete the company document entry
@@ -1194,7 +1236,7 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		if err != nil {
 			return err
 		}
-		existingVersions, err = c.documentVersions(ctx, doc.ID)
+		existingVersions, _, err = c.documentVersions(ctx, doc.ID)
 		if err != nil {
 			return err
 		}
@@ -1464,7 +1506,9 @@ func relinkSuccessorsOfDeletedVersion(ctx context.Context, docDir fs.File, docID
 	defer errs.WrapWithFuncParams(&err, ctx, docDir, docID, deletedVersion, prevVersion)
 
 	var versions []docdb.VersionTime
-	err = enumVersionDirs(ctx, docDir, docID, func(version docdb.VersionTime, _ fs.File) {
+	// A version whose info file could not be read names no successor to relink
+	// and is skipped here as it is everywhere else, so the count is discarded.
+	_, err = enumVersionDirs(ctx, docDir, docID, func(version docdb.VersionTime, _ fs.File) {
 		versions = append(versions, version)
 	})
 	if err != nil {
