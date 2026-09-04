@@ -2394,7 +2394,8 @@ func TestDeleteDocumentVersionKeepsDocumentWithUnaccountableVersions(t *testing.
 
 	left, err := conn.DeleteDocumentVersion(ctx, docID, v0)
 	require.Error(t, err, "a delete that cannot account for every version must not report success")
-	require.Empty(t, left)
+	require.Nil(t, left,
+		"a caller that logs leftVersions must not read 'no versions left' off the branch that refused to establish it")
 
 	require.True(t, docDir.IsDir(),
 		"the document must survive: its remaining version is unreadable, not absent")
@@ -2775,4 +2776,293 @@ func TestSetDocumentCompanyIDUnreadableCompanyMarkerIsNotAbsent(t *testing.T) {
 	docIDs, err = conn.CompanyDocumentIDs(ctx, companyID)
 	require.NoError(t, err)
 	require.Equal(t, uu.IDSlice{docID}, docIDs)
+}
+
+// TestAddDocumentVersionRefusalKeepsExistingVersionDir pins that refusing to
+// write a version directory that is already there does not delete it. The
+// rollback was handed the new version's paths before the guard ran, so the
+// refusal fired it and removed exactly the half-written version the guard
+// exists to protect — a refused write destroying the data it refused to touch.
+func TestAddDocumentVersionRefusalKeepsExistingVersionDir(t *testing.T) {
+	var (
+		ctx       = t.Context()
+		companyID = uu.IDFrom("3a4f1c2e-7b8d-4e9a-b1c2-d3e4f5a6b7c8")
+		docID     = uu.IDFrom("11111111-2222-4333-8444-555555555555")
+		userID    = uu.IDFrom("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
+		v0        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+		v1        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.001")
+	)
+
+	conn, documentsDir, _ := newTestConnDirs(t)
+	require.NoError(t, conn.CreateDocument(
+		ctx, companyID, docID, userID, "v0", v0,
+		newTestMemFiles("f0.txt"), noopOnNew,
+	))
+
+	// v1 as a hard kill mid-AddDocumentVersion leaves it: directory and files
+	// on disk, info JSON never written, so enumVersionDirs skips it and v0 is
+	// still the latest version this call chains off.
+	docDir := uuiddir.Join(documentsDir, docID)
+	v1Dir := docDir.Join(v1.String())
+	require.NoError(t, v1Dir.MakeDir())
+	require.NoError(t, v1Dir.Join("f1.txt").WriteAllString("half written"))
+
+	err := conn.AddDocumentVersion(
+		ctx, docID, userID, "v1",
+		func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+			return &docdb.CreateVersionResult{Version: v1, WriteFiles: newTestMemFiles("f1.txt")}, nil
+		},
+		noopOnNew,
+	)
+	require.ErrorContains(t, err, "already exists")
+
+	require.True(t, v1Dir.IsDir(),
+		"the version directory the call refused to overwrite must survive the refusal: %s", v1Dir.Path())
+	content, readErr := v1Dir.Join("f1.txt").ReadAllString()
+	require.NoError(t, readErr)
+	require.Equal(t, "half written", content,
+		"a refused write must not take the file content it refused to touch with it")
+}
+
+// TestRestoreDocumentRefusesUnaccountableVersionDir pins that a merge-restore
+// refuses a destination holding a version directory the enumeration could not
+// account for. Such a directory is missing from the existing-version list, so
+// the backup's version of the same name took the create branch: MakeDir is
+// idempotent on a directory that is already there, the backup's files landed
+// next to whatever it held, and the info file this call then wrote recorded
+// those strays as files of the version.
+func TestRestoreDocumentRefusesUnaccountableVersionDir(t *testing.T) {
+	var (
+		ctx       = t.Context()
+		companyID = uu.IDFrom("3a4f1c2e-7b8d-4e9a-b1c2-d3e4f5a6b7c8")
+		docID     = uu.IDFrom("11111111-2222-4333-8444-555555555555")
+		userID    = uu.IDFrom("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
+		v0        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+		v1        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.001")
+	)
+
+	conn, documentsDir, _ := newTestConnDirs(t)
+	require.NoError(t, conn.CreateDocument(
+		ctx, companyID, docID, userID, "v0", v0,
+		newTestMemFiles("f0.txt"), noopOnNew,
+	))
+	require.NoError(t, conn.AddDocumentVersion(
+		ctx, docID, userID, "v1",
+		func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+			return &docdb.CreateVersionResult{Version: v1, WriteFiles: newTestMemFiles("f1.txt")}, nil
+		},
+		noopOnNew,
+	))
+	backup, err := docdb.ReadHashedDocument(ctx, conn, docID)
+	require.NoError(t, err)
+
+	// v1 left as a hard kill mid-write leaves it, holding a file no version of
+	// the backup has.
+	docDir := uuiddir.Join(documentsDir, docID)
+	v1Dir := docDir.Join(v1.String())
+	v1InfoFile := docDir.Joinf("%s.json", v1)
+	require.NoError(t, v1InfoFile.Remove())
+	require.NoError(t, v1Dir.Join("STRAY.txt").WriteAllString("stray"))
+
+	err = conn.RestoreDocument(ctx, backup, false)
+	require.ErrorContains(t, err, "could not be accounted for",
+		"a restore that cannot establish which versions the destination holds must not merge into it")
+
+	require.False(t, v1InfoFile.Exists(),
+		"the refused restore must not write an info file recording the stray content as a file of v1")
+	require.True(t, v1Dir.Join("STRAY.txt").Exists(),
+		"the refused restore must leave the unaccountable version directory as it found it")
+}
+
+// TestDeleteDocumentUnreadableCompanyKeepsDocumentAndMarker pins that the
+// document and its company marker go together. The document directory was
+// removed even when the company could not be read, so the marker stayed behind
+// with nothing to point at and CompanyDocumentIDs kept listing a document that
+// is gone — a stale mapping no operation removes.
+func TestDeleteDocumentUnreadableCompanyKeepsDocumentAndMarker(t *testing.T) {
+	requirePermissionBitsEnforced(t)
+
+	var (
+		ctx       = t.Context()
+		companyID = uu.IDFrom("3a4f1c2e-7b8d-4e9a-b1c2-d3e4f5a6b7c8")
+		docID     = uu.IDFrom("11111111-2222-4333-8444-555555555555")
+		userID    = uu.IDFrom("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
+		v0        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+	)
+
+	conn, documentsDir, companiesDir := newTestConnDirs(t)
+	require.NoError(t, conn.CreateDocument(
+		ctx, companyID, docID, userID, "v0", v0,
+		newTestMemFiles("f0.txt"), noopOnNew,
+	))
+
+	var (
+		docDir        = uuiddir.Join(documentsDir, docID)
+		companyDocDir = uuiddir.Join(companiesDir.Join(companyID.String()), docID)
+		companyIDFile = docDir.Join("company.id")
+	)
+	require.True(t, companyDocDir.IsDir(), "the company marker must exist for this test to mean anything")
+
+	// Tolerates absence so it can also run as the cleanup after the retried
+	// delete below removed the file.
+	restoreCompanyIDFile := func() {
+		if err := os.Chmod(companyIDFile.LocalPath(), 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("can't restore permissions of %s because of: %s", companyIDFile.LocalPath(), err)
+		}
+	}
+	t.Cleanup(restoreCompanyIDFile)
+	require.NoError(t, os.Chmod(companyIDFile.LocalPath(), 0o000))
+
+	err := conn.DeleteDocument(ctx, docID)
+	restoreCompanyIDFile()
+	require.ErrorIs(t, err, os.ErrPermission,
+		"a company that could not be read must stop the delete rather than be worked around")
+
+	require.True(t, docDir.IsDir(),
+		"the document must survive a delete that could not remove its company marker: %s", docDir.Path())
+	require.True(t, companyDocDir.IsDir(),
+		"the company marker must survive with the document: %s", companyDocDir.Path())
+
+	// The two are still consistent, so the delete is simply retried once the
+	// store is readable again.
+	docIDs, err := conn.CompanyDocumentIDs(ctx, companyID)
+	require.NoError(t, err)
+	require.Equal(t, uu.IDSlice{docID}, docIDs,
+		"the company must not be left listing a document that no longer exists")
+	require.NoError(t, conn.DeleteDocument(ctx, docID))
+}
+
+// TestDeleteDocumentWithAlreadyRemovedCompanyMarker is the other side of that
+// pairing: a marker that is already gone leaves nothing inconsistent behind, so
+// it must not refuse the delete. Treating it as a failure would make a delete
+// interrupted after removing the marker unrepeatable — the document could never
+// be deleted through the API again.
+func TestDeleteDocumentWithAlreadyRemovedCompanyMarker(t *testing.T) {
+	var (
+		ctx       = t.Context()
+		companyID = uu.IDFrom("3a4f1c2e-7b8d-4e9a-b1c2-d3e4f5a6b7c8")
+		docID     = uu.IDFrom("11111111-2222-4333-8444-555555555555")
+		userID    = uu.IDFrom("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
+		v0        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+	)
+
+	conn, documentsDir, companiesDir := newTestConnDirs(t)
+	require.NoError(t, conn.CreateDocument(
+		ctx, companyID, docID, userID, "v0", v0,
+		newTestMemFiles("f0.txt"), noopOnNew,
+	))
+
+	companyDir := companiesDir.Join(companyID.String())
+	require.NoError(t, uuiddir.Remove(companyDir, docID))
+
+	require.NoError(t, conn.DeleteDocument(ctx, docID),
+		"a company marker that is already gone must not refuse the delete")
+	require.False(t, uuiddir.Join(documentsDir, docID).Exists(),
+		"the document must be gone")
+}
+
+// TestDocumentVersionsUnaccountableVersionsIsNotEmpty is the public read-side
+// half of what DeleteDocumentVersion refuses to act on. A document whose every
+// version directory was unaccountable has versions that could not be read, not
+// no versions, and answering ([], nil) hands external callers the emptiness the
+// enumeration itself refused to act on internally.
+func TestDocumentVersionsUnaccountableVersionsIsNotEmpty(t *testing.T) {
+	var (
+		ctx       = t.Context()
+		companyID = uu.IDFrom("3a4f1c2e-7b8d-4e9a-b1c2-d3e4f5a6b7c8")
+		docID     = uu.IDFrom("11111111-2222-4333-8444-555555555555")
+		userID    = uu.IDFrom("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
+		v0        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+	)
+
+	conn, documentsDir, _ := newTestConnDirs(t)
+	require.NoError(t, conn.CreateDocument(
+		ctx, companyID, docID, userID, "v0", v0,
+		newTestMemFiles("f0.txt"), noopOnNew,
+	))
+
+	docDir := uuiddir.Join(documentsDir, docID)
+	require.NoError(t, docDir.Joinf("%s.json", v0).Remove())
+	require.True(t, docDir.Join(v0.String(), "f0.txt").Exists(),
+		"v0's file content must be on disk for this test to mean anything")
+
+	versions, err := conn.DocumentVersions(ctx, docID)
+	require.Error(t, err, "a listing that could not account for a single version directory must not report an empty document")
+	require.Empty(t, versions)
+	require.False(t, errs.Has[docdb.ErrDocumentNotFound](err),
+		"a document whose versions could not be read is not a document that does not exist: %v", err)
+
+	exists, err := conn.DocumentExists(ctx, docID)
+	require.NoError(t, err)
+	require.True(t, exists, "the document is there; only its versions could not be read")
+}
+
+// TestDeleteLastDocumentVersionWithStrayDirRemovesDocument pins that a
+// sub-directory which is not a version at all does not keep an emptied document
+// alive. Every version directory this store writes is named by its version, so
+// an unparseable name is an interrupted copy or a manual backup rather than a
+// half-written version — and counting it as one left a document with no
+// versions in a state newVersionInfo rejects, so it could never be backed up,
+// synced or restored again, and only DeleteDocument could clear it.
+func TestDeleteLastDocumentVersionWithStrayDirRemovesDocument(t *testing.T) {
+	var (
+		ctx       = t.Context()
+		companyID = uu.IDFrom("3a4f1c2e-7b8d-4e9a-b1c2-d3e4f5a6b7c8")
+		docID     = uu.IDFrom("11111111-2222-4333-8444-555555555555")
+		userID    = uu.IDFrom("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
+		v0        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+	)
+
+	conn, documentsDir, companiesDir := newTestConnDirs(t)
+	require.NoError(t, conn.CreateDocument(
+		ctx, companyID, docID, userID, "v0", v0,
+		newTestMemFiles("f0.txt"), noopOnNew,
+	))
+
+	docDir := uuiddir.Join(documentsDir, docID)
+	require.NoError(t, docDir.Join("interrupted-copy").MakeDir())
+
+	left, err := conn.DeleteDocumentVersion(ctx, docID, v0)
+	require.NoError(t, err,
+		"a sub-directory that is not a version of the document must not keep the document alive")
+	require.Empty(t, left)
+
+	require.False(t, docDir.Exists(),
+		"the document directory must go with its last version: %s", docDir.Path())
+	require.False(t, uuiddir.Join(companiesDir.Join(companyID.String()), docID).Exists(),
+		"the company marker must go with the document")
+}
+
+// TestCompanyDocumentIDsNonDirectoryAboveCompanyPath is the company-side half of
+// TestNonDirectoryAboveDocumentPathIsNotDocumentNotFound. CompanyDocumentIDs
+// classified the directory stat itself instead of going through the one place
+// this package does, so a non-directory above the company directory surfaced as
+// a raw ENOTDIR that errs.Has[fs.ErrIsNotDirectory] does not match — while the
+// same layout fault under the documents directory answered to it.
+func TestCompanyDocumentIDsNonDirectoryAboveCompanyPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// Windows aliases ENOTDIR onto ERROR_PATH_NOT_FOUND, which also reports
+		// as os.ErrNotExist. See checkDir's doc comment.
+		t.Skip("skipping because windows reports ENOTDIR as os.ErrNotExist")
+	}
+
+	var (
+		ctx       = t.Context()
+		companyID = uu.IDFrom("3a4f1c2e-7b8d-4e9a-b1c2-d3e4f5a6b7c8")
+	)
+
+	conn, _, companiesDir := newTestConnDirs(t)
+
+	// Replaced after the connection was made, which NewConn's own validation
+	// would otherwise refuse: the company directory below it then fails the
+	// stat with a raw ENOTDIR rather than naming the leaf as a non-directory.
+	require.NoError(t, companiesDir.RemoveRecursive())
+	require.NoError(t, companiesDir.WriteAllString("not a directory"))
+
+	docIDs, err := conn.CompanyDocumentIDs(ctx, companyID)
+	require.True(t, errs.Has[fs.ErrIsNotDirectory](err),
+		"a non-directory above the company path must answer to the same check as one at it: %v", err)
+	require.NotErrorIs(t, err, os.ErrNotExist,
+		"callers swallow os.ErrNotExist as 'nothing here', which a corrupt store is not: %v", err)
+	require.Empty(t, docIDs)
 }

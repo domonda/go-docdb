@@ -249,6 +249,19 @@ with the typed one and there is a single thing to test for:
 looked up, not the component that is actually not a directory — the OS does not
 report which one it was.
 
+An empty version list is treated the same way, because it is the answer a caller
+acts on destructively. `enumVersionDirs` skips — logs, does not fail — any
+version directory whose `<version>.json` is missing or unreadable, which is the
+state a hard kill mid-`AddDocumentVersion` leaves behind, and a half-written
+version is still data. It reports how many it had to skip, and a caller that
+would decide something from an empty result refuses instead:
+`DocumentVersions` and `LatestDocumentVersionInfo` return an error rather than
+"this document has nothing", `DeleteDocumentVersion` keeps the emptied document,
+and `RestoreDocument` refuses to merge into it. A sub-directory whose name does
+not parse as a version is not counted: every version directory this store writes
+is named by its version, so an unparseable name is not a version of the document
+at all.
+
 `DocumentExists` answers `(false, nil)` only for a document that is genuinely
 absent; a store it could not read, or a path occupied by a non-directory, comes
 back as `(false, err)`. The `NewConn` validation panics report the real reason
@@ -261,13 +274,20 @@ behind as an empty directory, so every document path under it fails with
 Telling those apart needs a liveness marker inside the store, not a better error
 check.
 
-**Not covered on the write paths.** `CreateDocument`, `DeleteDocument`,
-`SetDocumentCompanyID` and `RestoreDocument` still decide existence the old way,
-in both directions. `DeleteDocument` and `SetDocumentCompanyID` still report an
-unreadable document path as `ErrDocumentNotFound`, and `CreateDocument` and
-`RestoreDocument` still read an unreadable one as absent and proceed as if
-creating a new document. That is a separate change with a different risk
-profile.
+**The write paths decide the same way.** `CreateDocument`, `DeleteDocument`,
+`SetDocumentCompanyID` and `RestoreDocument` used to gate on `fs.File.Exists` or
+`IsDir`, and failed in both directions: the first two reported an unreadable
+document path as `ErrDocumentNotFound`, the last two read one as absent and
+proceeded as if the path were free. All four go through the guard above now, so
+only a genuinely absent path is absent, a non-directory is refused rather than
+removed, and anything else propagates.
+
+Two consequences worth knowing as a caller. `CreateDocument` and
+`AddDocumentVersion` decide that the path they are about to write is free
+*before* their rollback is given anything to remove, so a refused write never
+deletes what it refused to overwrite. And `DeleteDocument` removes the document
+only together with its company marker: a company it could not read stops the
+delete instead of leaving `CompanyDocumentIDs` listing a document that is gone.
 
 ## Concurrency & Safety
 
