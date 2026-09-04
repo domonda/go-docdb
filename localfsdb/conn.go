@@ -121,7 +121,9 @@ func (c *Conn) documentDir(docID uu.ID) fs.File {
 // only produces that type when the leaf itself stats as a non-directory; a
 // non-directory higher up the path fails the stat with a raw ENOTDIR instead.
 // Both mean the same broken layout, so the raw one is joined with the typed
-// one and callers have a single thing to test for.
+// one and callers have a single thing to test for. Note that either error
+// names the path that was looked up, not the component that is actually not a
+// directory — the OS does not report which one it was.
 func checkDir(dir fs.File, notFound error) error {
 	err := dir.CheckIsDir()
 	switch {
@@ -671,17 +673,19 @@ func (c *Conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version d
 
 	leftVersions, lErr := c.documentVersions(ctx, docID)
 	err = errors.Join(err, lErr)
-	// Gated on lErr: a failed re-enumeration also returns no versions, and
-	// deleting the whole document because the listing failed would act on an
-	// absence that was never established — the same mistake this file stopped
-	// making when it stopped reporting an unreadable directory as not found.
-	//
-	// Defensive rather than test-covered: on a local filesystem the permission
-	// that breaks the listing also breaks the recursive removal below, so the
-	// branch cannot be driven into deleting anything from a test. It is
-	// reachable on a backend where the two can fail independently, such as an
-	// NFS readdir returning ESTALE.
-	if lErr == nil && len(leftVersions) == 0 {
+	// A failed re-enumeration also reports no versions left, and neither
+	// branch below may act on that: deleting the whole document because the
+	// listing failed is the same mistake this file stopped making when it
+	// stopped reporting an unreadable directory as not found, and the
+	// company re-derivation would index an empty slice. Spelled as a switch
+	// rather than gating only the first branch, so the empty case is handled
+	// once and cannot fall through to the second.
+	switch {
+	case lErr != nil:
+		// The versions could not be listed, so nothing is known about what is
+		// left. The error is already joined into err above.
+
+	case len(leftVersions) == 0:
 		// If no versions left, delete the company document entry
 		// and the document directory
 		companyID, e := c.documentCompanyID(ctx, docID)
@@ -692,7 +696,8 @@ func (c *Conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version d
 
 		e = uuiddir.RemoveDir(c.documentsDir, docDir)
 		err = errors.Join(err, e)
-	} else if version.After(leftVersions[len(leftVersions)-1]) {
+
+	case version.After(leftVersions[len(leftVersions)-1]):
 		// A document belongs to the company of its latest version, so deleting
 		// the latest version of a document that was moved between companies
 		// re-assigns it to the company of the version that becomes the latest

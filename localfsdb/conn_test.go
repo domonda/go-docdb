@@ -2258,3 +2258,82 @@ func TestNonDirectoryAboveDocumentPathIsNotDocumentNotFound(t *testing.T) {
 		})
 	}
 }
+
+// TestDeleteDocumentVersionKeepsDocumentWhenVersionsCannotBeListed pins the
+// branch that decides, after a version is deleted, whether the document has
+// any versions left. A listing that failed reports no versions just like a
+// document that has none, and deleting the document on that basis would act on
+// an absence that was never established. Mode 0o300 is what makes the two
+// separable: the delete itself needs write and execute on the document
+// directory, the re-listing needs read.
+func TestDeleteDocumentVersionKeepsDocumentWhenVersionsCannotBeListed(t *testing.T) {
+	requirePermissionBitsEnforced(t)
+
+	var (
+		ctx       = t.Context()
+		companyID = uu.IDFrom("3a4f1c2e-7b8d-4e9a-b1c2-d3e4f5a6b7c8")
+		docID     = uu.IDFrom("11111111-2222-4333-8444-555555555555")
+		userID    = uu.IDFrom("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
+		v0        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+	)
+
+	conn, documentsDir, companiesDir := newTestConnDirs(t)
+	require.NoError(t, conn.CreateDocument(
+		ctx, companyID, docID, userID, "v0", v0,
+		newTestMemFiles("f0.txt"), noopOnNew,
+	))
+
+	docDir := uuiddir.Join(documentsDir, docID)
+	companyDocDir := uuiddir.Join(companiesDir.Join(companyID.String()), docID)
+	require.True(t, companyDocDir.IsDir(), "the company marker must exist for this test to mean anything")
+
+	t.Cleanup(func() { restoreDirPermissions(t, docDir) })
+	require.NoError(t, os.Chmod(docDir.LocalPath(), 0o300)) // writable, not listable
+
+	_, err := conn.DeleteDocumentVersion(ctx, docID, v0)
+	restoreDirPermissions(t, docDir)
+	require.Error(t, err, "a delete whose re-enumeration failed must report the failure")
+	require.ErrorIs(t, err, os.ErrPermission)
+
+	// The company marker is the observable that tells the two apart. It lives
+	// outside the unreadable document directory, so if the empty-document
+	// branch were entered it would be removed even though the document
+	// directory's own removal fails on the same missing read permission.
+	require.True(t, companyDocDir.IsDir(),
+		"the company marker must survive a listing that failed: %s", companyDocDir.Path())
+	require.True(t, docDir.IsDir(),
+		"the document must survive a listing that failed rather than be deleted as empty: %s", docDir.Path())
+}
+
+// TestDeleteLastDocumentVersionRemovesDocument is the other side of that
+// branch, which had no localfsdb test: when the versions really were listed
+// and really are gone, the document directory and the company marker go with
+// them.
+func TestDeleteLastDocumentVersionRemovesDocument(t *testing.T) {
+	var (
+		ctx       = t.Context()
+		companyID = uu.IDFrom("3a4f1c2e-7b8d-4e9a-b1c2-d3e4f5a6b7c8")
+		docID     = uu.IDFrom("11111111-2222-4333-8444-555555555555")
+		userID    = uu.IDFrom("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
+		v0        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+	)
+
+	conn, documentsDir, companiesDir := newTestConnDirs(t)
+	require.NoError(t, conn.CreateDocument(
+		ctx, companyID, docID, userID, "v0", v0,
+		newTestMemFiles("f0.txt"), noopOnNew,
+	))
+
+	left, err := conn.DeleteDocumentVersion(ctx, docID, v0)
+	require.NoError(t, err)
+	require.Empty(t, left)
+
+	require.False(t, uuiddir.Join(documentsDir, docID).Exists(),
+		"the document directory must go with its last version")
+	require.False(t, uuiddir.Join(companiesDir.Join(companyID.String()), docID).Exists(),
+		"the company marker must go with the document")
+
+	exists, err := conn.DocumentExists(ctx, docID)
+	require.NoError(t, err)
+	require.False(t, exists)
+}
