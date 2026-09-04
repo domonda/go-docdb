@@ -10,7 +10,11 @@ import (
 
 // Conn is an interface for a docdb connection.
 type Conn interface {
-	// DocumentExists returns true if a document with the passed docID exists
+	// DocumentExists returns true if a document with the passed docID exists.
+	//
+	// (false, nil) means the document is known not to be there. A store that
+	// could not be asked at all returns an error instead, so a caller cannot
+	// mistake an unreachable backend for a document that was never stored.
 	DocumentExists(ctx context.Context, docID uu.ID) (exists bool, err error)
 
 	// CompanyIDs returns the IDs of all companies that have documents in the

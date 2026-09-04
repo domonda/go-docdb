@@ -443,3 +443,72 @@ func TestRouterConnRefusesCrossBackendCompanyMove(t *testing.T) {
 		require.True(t, restored)
 	})
 }
+
+// TestRestoreDocumentRequiresEveryBackendToAnswer pins what a restore does when
+// one of the other backends cannot say whether it holds the document. The check
+// exists to keep a document from ending up on two backends, so an unanswerable
+// question has to be an error: a backend that returns one used to be counted as
+// a "no" and the restore went ahead on an answer nobody had.
+func TestRestoreDocumentRequiresEveryBackendToAnswer(t *testing.T) {
+	var (
+		docID      = uu.IDv7()
+		companyA   = uu.IDv7()
+		companyB   = uu.IDv7()
+		backendErr = errors.New("backend unreachable")
+	)
+
+	t.Run("an unreachable other backend refuses the restore", func(t *testing.T) {
+		var restored bool
+		target := &docdb.MockConn{
+			DocumentExistsMock: func(context.Context, uu.ID) (bool, error) { return false, nil },
+			RestoreDocumentMock: func(context.Context, *docdb.HashedDocument, bool) error {
+				restored = true
+				return nil
+			},
+		}
+		unreachable := &docdb.MockConn{
+			DocumentExistsMock: func(context.Context, uu.ID) (bool, error) { return false, backendErr },
+		}
+		conn := routerconn.New(
+			func(_ context.Context, id uu.ID) (docdb.Conn, error) {
+				if id == companyB {
+					return target, nil
+				}
+				return unreachable, nil
+			},
+			func(context.Context, uu.ID) (docdb.Conn, error) { return target, nil },
+			target, unreachable,
+		)
+
+		err := conn.RestoreDocument(t.Context(), &docdb.HashedDocument{ID: docID, CompanyID: companyB}, false)
+		require.ErrorIs(t, err, backendErr,
+			"a backend that could not be asked must not be counted as one that does not hold the document")
+		require.False(t, restored,
+			"the restore must not proceed while it is unknown whether another backend holds the document")
+	})
+
+	t.Run("an unreachable backend does not matter once the target holds it", func(t *testing.T) {
+		var restored bool
+		target := &docdb.MockConn{
+			DocumentExistsMock: func(context.Context, uu.ID) (bool, error) { return true, nil },
+			RestoreDocumentMock: func(context.Context, *docdb.HashedDocument, bool) error {
+				restored = true
+				return nil
+			},
+		}
+		unreachable := &docdb.MockConn{
+			DocumentExistsMock: func(context.Context, uu.ID) (bool, error) {
+				t.Error("the other backends must not be asked once the target holds the document")
+				return false, backendErr
+			},
+		}
+		conn := routerconn.New(
+			func(context.Context, uu.ID) (docdb.Conn, error) { return target, nil },
+			func(context.Context, uu.ID) (docdb.Conn, error) { return target, nil },
+			target, unreachable,
+		)
+
+		require.NoError(t, conn.RestoreDocument(t.Context(), &docdb.HashedDocument{ID: docID, CompanyID: companyA}, false))
+		require.True(t, restored)
+	})
+}
