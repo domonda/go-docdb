@@ -241,7 +241,7 @@ Documents with no file changes are silently skipped. Returns `ErrNoChanges` only
 | `ErrNoChanges`               | New version has the same files and the same company as the previous version |
 | `ErrNotImplemented`          | Operation not supported by this `Conn` implementation |
 | `ErrReadonly`                | Write method called on a read-only `Conn`          |
-| `ErrDocumentNotFound`        | No document with the given ID; also matches `os.ErrNotExist`, `sql.ErrNoRows`, `errs.ErrNotFound` |
+| `ErrDocumentNotFound`        | No document with the given ID; also matches `os.ErrNotExist`, `sql.ErrNoRows`, `errs.ErrNotFound`. Only a document that is genuinely absent: a store that could not be read propagates the underlying error instead |
 | `ErrDocumentFileNotFound`    | File not found in the version                      |
 | `ErrDocumentVersionNotFound` | Version not found for the document                 |
 | `ErrDocumentAlreadyExists`   | `CreateDocument` called for an existing document ID |
@@ -250,6 +250,13 @@ Documents with no file changes are silently skipped. Returns `ErrNoChanges` only
 | `ErrPathConflict`            | Filesystem path conflict in `localfsdb`            |
 
 Use `errs.Has[ErrDocumentNotFound](err)` (from `github.com/domonda/go-errs`) to test for a specific error type.
+
+A not-found error means the document is known not to be there. A backend that
+could not be asked at all — an unmounted volume, a permission change, an I/O
+error — returns that failure instead, so a caller that treats not-found as
+"nothing here, carry on" cannot act on an absence that was never established.
+The same holds for `DocumentExists`: `(false, nil)` is a positive answer, and
+an unreadable backend returns `(false, err)`.
 
 ## Utility Functions
 

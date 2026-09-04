@@ -12,7 +12,10 @@ import (
 	"github.com/domonda/go-types/uu"
 )
 
-// DocumentExists returns true if a document with the passed docID exists
+// DocumentExists returns true if a document with the passed docID exists.
+//
+// See [Conn.DocumentExists] for what (false, nil) does and does not mean:
+// a store that could not be asked at all returns an error instead.
 func DocumentExists(ctx context.Context, docID uu.ID) (exists bool, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 

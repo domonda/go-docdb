@@ -1805,10 +1805,13 @@ type documentDirCall struct {
 	call func(conn *localfsdb.Conn, docID uu.ID) error
 }
 
-// documentDirCalls returns one call per guard that turns a missing document
-// directory into docdb.ErrDocumentNotFound. Conn.DocumentExists resolves the
-// same directory but answers with a bool rather than that error, so it is
-// asserted separately by each test using this table.
+// documentDirCalls returns the exported entry points that turn a missing
+// document directory into docdb.ErrDocumentNotFound, one per guard plus both
+// methods that share the documentAndVersionDir guard, so a reintroduced
+// collapse is caught at every method a caller can reach it through.
+// Conn.DocumentExists resolves the same directory but answers with a bool
+// rather than that error, so it is asserted separately by each test using
+// this table.
 func documentDirCalls(ctx context.Context, version docdb.VersionTime) []documentDirCall {
 	return []documentDirCall{
 		{"DocumentVersions", func(conn *localfsdb.Conn, docID uu.ID) error {
@@ -1825,6 +1828,10 @@ func documentDirCalls(ctx context.Context, version docdb.VersionTime) []document
 		}},
 		{"ReadDocumentVersionFile", func(conn *localfsdb.Conn, docID uu.ID) error {
 			_, err := conn.ReadDocumentVersionFile(ctx, docID, version, "f0.txt")
+			return err
+		}},
+		{"DocumentVersionFileProvider", func(conn *localfsdb.Conn, docID uu.ID) error {
+			_, err := conn.DocumentVersionFileProvider(ctx, docID, version)
 			return err
 		}},
 	}
@@ -1959,4 +1966,254 @@ func TestUnreadableVersionDirIsNotVersionNotFound(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrPermission)
 	require.False(t, errs.Has[docdb.ErrDocumentVersionNotFound](err),
 		"a version directory that could not be looked at must not be reported as absent: %v", err)
+}
+
+// TestDocumentExistsReportsStoredDocument pins the arm of Conn.DocumentExists
+// that nothing else asserts: a document that is actually stored must be
+// reported as (true, nil). Every other existence assertion in this package is
+// about a document that is absent, so the guard could answer false for every
+// document — the unreadable-store bug turned inside out, and a far more
+// destructive one, because a caller that asks before writing would recreate a
+// document that is already there — without a single test failing.
+func TestDocumentExistsReportsStoredDocument(t *testing.T) {
+	var (
+		ctx       = t.Context()
+		companyID = uu.IDFrom("3a4f1c2e-7b8d-4e9a-b1c2-d3e4f5a6b7c8")
+		docID     = uu.IDFrom("11111111-2222-4333-8444-555555555555")
+		userID    = uu.IDFrom("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
+		v0        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+		conn      = localfsdb.NewTestConn(t)
+	)
+
+	require.NoError(t, conn.CreateDocument(
+		ctx, companyID, docID, userID, "v0", v0,
+		newTestMemFiles("f0.txt"), noopOnNew,
+	))
+
+	exists, err := conn.DocumentExists(ctx, docID)
+	require.NoError(t, err)
+	require.True(t, exists, "a document that was stored must be reported as existing")
+}
+
+// TestNonDirectoryDocumentPathIsNotDocumentNotFound covers the third answer
+// checkDir can give: a document path occupied by something that is not a
+// directory. It is neither a document that is absent nor a store that could not
+// be read, but a store whose layout is corrupt, and reporting it as
+// docdb.ErrDocumentNotFound would let a caller "repair" it by writing a new
+// document over whatever is sitting in the document's place. fs.ErrIsNotDirectory
+// is propagated so the corruption is named instead.
+func TestNonDirectoryDocumentPathIsNotDocumentNotFound(t *testing.T) {
+	var (
+		ctx   = t.Context()
+		docID = uu.IDFrom("11111111-2222-4333-8444-555555555555")
+		v0    = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+	)
+
+	conn, documentsDir, _ := newTestConnDirs(t)
+
+	// A regular file where the document directory belongs, the way a truncated
+	// restore or a bad manual fix leaves the store.
+	docDir := uuiddir.Join(documentsDir, docID)
+	require.NoError(t, docDir.Dir().MakeAllDirs())
+	require.NoError(t, docDir.WriteAllString("not a directory"))
+
+	for _, c := range documentDirCalls(ctx, v0) {
+		t.Run(c.name, func(t *testing.T) {
+			err := c.call(conn, docID)
+			require.ErrorAs(t, err, &fs.ErrIsNotDirectory{},
+				"a corrupt document path must surface as the layout error it is")
+			require.False(t, errs.Has[docdb.ErrDocumentNotFound](err),
+				"a document path occupied by a non-directory is not a document that was never stored: %v", err)
+			require.NotErrorIs(t, err, os.ErrNotExist,
+				"callers swallow os.ErrNotExist as 'nothing here', which a corrupt store is not: %v", err)
+		})
+	}
+
+	t.Run("DocumentExists", func(t *testing.T) {
+		exists, err := conn.DocumentExists(ctx, docID)
+		require.ErrorAs(t, err, &fs.ErrIsNotDirectory{},
+			"DocumentExists must not answer a clean (false, nil) for a corrupt document path")
+		require.False(t, exists)
+	})
+}
+
+// TestDocumentVersionNotFoundForAbsentVersion is the regression guard for the
+// version-level half of the same contract: a version directory that is
+// genuinely absent from a document that does exist must still be
+// docdb.ErrDocumentVersionNotFound, and must not be reported as the whole
+// document being missing.
+func TestDocumentVersionNotFoundForAbsentVersion(t *testing.T) {
+	var (
+		ctx       = t.Context()
+		companyID = uu.IDFrom("3a4f1c2e-7b8d-4e9a-b1c2-d3e4f5a6b7c8")
+		docID     = uu.IDFrom("11111111-2222-4333-8444-555555555555")
+		userID    = uu.IDFrom("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
+		v0        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+		absentV   = docdb.MustVersionTimeFromString("2024-01-02_00-00-00.000")
+		conn      = localfsdb.NewTestConn(t)
+	)
+
+	require.NoError(t, conn.CreateDocument(
+		ctx, companyID, docID, userID, "v0", v0,
+		newTestMemFiles("f0.txt"), noopOnNew,
+	))
+
+	t.Run("ReadDocumentVersionFile", func(t *testing.T) {
+		_, err := conn.ReadDocumentVersionFile(ctx, docID, absentV, "f0.txt")
+		require.ErrorIs(t, err, docdb.NewErrDocumentVersionNotFound(docID, absentV))
+		require.False(t, errs.Has[docdb.ErrDocumentNotFound](err),
+			"the document exists, only the version does not: %v", err)
+	})
+
+	t.Run("DocumentVersionFileProvider", func(t *testing.T) {
+		_, err := conn.DocumentVersionFileProvider(ctx, docID, absentV)
+		require.ErrorIs(t, err, docdb.NewErrDocumentVersionNotFound(docID, absentV))
+		require.False(t, errs.Has[docdb.ErrDocumentNotFound](err),
+			"the document exists, only the version does not: %v", err)
+	})
+}
+
+// TestDocumentExistsCancelledContext asserts that a cancelled context is
+// reported as a cancellation rather than as an absent document. DocumentExists
+// answers with a bool, so a caller that ignored the error of a cancelled call
+// would read the zero value false — the same "document is not there" it must
+// never invent — and the cancellation has to reach the caller as
+// context.Canceled to be recognizable as one.
+func TestDocumentExistsCancelledContext(t *testing.T) {
+	var (
+		companyID = uu.IDFrom("3a4f1c2e-7b8d-4e9a-b1c2-d3e4f5a6b7c8")
+		docID     = uu.IDFrom("11111111-2222-4333-8444-555555555555")
+		userID    = uu.IDFrom("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
+		v0        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+		conn      = localfsdb.NewTestConn(t)
+	)
+
+	require.NoError(t, conn.CreateDocument(
+		t.Context(), companyID, docID, userID, "v0", v0,
+		newTestMemFiles("f0.txt"), noopOnNew,
+	))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	exists, err := conn.DocumentExists(ctx, docID)
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, exists, "a cancelled call answers nothing about the document")
+}
+
+// requirePanicMessage runs f, requires that it panics, and returns the panic
+// value as a string so the message itself can be asserted on.
+func requirePanicMessage(t *testing.T, f func()) string {
+	t.Helper()
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		f()
+	}()
+	require.NotNil(t, recovered, "expected a panic")
+	return fmt.Sprint(recovered)
+}
+
+// TestNewConnPanicMessagesNameTheRealProblem covers the validation panics of
+// NewConn. They are the first thing an operator sees when a store does not come
+// up, and they used to blame a missing directory for every directory that could
+// not be checked: a documents directory behind an unmounted volume or a changed
+// permission was reported as one that does not exist, sending the search for
+// the cause in the wrong direction. Each panic must now name what is actually
+// wrong, and which of the two directories it is about.
+func TestNewConnPanicMessagesNameTheRealProblem(t *testing.T) {
+	newDirs := func(t *testing.T) (documentsDir, companiesDir fs.File) {
+		t.Helper()
+		tmp := fs.File(t.TempDir())
+		documentsDir = tmp.Join("documents")
+		companiesDir = tmp.Join("companies")
+		require.NoError(t, documentsDir.MakeDir())
+		require.NoError(t, companiesDir.MakeDir())
+		return documentsDir, companiesDir
+	}
+
+	t.Run("absent documentsDir", func(t *testing.T) {
+		_, companiesDir := newDirs(t)
+		msg := requirePanicMessage(t, func() {
+			localfsdb.NewConn(fs.File(t.TempDir()).Join("absent"), companiesDir)
+		})
+		require.Contains(t, msg, "documentsDir")
+		require.Contains(t, msg, "does not exist")
+	})
+
+	t.Run("absent companiesDir", func(t *testing.T) {
+		documentsDir, _ := newDirs(t)
+		msg := requirePanicMessage(t, func() {
+			localfsdb.NewConn(documentsDir, fs.File(t.TempDir()).Join("absent"))
+		})
+		require.Contains(t, msg, "companiesDir",
+			"the panic must name the directory it is about, not the other one")
+		require.Contains(t, msg, "does not exist")
+	})
+
+	t.Run("documentsDir is not a directory", func(t *testing.T) {
+		documentsDir, companiesDir := newDirs(t)
+		notADir := documentsDir.Dir().Join("file-in-the-way")
+		require.NoError(t, notADir.WriteAllString("not a directory"))
+		msg := requirePanicMessage(t, func() {
+			localfsdb.NewConn(notADir, companiesDir)
+		})
+		require.Contains(t, msg, "documentsDir")
+		require.Contains(t, msg, "not a directory")
+		require.NotContains(t, msg, "does not exist",
+			"a path occupied by a file is not a path that does not exist")
+	})
+
+	t.Run("unreadable documentsDir", func(t *testing.T) {
+		requirePermissionBitsEnforced(t)
+
+		documentsDir, companiesDir := newDirs(t)
+		// The documents directory is intact; only the directory above it is
+		// made unreadable, the way an unmounted volume or a changed permission
+		// makes a present store impossible to look at.
+		parentDir := documentsDir.Dir()
+		t.Cleanup(func() { restoreDirPermissions(t, parentDir) })
+		require.NoError(t, os.Chmod(parentDir.LocalPath(), 0o000))
+
+		msg := requirePanicMessage(t, func() {
+			localfsdb.NewConn(documentsDir, companiesDir)
+		})
+		require.Contains(t, msg, "documentsDir")
+		require.Contains(t, msg, "permission denied")
+		require.NotContains(t, msg, "does not exist",
+			"a store that could not be read must not send the operator looking for a missing directory")
+	})
+}
+
+// TestNonDirectoryVersionPathIsNotVersionNotFound is the version-level half of
+// TestNonDirectoryDocumentPathIsNotDocumentNotFound. A version directory
+// replaced by a regular file is as plausible as the document-level case,
+// because a version directory and its <version>.json info file are siblings in
+// the same directory, and it must not be reported as a version that was never
+// written.
+func TestNonDirectoryVersionPathIsNotVersionNotFound(t *testing.T) {
+	var (
+		ctx       = t.Context()
+		companyID = uu.IDFrom("3a4f1c2e-7b8d-4e9a-b1c2-d3e4f5a6b7c8")
+		docID     = uu.IDFrom("11111111-2222-4333-8444-555555555555")
+		userID    = uu.IDFrom("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
+		v0        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+		vFile     = docdb.MustVersionTimeFromString("2024-02-01_00-00-00.000")
+	)
+
+	conn, documentsDir, _ := newTestConnDirs(t)
+	require.NoError(t, conn.CreateDocument(
+		ctx, companyID, docID, userID, "v0", v0,
+		newTestMemFiles("f0.txt"), noopOnNew,
+	))
+
+	// A regular file where a version directory belongs.
+	docDir := uuiddir.Join(documentsDir, docID)
+	require.NoError(t, docDir.Join(vFile.String()).WriteAllString("not a directory"))
+
+	_, err := conn.ReadDocumentVersionFile(ctx, docID, vFile, "f0.txt")
+	require.ErrorAs(t, err, &fs.ErrIsNotDirectory{},
+		"a corrupt version path must surface as the layout error it is")
+	require.False(t, errs.Has[docdb.ErrDocumentVersionNotFound](err),
+		"a version path occupied by a non-directory is not a version that was never written: %v", err)
 }
