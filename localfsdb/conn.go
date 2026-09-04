@@ -131,16 +131,33 @@ func (c *Conn) documentDir(docID uu.ID) fs.File {
 // a missing document. Distinguishing the two on Windows needs a walk up the
 // path rather than the errno.
 func checkDir(dir fs.File, notFound error) error {
-	err := dir.CheckIsDir()
+	exists, err := dirState(dir)
+	switch {
+	case err != nil:
+		return err
+	case !exists:
+		return notFound
+	default:
+		return nil
+	}
+}
+
+// dirState reports whether dir is an existing directory, telling genuine
+// absence — (false, nil) — apart from a directory that could not be checked at
+// all, which is returned as an error rather than as "not there". It is the one
+// place this package classifies the result of a directory stat; see checkDir
+// for why, and for what this cannot see.
+func dirState(dir fs.File) (exists bool, err error) {
+	err = dir.CheckIsDir()
 	switch {
 	case err == nil:
-		return nil
+		return true, nil
 	case errors.Is(err, os.ErrNotExist):
-		return notFound
+		return false, nil
 	case errors.Is(err, syscall.ENOTDIR):
-		return errors.Join(fs.NewErrIsNotDirectory(dir), err)
+		return false, errors.Join(fs.NewErrIsNotDirectory(dir), err)
 	default:
-		return err
+		return false, err
 	}
 }
 
@@ -176,18 +193,7 @@ func (c *Conn) DocumentExists(ctx context.Context, docID uu.ID) (exists bool, er
 	// store that does not hold the document. checkDir does the same mapping
 	// for the callers that answer with an error instead of a bool, and its
 	// doc comment carries the reasoning and the one case this cannot see.
-	err = checkDir(c.documentDir(docID), docdb.NewErrDocumentNotFound(docID))
-	switch {
-	case err == nil:
-		return true, nil
-	case errors.Is(err, os.ErrNotExist):
-		// Including the ErrDocumentNotFound passed above, which matches
-		// os.ErrNotExist: a document that is not there is this method's
-		// (false, nil), not an error.
-		return false, nil
-	default:
-		return false, err
-	}
+	return dirState(c.documentDir(docID))
 }
 
 func (c *Conn) CompanyIDs(ctx context.Context) (companyIDs uu.IDSlice, err error) {
@@ -374,8 +380,8 @@ func (c *Conn) setDocumentCompanyID(ctx context.Context, docID, companyID uu.ID)
 	}
 
 	docDir := c.documentDir(docID)
-	if !docDir.Exists() {
-		return docdb.NewErrDocumentNotFound(docID)
+	if err = checkDir(docDir, docdb.NewErrDocumentNotFound(docID)); err != nil {
+		return err
 	}
 
 	currCompanyID, err := c.documentCompanyID(ctx, docID)
@@ -616,9 +622,14 @@ func (c *Conn) DeleteDocument(ctx context.Context, docID uu.ID) (err error) {
 		UUID("docID", docID).
 		Log()
 
+	// Not Exists: it collapses every Stat error into false, so an unreadable
+	// document was reported as one that is not there. A path occupied by a
+	// non-directory is refused here too rather than removed: the removal below
+	// is recursive and would delete whatever is sitting in the document's
+	// place, on a call that then returns an error anyway.
 	docDir := c.documentDir(docID)
-	if !docDir.Exists() {
-		return docdb.NewErrDocumentNotFound(docID)
+	if err = checkDir(docDir, docdb.NewErrDocumentNotFound(docID)); err != nil {
+		return err
 	}
 
 	companyID, err := c.documentCompanyID(ctx, docID)
@@ -865,8 +876,18 @@ func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.I
 	docWriteMtx.Lock(docID)
 	defer docWriteMtx.Unlock(docID)
 
+	// Decided before the rollback below is registered, and with dirState
+	// rather than IsDir: IsDir reports a document path it could not stat as
+	// free, so a create proceeded against an unreadable or corrupt store, and
+	// when it then failed the rollback deleted whatever was at that path —
+	// a create destroying pre-existing data. Only a genuinely absent path is
+	// free to create.
 	docDir := c.documentDir(docID)
-	if docDir.IsDir() {
+	docExists, err := dirState(docDir)
+	if err != nil {
+		return err
+	}
+	if docExists {
 		return docdb.NewErrDocumentAlreadyExists(docID)
 	}
 
@@ -1198,9 +1219,17 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 	docWriteMtx.Lock(doc.ID)
 	defer docWriteMtx.Unlock(doc.ID)
 
+	// Not Exists: it collapses every Stat error into false, so an unreadable or
+	// corrupt document path read as absent and sent the restore down the
+	// create-fresh branch, skipping the company-mismatch check and the
+	// existing-version comparison that branch exists to run.
 	docDir := c.documentDir(doc.ID)
+	docExisted, err := dirState(docDir)
+	if err != nil {
+		return err
+	}
 
-	if recreate && docDir.Exists() {
+	if recreate && docExisted {
 		// NOTE: recreate deletes the existing document before the replacement
 		// is written and is therefore not atomic — a later failure in this call
 		// leaves the document absent (the rollback below only undoes what this
@@ -1221,9 +1250,10 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		if e != nil {
 			return e
 		}
+		// The document was just removed, so everything below must treat it as
+		// absent — what re-statting the directory here used to establish.
+		docExisted = false
 	}
-
-	docExisted := docDir.Exists()
 
 	var (
 		existingVersions []docdb.VersionTime
