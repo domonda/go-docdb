@@ -197,7 +197,7 @@ If an error occurs, the new version directory and info file are removed during c
 ### Deleting a Document or Version
 
 - **`DeleteDocument()`**: Removes the document directory and the company mapping entry.
-- **`DeleteDocumentVersion()`**: Removes a single version directory and its `.json` info file. If no versions remain after deletion, the document directory and company mapping are also removed.
+- **`DeleteDocumentVersion()`**: Removes a single version directory and its `.json` info file. If no versions remain after deletion, the document directory and company mapping are also removed — but only when the remaining versions were actually listed. A failed re-enumeration also reports no versions left, and deleting a whole document because its directory could not be read is the same mistake this store stopped making when it stopped reporting an unreadable directory as not found, so a failed listing leaves the document alone and comes back as an error.
 
   The deleted version's **successor is chained onto the deleted version's own predecessor**, so no version is left naming one the document no longer has. This is what `pgstore` does in the same call, and `RestoreDocument` on both implementations undoes exactly this relink when the version is restored (see `storeconn.CreateDocumentVersionInput.RelinkSuccessor`). Successors are found by the predecessor they name rather than by their place in the version order, and every match is relinked, because nothing on this store refuses two versions naming the same predecessor. Deleting a *genesis* version relinks nothing, also as `pgstore` does: it has no predecessor to hand the successor to, which is what lets a merge-restore take the earliest version back as the genesis it was.
 
@@ -219,6 +219,55 @@ A version filled back into the middle of an existing chain **takes back the succ
 After a merge, `company.id` is re-derived from the document's latest version **only when this call wrote the version that is now the latest one** — a merge that wrote nothing, or only versions below the latest one on disk, changed nothing about who owns the document, and re-deriving would undo a `SetDocumentCompanyID` move that was never committed as a version.
 
 If an error occurs, the version directories and info files created during the call are removed during cleanup, and a relinked successor's info file is restored to its original bytes — it is a version this call did not create and must not remove.
+
+## Existence Checks & Not-Found Errors
+
+Whether a document or a version directory is there is decided with
+`fs.File.CheckIsDir`, not `fs.File.IsDir`. `IsDir` collapses every `Stat` error
+into `false`, so a directory that merely could not be read — a permission
+change, an I/O error, a stale NFS handle — used to be reported as a document
+that does not exist. Callers treat a not-found error as "nothing here, carry
+on", which during a storage outage is exactly the wrong thing to do, so only
+genuine absence may produce one.
+
+The internal `checkDir` helper does that mapping once for every guard that
+resolves a document or version directory:
+
+| On disk                                | Result                                             |
+| -------------------------------------- | -------------------------------------------------- |
+| Directory is there                     | No error                                           |
+| Directory is absent (`os.ErrNotExist`) | `ErrDocumentNotFound`/`ErrDocumentVersionNotFound` |
+| Path is occupied by a non-directory    | An `fs.ErrIsNotDirectory` error                    |
+| Anything else (permissions, I/O, …)    | The underlying error, unchanged                    |
+
+A path that exists but is not a directory is a corrupt store, not a missing
+document. `go-fs` only produces the typed error when the leaf itself stats as a
+non-directory; a non-directory higher up the path fails the stat with a raw
+`ENOTDIR` instead. Both mean the same broken layout, so the raw one is joined
+with the typed one and there is a single thing to test for:
+`errs.Has[fs.ErrIsNotDirectory](err)`. Either error names the path that was
+looked up, not the component that is actually not a directory — the OS does not
+report which one it was.
+
+`DocumentExists` answers `(false, nil)` only for a document that is genuinely
+absent; a store it could not read, or a path occupied by a non-directory, comes
+back as `(false, err)`. The `NewConn` validation panics report the real reason
+an unusable `documentsDir` or `companiesDir` could not be used, instead of
+always naming it as missing.
+
+**What this cannot see.** A cleanly unmounted volume leaves its mount point
+behind as an empty directory, so every document path under it fails with
+`ENOENT` and stays indistinguishable from a document that was never stored.
+Telling those apart needs a liveness marker inside the store, not a better error
+check.
+
+**Not covered on the write paths.** `CreateDocument`, `DeleteDocument`,
+`SetDocumentCompanyID` and `RestoreDocument` still decide existence the old way,
+in both directions. `DeleteDocument` and `SetDocumentCompanyID` still report an
+unreadable document path as `ErrDocumentNotFound`, and `CreateDocument` and
+`RestoreDocument` still read an unreadable one as absent and proceed as if
+creating a new document. That is a separate change with a different risk
+profile.
 
 ## Concurrency & Safety
 
