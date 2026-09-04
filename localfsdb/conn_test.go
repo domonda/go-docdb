@@ -2232,6 +2232,13 @@ func TestNonDirectoryVersionPathIsNotVersionNotFound(t *testing.T) {
 // uuiddir levels above it fails the stat with a raw ENOTDIR instead. Callers
 // are told to branch on one error type, so both shapes have to answer to it.
 func TestNonDirectoryAboveDocumentPathIsNotDocumentNotFound(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// Windows aliases ENOTDIR onto ERROR_PATH_NOT_FOUND, which also reports
+		// as os.ErrNotExist, so checkDir cannot tell this case from absence
+		// there. See its doc comment.
+		t.Skip("skipping because windows reports ENOTDIR as os.ErrNotExist")
+	}
+
 	var (
 		ctx   = t.Context()
 		docID = uu.IDFrom("11111111-2222-4333-8444-555555555555")

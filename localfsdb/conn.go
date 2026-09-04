@@ -124,6 +124,12 @@ func (c *Conn) documentDir(docID uu.ID) fs.File {
 // one and callers have a single thing to test for. Note that either error
 // names the path that was looked up, not the component that is actually not a
 // directory — the OS does not report which one it was.
+//
+// Unix only: Windows defines syscall.ENOTDIR as ERROR_PATH_NOT_FOUND, which
+// [syscall.Errno.Is] also reports as [os.ErrNotExist], so the absence case
+// above matches first and a non-directory above the leaf is reported there as
+// a missing document. Distinguishing the two on Windows needs a walk up the
+// path rather than the errno.
 func checkDir(dir fs.File, notFound error) error {
 	err := dir.CheckIsDir()
 	switch {
