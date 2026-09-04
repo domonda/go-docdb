@@ -5,6 +5,13 @@ All notable changes to `github.com/domonda/go-docdb` are documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.1.2] - 2026-09-04
+
+### Fixed
+- **`localfsdb` no longer reports a document it merely failed to look at as a document that does not exist.** Existence was decided with `fs.File.IsDir`, which collapses every `Stat` error into `false`, so an unmounted volume, a permission change, an NFS timeout or an I/O error made every document of the affected store indistinguishable from one that was never stored. `docdb.ErrDocumentNotFound` is now returned only for a directory that is genuinely absent; a directory that could not be checked at all propagates the underlying error, and a path occupied by a non-directory propagates `fs.ErrIsNotDirectory` as the corrupt-store signal it is. This affects `DocumentExists`, `DocumentVersions`, `DocumentVersionInfo`, `LatestDocumentVersionInfo`, `ReadDocumentVersionFile` and `DocumentVersionFileProvider`, as well as the version-directory lookup that produced `ErrDocumentVersionNotFound` the same way, and the `NewConn` validation panics, whose message named a missing directory for any unreadable one.
+
+  `Conn.DocumentExists` is the behavior change to watch for: it used to answer `(false, nil)` for a store it could not read and now returns `(false, err)`. Callers that treat a not-found error as "nothing here, carry on" — rebuilding metadata from a secondary source, skipping a document during enumeration — now fail loud during a storage outage instead of acting on an absence that was never established.
+
 ## [v1.1.1] - 2026-08-25
 
 ### Fixed

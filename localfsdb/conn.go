@@ -32,14 +32,17 @@ type Conn struct {
 }
 
 func NewConn(documentsDir, companiesDir fs.File) *Conn {
-	if !documentsDir.IsDir() {
-		panic("documentsDir does not exist: '" + string(documentsDir) + "'")
+	// CheckIsDir instead of IsDir: IsDir reports a directory that merely could
+	// not be read as "does not exist", which would blame a missing directory
+	// for an unmounted volume or a permission problem.
+	if err := documentsDir.CheckIsDir(); err != nil {
+		panic("can't use documentsDir: " + err.Error())
 	}
 	if documentsDir.FileSystem() != fs.Local {
 		panic("documentsDir is not on local file-system: '" + string(documentsDir) + "'")
 	}
-	if !companiesDir.IsDir() {
-		panic("companiesDir does not exist: '" + string(companiesDir) + "'")
+	if err := companiesDir.CheckIsDir(); err != nil {
+		panic("can't use companiesDir: " + err.Error())
 	}
 	if companiesDir.FileSystem() != fs.Local {
 		panic("companiesDir is not on local file-system: '" + string(companiesDir) + "'")
@@ -96,14 +99,38 @@ func (c *Conn) documentDir(docID uu.ID) fs.File {
 	return uuiddir.Join(c.documentsDir, docID)
 }
 
+// checkDir returns notFound only if dir is genuinely absent and the underlying
+// error for a directory that could not be checked at all.
+//
+// [fs.File.IsDir] collapses every Stat error into false, so a document or
+// version directory that merely could not be read — an unmounted volume, a
+// permission change, an I/O error — used to be reported as one that does not
+// exist. Callers treat a not-found error as "nothing here, carry on", which
+// during a storage outage is exactly the wrong thing to do, so only genuine
+// absence may produce one.
+//
+// A path that exists but is not a directory is a corrupt store rather than a
+// missing document, so [fs.ErrIsNotDirectory] is propagated as well.
+func checkDir(dir fs.File, notFound error) error {
+	err := dir.CheckIsDir()
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, os.ErrNotExist):
+		return notFound
+	default:
+		return err
+	}
+}
+
 func (c *Conn) documentAndVersionDir(docID uu.ID, version docdb.VersionTime) (docDir fs.File, versionDir fs.File, err error) {
 	docDir = c.documentDir(docID)
-	if !docDir.IsDir() {
-		return docDir, "", docdb.NewErrDocumentNotFound(docID)
+	if err = checkDir(docDir, docdb.NewErrDocumentNotFound(docID)); err != nil {
+		return docDir, "", err
 	}
 	versionDir = docDir.Join(version.String())
-	if !versionDir.IsDir() {
-		return docDir, versionDir, docdb.NewErrDocumentVersionNotFound(docID, version)
+	if err = checkDir(versionDir, docdb.NewErrDocumentVersionNotFound(docID, version)); err != nil {
+		return docDir, versionDir, err
 	}
 	return docDir, versionDir, nil
 }
@@ -116,11 +143,25 @@ func (c *Conn) companyDocumentDir(companyID, docID uu.ID) fs.File {
 }
 
 func (c *Conn) DocumentExists(ctx context.Context, docID uu.ID) (exists bool, err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, docID)
+
 	if err = ctx.Err(); err != nil {
 		return false, err
 	}
 
-	return c.documentDir(docID).IsDir(), nil
+	// Only a genuine absence is a clean (false, nil): a document directory that
+	// could not be read at all, or a path occupied by a non-directory, is
+	// returned as an error so no caller can mistake an unreadable store for a
+	// store that does not hold the document. See checkDir.
+	err = c.documentDir(docID).CheckIsDir()
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, os.ErrNotExist):
+		return false, nil
+	default:
+		return false, err
+	}
 }
 
 func (c *Conn) CompanyIDs(ctx context.Context) (companyIDs uu.IDSlice, err error) {
@@ -201,8 +242,8 @@ func (c *Conn) latestDocumentVersionInfo(ctx context.Context, docID uu.ID) (vers
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
 	docDir := c.documentDir(docID)
-	if !docDir.IsDir() {
-		return nil, "", docdb.NewErrDocumentNotFound(docID)
+	if err = checkDir(docDir, docdb.NewErrDocumentNotFound(docID)); err != nil {
+		return nil, "", err
 	}
 
 	var latestVersion docdb.VersionTime
@@ -340,8 +381,8 @@ func (c *Conn) documentVersions(ctx context.Context, docID uu.ID) (versions []do
 	defer errs.WrapWithFuncParams(&err, ctx, docID)
 
 	docDir := c.documentDir(docID)
-	if !docDir.IsDir() {
-		return nil, docdb.NewErrDocumentNotFound(docID)
+	if err = checkDir(docDir, docdb.NewErrDocumentNotFound(docID)); err != nil {
+		return nil, err
 	}
 	err = enumVersionDirs(ctx, docDir, docID, func(version docdb.VersionTime, dir fs.File) {
 		versions = append(versions, version)
@@ -399,8 +440,8 @@ func (c *Conn) documentVersionInfo(ctx context.Context, docID uu.ID, version doc
 	}
 
 	docDir = c.documentDir(docID)
-	if !docDir.IsDir() {
-		return nil, docDir, docdb.NewErrDocumentNotFound(docID)
+	if err = checkDir(docDir, docdb.NewErrDocumentNotFound(docID)); err != nil {
+		return nil, docDir, err
 	}
 
 	infoFile := docDir.Join(version.String() + ".json")

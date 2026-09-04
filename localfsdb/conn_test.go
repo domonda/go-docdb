@@ -7,6 +7,7 @@ import (
 	"io"
 	"maps"
 	"os"
+	"runtime"
 	"slices"
 	"sync"
 	"testing"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/domonda/go-docdb"
 	"github.com/domonda/go-docdb/localfsdb"
+	"github.com/domonda/go-errs"
 	"github.com/domonda/go-types/uu"
 )
 
@@ -1794,4 +1796,167 @@ func TestDeleteDocumentVersionWithUnreadableInfoFile(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, &v1, v2Info.PrevVersion,
 		"without a readable info file there is no predecessor to relink the successor onto")
+}
+
+// documentDirCall is one Conn entry point that resolves a document directory
+// before doing anything else, named after the method under test.
+type documentDirCall struct {
+	name string
+	call func(conn *localfsdb.Conn, docID uu.ID) error
+}
+
+// documentDirCalls returns one call per guard that turns a missing document
+// directory into docdb.ErrDocumentNotFound. Conn.DocumentExists resolves the
+// same directory but answers with a bool rather than that error, so it is
+// asserted separately by each test using this table.
+func documentDirCalls(ctx context.Context, version docdb.VersionTime) []documentDirCall {
+	return []documentDirCall{
+		{"DocumentVersions", func(conn *localfsdb.Conn, docID uu.ID) error {
+			_, err := conn.DocumentVersions(ctx, docID)
+			return err
+		}},
+		{"LatestDocumentVersionInfo", func(conn *localfsdb.Conn, docID uu.ID) error {
+			_, err := conn.LatestDocumentVersionInfo(ctx, docID)
+			return err
+		}},
+		{"DocumentVersionInfo", func(conn *localfsdb.Conn, docID uu.ID) error {
+			_, err := conn.DocumentVersionInfo(ctx, docID, version)
+			return err
+		}},
+		{"ReadDocumentVersionFile", func(conn *localfsdb.Conn, docID uu.ID) error {
+			_, err := conn.ReadDocumentVersionFile(ctx, docID, version, "f0.txt")
+			return err
+		}},
+	}
+}
+
+// requirePermissionBitsEnforced skips a test that makes a directory unreadable
+// where doing so has no effect, so the test cannot pass for the wrong reason by
+// never producing the failure it asserts on.
+func requirePermissionBitsEnforced(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping because directory permission bits are not enforced on windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("skipping because running as root bypasses directory permission bits")
+	}
+}
+
+// restoreDirPermissions makes dir usable again after a test made it
+// unreadable, so the temp dir it lives in can still be removed.
+func restoreDirPermissions(t *testing.T, dir fs.File) {
+	t.Helper()
+	if err := os.Chmod(dir.LocalPath(), 0o700); err != nil {
+		t.Errorf("can't restore permissions of %s because of: %s", dir.LocalPath(), err)
+	}
+}
+
+// TestDocumentNotFoundForAbsentDocument is the regression guard for the
+// existing contract: a document that was never stored is still reported as
+// docdb.ErrDocumentNotFound, and DocumentExists still answers (false, nil)
+// for it.
+func TestDocumentNotFoundForAbsentDocument(t *testing.T) {
+	var (
+		ctx      = t.Context()
+		absentID = uu.IDFrom("dddddddd-eeee-4fff-8aaa-bbbbbbbbbbbb")
+		v0       = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+		conn     = localfsdb.NewTestConn(t)
+	)
+
+	for _, c := range documentDirCalls(ctx, v0) {
+		t.Run(c.name, func(t *testing.T) {
+			err := c.call(conn, absentID)
+			require.ErrorIs(t, err, docdb.NewErrDocumentNotFound(absentID))
+		})
+	}
+
+	t.Run("DocumentExists", func(t *testing.T) {
+		exists, err := conn.DocumentExists(ctx, absentID)
+		require.NoError(t, err, "a document that is genuinely absent is not an error")
+		require.False(t, exists)
+	})
+}
+
+// TestUnreadableDocumentDirIsNotDocumentNotFound pins the distinction the
+// ErrDocumentNotFound contract rests on. Callers treat it as "nothing here,
+// carry on" — one of them rebuilds a document's version chain from a source its
+// own documentation calls non-authoritative — so a document store that merely
+// could not be read must never produce it. A directory whose stat failed is not
+// a directory known to be absent.
+func TestUnreadableDocumentDirIsNotDocumentNotFound(t *testing.T) {
+	requirePermissionBitsEnforced(t)
+
+	var (
+		ctx       = t.Context()
+		companyID = uu.IDFrom("3a4f1c2e-7b8d-4e9a-b1c2-d3e4f5a6b7c8")
+		docID     = uu.IDFrom("11111111-2222-4333-8444-555555555555")
+		userID    = uu.IDFrom("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
+		v0        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+	)
+
+	conn, documentsDir, _ := newTestConnDirs(t)
+	require.NoError(t, conn.CreateDocument(
+		ctx, companyID, docID, userID, "v0", v0,
+		newTestMemFiles("f0.txt"), noopOnNew,
+	))
+
+	// The document itself is intact on disk; only the directory above it is
+	// made unreadable, the way an unmounted volume or a changed permission
+	// makes a present document impossible to look at.
+	parentDir := uuiddir.Join(documentsDir, docID).Dir()
+	t.Cleanup(func() { restoreDirPermissions(t, parentDir) })
+	require.NoError(t, os.Chmod(parentDir.LocalPath(), 0o000))
+
+	for _, c := range documentDirCalls(ctx, v0) {
+		t.Run(c.name, func(t *testing.T) {
+			err := c.call(conn, docID)
+			require.ErrorIs(t, err, os.ErrPermission,
+				"the directory that could not be read must surface as the permission error it is")
+			require.False(t, errs.Has[docdb.ErrDocumentNotFound](err),
+				"a document that could not be looked at must not be reported as absent: %v", err)
+			require.NotErrorIs(t, err, os.ErrNotExist,
+				"callers swallow os.ErrNotExist as 'nothing here', which an unreadable store is not: %v", err)
+		})
+	}
+
+	t.Run("DocumentExists", func(t *testing.T) {
+		exists, err := conn.DocumentExists(ctx, docID)
+		require.Error(t, err, "DocumentExists must not answer a clean (false, nil) for a store it cannot read")
+		require.ErrorIs(t, err, os.ErrPermission)
+		require.False(t, exists)
+	})
+}
+
+// TestUnreadableVersionDirIsNotVersionNotFound is the same distinction one
+// level down: an unreadable version directory is not a version that does not
+// exist.
+func TestUnreadableVersionDirIsNotVersionNotFound(t *testing.T) {
+	requirePermissionBitsEnforced(t)
+
+	var (
+		ctx       = t.Context()
+		companyID = uu.IDFrom("3a4f1c2e-7b8d-4e9a-b1c2-d3e4f5a6b7c8")
+		docID     = uu.IDFrom("11111111-2222-4333-8444-555555555555")
+		userID    = uu.IDFrom("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
+		v0        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+	)
+
+	conn, documentsDir, _ := newTestConnDirs(t)
+	require.NoError(t, conn.CreateDocument(
+		ctx, companyID, docID, userID, "v0", v0,
+		newTestMemFiles("f0.txt"), noopOnNew,
+	))
+
+	// Readable but not traversable: the document directory can still be stat'ed
+	// as a directory, so the lookup that fails is the one for the version
+	// inside it rather than the one for the document.
+	docDir := uuiddir.Join(documentsDir, docID)
+	t.Cleanup(func() { restoreDirPermissions(t, docDir) })
+	require.NoError(t, os.Chmod(docDir.LocalPath(), 0o600))
+
+	_, err := conn.ReadDocumentVersionFile(ctx, docID, v0, "f0.txt")
+	require.ErrorIs(t, err, os.ErrPermission)
+	require.False(t, errs.Has[docdb.ErrDocumentVersionNotFound](err),
+		"a version directory that could not be looked at must not be reported as absent: %v", err)
 }
