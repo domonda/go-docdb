@@ -566,20 +566,58 @@ func (c *Conn) documentVersionInfo(ctx context.Context, docID uu.ID, version doc
 	}
 
 	// Older implementations did not include VersionInfo.CompanyID
-	// so read latest state from "company.id"
 	if versionInfo.CompanyID.IsNil() {
-		file := docDir.Join("company.id")
-		uuidStr, err := file.ReadAllString()
+		versionInfo.CompanyID, err = c.versionCompanyIDFallback(ctx, docID, version, docDir)
 		if err != nil {
-			return nil, "", errs.Errorf("document %s can't read company ID because %w", docID, err)
-		}
-		versionInfo.CompanyID, err = uu.IDFromString(uuidStr)
-		if err != nil {
-			return nil, "", errs.Errorf("document %s can't read company ID because %w", docID, err)
+			return nil, "", err
 		}
 	}
 
 	return versionInfo, docDir, nil
+}
+
+// versionCompanyIDFallback answers the company of a version whose info JSON
+// predates VersionInfo.CompanyID.
+//
+// The document's current company from "company.id" is preferred, as the only
+// value that reflects a move between companies. Documents written before that
+// file existed have none, and for those the company recorded in the version's
+// own doc.json is used instead, the same data Conn.CompanyID falls back to.
+// Without it such a document cannot be read at all: every caller of
+// documentVersionInfo fails, which is how it broke reading, syncing and
+// repairing those documents rather than only reporting an unknown company.
+//
+// This version's doc.json is read, never the latest: reaching the latest goes
+// through latestDocumentVersionInfo, which calls documentVersionInfo, so a
+// document whose newest version also predates VersionInfo.CompanyID would
+// recurse until the stack ran out.
+func (c *Conn) versionCompanyIDFallback(ctx context.Context, docID uu.ID, version docdb.VersionTime, docDir fs.File) (companyID uu.ID, err error) {
+	defer errs.WrapWithFuncParams(&err, ctx, docID, version, docDir)
+
+	uuidStr, err := docDir.Join("company.id").ReadAllString()
+	switch {
+	case err == nil:
+		companyID, err = uu.IDFromString(uuidStr)
+		if err != nil {
+			return uu.IDNil, errs.Errorf("document %s can't read company ID because %w", docID, err)
+		}
+		return companyID, nil
+	case !errors.Is(err, os.ErrNotExist):
+		return uu.IDNil, errs.Errorf("document %s can't read company ID because %w", docID, err)
+	}
+
+	var doc struct {
+		CompanyID uu.ID `json:"companyId"`
+	}
+	docJSON := docDir.Join(version.String()).Join("doc.json")
+	if err = docJSON.ReadJSON(ctx, &doc); err != nil {
+		return uu.IDNil, errs.Errorf("document %s version %s has no company.id file and can't read company ID from %s because %w", docID, version, docJSON.Name(), err)
+	}
+	if doc.CompanyID.IsNil() {
+		return uu.IDNil, errs.Errorf("document %s version %s has no company.id file and %s has no companyId", docID, version, docJSON.Name())
+	}
+
+	return doc.CompanyID, nil
 }
 
 func (c *Conn) DocumentVersionInfo(ctx context.Context, docID uu.ID, version docdb.VersionTime) (versionInfo *docdb.VersionInfo, err error) {
