@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/ungerik/go-fs"
 	"github.com/ungerik/go-fs/uuiddir"
@@ -3065,4 +3066,99 @@ func TestCompanyDocumentIDsNonDirectoryAboveCompanyPath(t *testing.T) {
 	require.NotErrorIs(t, err, os.ErrNotExist,
 		"callers swallow os.ErrNotExist as 'nothing here', which a corrupt store is not: %v", err)
 	require.Empty(t, docIDs)
+}
+
+// TestDocumentVersionInfoMissingCompanyFileFallsBackToDocJSON covers a document
+// written before the "company.id" file existed, whose version info JSON also
+// predates VersionInfo.CompanyID. Both sources of the company are then absent
+// from where documentVersionInfo used to look, and it returned
+// "can't read company ID because file does not exist" — failing every caller
+// that reads version info, so such a document could not be read, synced or
+// repaired at all.
+//
+// Conn.CompanyID already answers this case from a version's doc.json, and this
+// locks the same fallback for version info.
+func TestDocumentVersionInfoMissingCompanyFileFallsBackToDocJSON(t *testing.T) {
+	var (
+		ctx = t.Context()
+		// Deliberately different companies: the assertion can only pass if the
+		// company came from doc.json, not from a CompanyID left in the version
+		// info JSON by an incomplete test setup.
+		createdCompanyID = uu.IDFrom("7c1e2f3a-4b5c-4d6e-8f70-112233445566")
+		docJSONCompanyID = uu.IDFrom("7c1e2f3a-4b5c-4d6e-8f70-998877665544")
+		docID            = uu.IDFrom("22222222-3333-4444-8555-666666666666")
+		userID           = uu.IDFrom("bbbbbbbb-cccc-4ddd-8eee-ffffffffffff")
+		v0               = docdb.MustVersionTimeFromString("2019-11-08_09-00-23.394")
+	)
+
+	conn, documentsDir, _ := newTestConnDirs(t)
+	require.NoError(t, conn.CreateDocument(
+		ctx, createdCompanyID, docID, userID, "v0", v0,
+		newTestMemFiles("f0.txt"), noopOnNew,
+	))
+
+	docDir := uuiddir.Join(documentsDir, docID)
+
+	// given: the version info JSON of an older implementation, without a company
+	removeVersionInfoCompanyID(ctx, t, docDir.Join(v0.String()+".json"))
+
+	// and: a doc.json naming the company, like those documents have
+	docJSON := docDir.Join(v0.String()).Join("doc.json")
+	require.NoError(t, docJSON.WriteJSON(ctx, map[string]any{"companyId": docJSONCompanyID}))
+
+	// and: no company.id file, as documents predating it are stored
+	companyFile := docDir.Join("company.id")
+	require.True(t, companyFile.Exists(), "company.id must exist before removal, or this test proves nothing")
+	require.NoError(t, companyFile.Remove())
+
+	// when
+	info, err := conn.DocumentVersionInfo(ctx, docID, v0)
+
+	// then
+	require.NoError(t, err, "a missing company.id must fall back to doc.json, not fail the read")
+	require.NotNil(t, info)
+	assert.Equal(t, docJSONCompanyID, info.CompanyID, "the company must come from the version's own doc.json")
+}
+
+// TestDocumentVersionInfoMissingCompanyFileAndDocJSON pins the error when
+// neither source names a company, so the fallback cannot invent one.
+func TestDocumentVersionInfoMissingCompanyFileAndDocJSON(t *testing.T) {
+	var (
+		ctx       = t.Context()
+		companyID = uu.IDFrom("7c1e2f3a-4b5c-4d6e-8f70-112233445577")
+		docID     = uu.IDFrom("33333333-4444-4555-8666-777777777777")
+		userID    = uu.IDFrom("cccccccc-dddd-4eee-8fff-000000000000")
+		v0        = docdb.MustVersionTimeFromString("2019-11-08_09-00-23.394")
+	)
+
+	conn, documentsDir, _ := newTestConnDirs(t)
+	require.NoError(t, conn.CreateDocument(
+		ctx, companyID, docID, userID, "v0", v0,
+		newTestMemFiles("f0.txt"), noopOnNew,
+	))
+
+	docDir := uuiddir.Join(documentsDir, docID)
+	removeVersionInfoCompanyID(ctx, t, docDir.Join(v0.String()+".json"))
+	require.NoError(t, docDir.Join("company.id").Remove())
+
+	// when: there is no doc.json either
+	_, err := conn.DocumentVersionInfo(ctx, docID, v0)
+
+	// then
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "has no company.id file")
+}
+
+// removeVersionInfoCompanyID rewrites a version info JSON file without its
+// company, the shape written before VersionInfo.CompanyID existed. The field
+// has no JSON tag, so its key is the Go field name.
+func removeVersionInfoCompanyID(ctx context.Context, t *testing.T, infoFile fs.File) {
+	t.Helper()
+
+	var versionInfo map[string]any
+	require.NoError(t, infoFile.ReadJSON(ctx, &versionInfo))
+	_, hadCompanyID := versionInfo["CompanyID"]
+	require.True(t, hadCompanyID, "version info JSON must carry CompanyID before it is removed, or the test proves nothing")
+	delete(versionInfo, "CompanyID")
+	require.NoError(t, infoFile.WriteJSON(ctx, versionInfo))
 }
