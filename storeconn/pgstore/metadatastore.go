@@ -3,14 +3,17 @@ package pgstore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 
 	"github.com/domonda/go-errs"
 	"github.com/domonda/go-sqldb"
 	"github.com/domonda/go-sqldb/db"
 	"github.com/domonda/go-types/uu"
+	rootlog "github.com/domonda/golog/log"
 
 	"github.com/domonda/go-docdb"
+	"github.com/domonda/go-docdb/internal/ctxflag"
 	"github.com/domonda/go-docdb/storeconn"
 )
 
@@ -48,7 +51,10 @@ func versionInfoWithNormalizedCommitUserID(vi *docdb.VersionInfo, normalize Comm
 //
 // In that mode the MetadataStore is treated as immutable: it neither creates
 // nor deletes any document versions, it only assumes they already exist and
-// checks them.
+// checks them. The one thing it may still write is the record of an existing
+// version's files, and only under docdb.ContextWithFileContentWinsOverVersionInfo,
+// which declares that record stale rather than authoritative — see
+// reconcileStoredVersionFileRecords.
 //   - CreateDocumentVersion inserts nothing; it verifies that the already-stored
 //     version is identical to what it would otherwise have inserted, returning an
 //     error if the version is missing or any field differs.
@@ -82,6 +88,8 @@ func metadataStoreVersionsExist(ctx context.Context) bool {
 // this one not (see resolveSuccessorIndexViolation). It must match the index
 // name in schema/document_version.sql.
 const oneSuccessorPerVersionIndex = "document_version_one_successor_per_version_idx"
+
+var log = rootlog.NewPackageLogger()
 
 // errSuccessorIndexViolation marks an insert that Postgres rejected naming
 // oneSuccessorPerVersionIndex, which on its own does not say what happened.
@@ -327,6 +335,10 @@ func (store *postgresMetadataStore) resolveSuccessorIndexViolation(ctx context.C
 // filename lists are compared order-insensitively (callers derive them from map
 // iteration, so their order is not significant). When the context carries a
 // CommitUserIDNormalizer, both sides are normalized before comparison.
+//
+// Under docdb.ContextWithFileContentWinsOverVersionInfo a difference that is
+// only the record of the files' content is not a mismatch but the stale record
+// that mode exists to correct, and is written instead of returned.
 func (store *postgresMetadataStore) assertStoredVersionEquals(ctx context.Context, expected *docdb.VersionInfo) error {
 	stored, err := store.DocumentVersionInfo(ctx, expected.DocID, expected.Version)
 	if err != nil {
@@ -335,13 +347,179 @@ func (store *postgresMetadataStore) assertStoredVersionEquals(ctx context.Contex
 	normalize := commitUserIDNormalizerFromContext(ctx)
 	stored = versionInfoWithNormalizedCommitUserID(stored, normalize)
 	expected = versionInfoWithNormalizedCommitUserID(expected, normalize)
-	if !stored.Equal(expected) {
-		return errs.Errorf(
-			"stored document %s version %s does not match what would have been inserted:\n\tstored:   %#v\n\texpected: %#v",
-			expected.DocID, expected.Version, stored, expected,
-		)
+	if stored.Equal(expected) {
+		return nil
 	}
-	return nil
+	if ctxflag.FileContentWinsOverVersionInfo(ctx) {
+		reconciled, err := store.reconcileStoredVersionFileRecords(ctx, stored, expected)
+		if err != nil {
+			return err
+		}
+		if reconciled {
+			return nil
+		}
+	}
+	return errs.Errorf(
+		"stored document %s version %s does not match what would have been inserted:\n\tstored:   %#v\n\texpected: %#v",
+		expected.DocID, expected.Version, stored, expected,
+	)
+}
+
+// reconcileStoredVersionFileRecords corrects the stored record of a version's
+// files to the content the version being restored actually has, and reports
+// whether it did.
+//
+// It is the MetadataStore half of docdb.ContextWithFileContentWinsOverVersionInfo.
+// Reading a file whose recorded size or hash is stale is only half of a
+// migration: this store keeps a second record of the same files in
+// docdb.document_version_file, and for a document whose versions were mirrored
+// here from the source store that record was written from the same stale
+// version info. Versions-exist mode compares the version derived from the
+// content against it, so without this the corrected read is refused here
+// instead of in docdb.ReadHashedDocument — the same document, one layer down.
+//
+// Only a disagreement about the content of files both sides name is corrected.
+// The two must name the same document, version, company, predecessor, commit
+// user and reason, and the same set of filenames; sizes, hashes and the
+// added/modified/removed name lists derived from the hashes may differ and are
+// rewritten from expected. A different file set is left to the caller's error,
+// because a file only one side has is content invented or dropped rather than a
+// stale record of content that is there — the line docdb.ReadHashedDocument
+// draws in this mode is drawn here too.
+//
+// The correction is committed when it is made, not when the restore that
+// triggered it finishes. CreateDocumentVersion runs it in the caller's
+// transaction when there is one and in a transaction of its own when there is
+// not, and storeconn.RestoreDocument opens none — so a restore that fails at a
+// later version leaves the corrections of the versions before it in place, and
+// the rollback cannot take them back: it undoes a version through
+// DeleteDocumentVersion, which deletes nothing in versions-exist mode. That is
+// the state a rerun repairs, and it is not worse than the one before the
+// correction: the record it replaced named a content hash the DocumentStore did
+// not hold either. A caller that needs the correction to be undone with the
+// restore has to open the transaction around it itself.
+func (store *postgresMetadataStore) reconcileStoredVersionFileRecords(ctx context.Context, stored, expected *docdb.VersionInfo) (reconciled bool, err error) {
+	if !onlyFileContentRecordsDiffer(stored, expected) {
+		return false, nil
+	}
+
+	versionID, err := db.QueryRowAs[uu.ID](ctx,
+		/* sql */ `
+			select id from docdb.document_version
+			where document_id = $1 and version = $2
+		`,
+		expected.DocID,   // $1
+		expected.Version, // $2
+	)
+	if err != nil {
+		return false, err
+	}
+
+	// What each correction overwrote is logged next to what replaced it: the
+	// correction is not undone by a rollback, and the source store its value
+	// was derived from is the one the migration exists to retire, so this log
+	// line is the only record left of what the row held before.
+	correctedFiles := make([]string, 0, len(expected.Files))
+	corrections := make([]string, 0, len(expected.Files))
+	for name, expectedFile := range expected.Files {
+		storedFile := stored.Files[name]
+		if storedFile == expectedFile {
+			continue
+		}
+		err = db.Exec(ctx,
+			/* sql */ `
+				update docdb.document_version_file
+				set size = $3, hash = $4
+				where document_version_id = $1 and name = $2
+			`,
+			versionID,         // $1
+			name,              // $2
+			expectedFile.Size, // $3
+			expectedFile.Hash, // $4
+		)
+		if err != nil {
+			return false, err
+		}
+		correctedFiles = append(correctedFiles, name)
+		corrections = append(corrections, fmt.Sprintf(
+			"%s: %d bytes %s -> %d bytes %s",
+			name, storedFile.Size, storedFile.Hash, expectedFile.Size, expectedFile.Hash,
+		))
+	}
+
+	// The file deltas are derived from the file hashes (see
+	// docdb.VersionInfo.SetFileDeltas), so a corrected hash changes them: in
+	// this version, and in the version after it, whose files are compared
+	// against these. They are written whenever this function corrects anything
+	// at all, including when only they differ — that is a version whose own
+	// files are recorded correctly but whose deltas still describe the stale
+	// hashes of its predecessor, and leaving those would refuse it here for the
+	// correction applied to the version before it.
+	err = db.Exec(ctx,
+		/* sql */ `
+			update docdb.document_version
+			set added_files = $2, removed_files = $3, modified_files = $4
+			where id = $1
+		`,
+		versionID,              // $1
+		expected.AddedFiles,    // $2
+		expected.RemovedFiles,  // $3
+		expected.ModifiedFiles, // $4
+	)
+	if err != nil {
+		return false, err
+	}
+
+	// The delta lists are logged too, not only the corrected files: they are
+	// written whenever this function corrects anything at all, so a version
+	// whose own file records were already right has an empty correctedFiles and
+	// this write as the only thing that happened to it.
+	log.ErrorCtx(ctx, "Corrected the stored record of a document version to the file content it is restored with").
+		UUID("docID", expected.DocID).
+		Stringer("version", expected.Version).
+		Strs("correctedFiles", correctedFiles).
+		Strs("corrections", corrections).
+		Strs("addedFiles", expected.AddedFiles).
+		Strs("modifiedFiles", expected.ModifiedFiles).
+		Strs("removedFiles", expected.RemovedFiles).
+		Log()
+
+	return true, nil
+}
+
+// onlyFileContentRecordsDiffer reports whether stored and expected describe the
+// same version of the same document with the same filenames, so that whatever
+// differs between them is the record of those files' content: their sizes and
+// hashes, and the added/modified/removed name lists derived from the hashes.
+//
+// Everything but that record is compared by docdb.VersionInfo.Equal rather than
+// by a field list repeated here. This is the gate that authorizes overwriting
+// stored rows, and a field added to VersionInfo later would silently not be
+// compared by a restatement — a version differing in exactly that field would
+// pass as one whose file records are merely stale and have its record rewritten
+// instead of being refused.
+//
+// The commit user ID is compared as the caller normalized it, see
+// versionInfoWithNormalizedCommitUserID.
+func onlyFileContentRecordsDiffer(stored, expected *docdb.VersionInfo) bool {
+	if len(stored.Files) != len(expected.Files) {
+		return false
+	}
+	for name := range expected.Files {
+		if _, ok := stored.Files[name]; !ok {
+			return false
+		}
+	}
+	// A copy of stored carrying expected's record of the files' content: what
+	// Equal then compares is everything else. The copy is by value and the
+	// fields replaced are the ones this function is allowed to rewrite, so
+	// stored itself is not touched.
+	probe := *stored
+	probe.Files = expected.Files
+	probe.AddedFiles = expected.AddedFiles
+	probe.ModifiedFiles = expected.ModifiedFiles
+	probe.RemovedFiles = expected.RemovedFiles
+	return probe.Equal(expected)
 }
 
 func (store *postgresMetadataStore) DocumentCompanyID(ctx context.Context, docID uu.ID) (companyID uu.ID, err error) {

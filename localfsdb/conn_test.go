@@ -3162,3 +3162,276 @@ func removeVersionInfoCompanyID(ctx context.Context, t *testing.T, infoFile fs.F
 	delete(versionInfo, "CompanyID")
 	require.NoError(t, infoFile.WriteJSON(ctx, versionInfo))
 }
+
+// TestDocumentVersionInfoCompanyFileWinsOverDocJSON pins the order of the two
+// fallbacks for a version info JSON without a CompanyID: "company.id" holds the
+// document's current company and is the only one of the two that reflects a
+// move between companies, while a version's doc.json names the company that
+// version was written with. Reading doc.json first would answer every version
+// of a moved document with the company it was moved away from.
+func TestDocumentVersionInfoCompanyFileWinsOverDocJSON(t *testing.T) {
+	var (
+		ctx              = t.Context()
+		currentCompanyID = uu.IDFrom("7c1e2f3a-4b5c-4d6e-8f70-aabbccddeeff")
+		docJSONCompanyID = uu.IDFrom("7c1e2f3a-4b5c-4d6e-8f70-112233445588")
+		docID            = uu.IDFrom("44444444-5555-4666-8777-888888888888")
+		userID           = uu.IDFrom("dddddddd-eeee-4fff-8000-111111111111")
+		v0               = docdb.MustVersionTimeFromString("2019-11-08_09-00-23.394")
+	)
+
+	conn, documentsDir, _ := newTestConnDirs(t)
+	require.NoError(t, conn.CreateDocument(
+		ctx, currentCompanyID, docID, userID, "v0", v0,
+		newTestMemFiles("f0.txt"), noopOnNew,
+	))
+
+	docDir := uuiddir.Join(documentsDir, docID)
+	removeVersionInfoCompanyID(ctx, t, docDir.Join(v0.String()+".json"))
+
+	// given: a doc.json naming another company than the document is filed
+	// under now, the state a moved document is in
+	require.NoError(t, docDir.Join(v0.String()).Join("doc.json").
+		WriteJSON(ctx, map[string]any{"companyId": docJSONCompanyID}))
+
+	// when: company.id is still there
+	info, err := conn.DocumentVersionInfo(ctx, docID, v0)
+
+	// then
+	require.NoError(t, err)
+	assert.Equal(t, currentCompanyID, info.CompanyID,
+		"company.id is the document's current company and must win over the company a version was written with")
+}
+
+// TestDocumentVersionInfoUnreadableCompanyFileIsNotADocJSONFallback covers the
+// guard that separates "there is no company.id" from "company.id could not be
+// read". Only the first may fall back to doc.json: falling back on any read
+// error answers with the company a version was written with, which for a moved
+// document is not the one it is filed under — the same collapse
+// DocumentCompanyID is already guarded against.
+func TestDocumentVersionInfoUnreadableCompanyFileIsNotADocJSONFallback(t *testing.T) {
+	requirePermissionBitsEnforced(t)
+
+	var (
+		ctx              = t.Context()
+		currentCompanyID = uu.IDFrom("7c1e2f3a-4b5c-4d6e-8f70-aabbccddee11")
+		docJSONCompanyID = uu.IDFrom("7c1e2f3a-4b5c-4d6e-8f70-112233445599")
+		docID            = uu.IDFrom("55555555-6666-4777-8888-999999999999")
+		userID           = uu.IDFrom("eeeeeeee-ffff-4000-8111-222222222222")
+		v0               = docdb.MustVersionTimeFromString("2019-11-08_09-00-23.394")
+	)
+
+	conn, documentsDir, _ := newTestConnDirs(t)
+	require.NoError(t, conn.CreateDocument(
+		ctx, currentCompanyID, docID, userID, "v0", v0,
+		newTestMemFiles("f0.txt"), noopOnNew,
+	))
+
+	docDir := uuiddir.Join(documentsDir, docID)
+	removeVersionInfoCompanyID(ctx, t, docDir.Join(v0.String()+".json"))
+	require.NoError(t, docDir.Join(v0.String()).Join("doc.json").
+		WriteJSON(ctx, map[string]any{"companyId": docJSONCompanyID}))
+
+	companyFile := docDir.Join("company.id")
+	require.True(t, companyFile.Exists(), "company.id must exist for this test to mean anything")
+	t.Cleanup(func() {
+		if err := os.Chmod(companyFile.LocalPath(), 0o600); err != nil {
+			t.Errorf("can't restore permissions of %s because of: %s", companyFile.LocalPath(), err)
+		}
+	})
+	require.NoError(t, os.Chmod(companyFile.LocalPath(), 0o000))
+
+	_, err := conn.DocumentVersionInfo(ctx, docID, v0)
+
+	require.ErrorIs(t, err, os.ErrPermission,
+		"a company.id that could not be read must not fall through to doc.json")
+}
+
+// TestDocumentVersionInfoDocJSONWithoutCompanyID pins the last step of the
+// fallback: a doc.json that parses but names no company leaves uu.IDNil, and
+// returning that as the version's company would file the document under the nil
+// company instead of saying the company is unknown.
+func TestDocumentVersionInfoDocJSONWithoutCompanyID(t *testing.T) {
+	var (
+		ctx       = t.Context()
+		companyID = uu.IDFrom("7c1e2f3a-4b5c-4d6e-8f70-aabbccddee22")
+		docID     = uu.IDFrom("66666666-7777-4888-8999-aaaaaaaaaaaa")
+		userID    = uu.IDFrom("ffffffff-0000-4111-8222-333333333333")
+		v0        = docdb.MustVersionTimeFromString("2019-11-08_09-00-23.394")
+	)
+
+	conn, documentsDir, _ := newTestConnDirs(t)
+	require.NoError(t, conn.CreateDocument(
+		ctx, companyID, docID, userID, "v0", v0,
+		newTestMemFiles("f0.txt"), noopOnNew,
+	))
+
+	docDir := uuiddir.Join(documentsDir, docID)
+	removeVersionInfoCompanyID(ctx, t, docDir.Join(v0.String()+".json"))
+	require.NoError(t, docDir.Join("company.id").Remove())
+
+	// given: a doc.json of a document whose metadata never named a company
+	require.NoError(t, docDir.Join(v0.String()).Join("doc.json").
+		WriteJSON(ctx, map[string]any{"title": "scan.pdf"}))
+
+	info, err := conn.DocumentVersionInfo(ctx, docID, v0)
+
+	require.Error(t, err, "a doc.json without a companyId must not pass uu.IDNil off as the version's company")
+	require.Nil(t, info)
+	assert.Contains(t, err.Error(), "has no companyId")
+}
+
+// TestSyncDocumentWithoutCompanyIDOutsideDocJSON is the caller-level flow the
+// fallback exists for: a document written before both VersionInfo.CompanyID and
+// the "company.id" file could not be read at all, so it could not be synced or
+// migrated off the store that holds it. Every read of it goes through
+// documentVersionInfo, which failed on the missing company.id.
+//
+// It also pins that the fallback reads the version's own doc.json: resolving the
+// company through the latest version instead would re-enter
+// documentVersionInfo through latestDocumentVersionInfo and recurse until the
+// stack ran out, because that latest version has no CompanyID either.
+func TestSyncDocumentWithoutCompanyIDOutsideDocJSON(t *testing.T) {
+	var (
+		ctx              = t.Context()
+		createdCompanyID = uu.IDFrom("7c1e2f3a-4b5c-4d6e-8f70-aabbccddee33")
+		docJSONCompanyID = uu.IDFrom("7c1e2f3a-4b5c-4d6e-8f70-1122334455aa")
+		docID            = uu.IDFrom("77777777-8888-4999-8aaa-bbbbbbbbbbbb")
+		userID           = uu.IDFrom("00000000-1111-4222-8333-444444444444")
+		v0               = docdb.MustVersionTimeFromString("2019-11-08_09-00-23.394")
+		docJSON          = []byte(`{"companyId":"` + docJSONCompanyID.String() + `"}`)
+	)
+
+	src, documentsDir, _ := newTestConnDirs(t)
+	// doc.json is a tracked version file of these documents, not a stray, so it
+	// is written as one: a file in the version directory that the version info
+	// does not track makes ReadHashedDocument reject the whole document.
+	require.NoError(t, src.CreateDocument(
+		ctx, createdCompanyID, docID, userID, "v0", v0,
+		[]fs.FileReader{fs.NewMemFile("doc.json", docJSON), fs.NewMemFile("f0.txt", []byte("f0.txt"))},
+		noopOnNew,
+	))
+
+	docDir := uuiddir.Join(documentsDir, docID)
+	removeVersionInfoCompanyID(ctx, t, docDir.Join(v0.String()+".json"))
+	require.NoError(t, docDir.Join("company.id").Remove())
+
+	dest := localfsdb.NewTestConn(t)
+	require.NoError(t, docdb.SyncDocument(ctx, src, dest, docID, true),
+		"a document whose company is only in its doc.json must still be readable and syncable")
+
+	destCompanyID, err := dest.DocumentCompanyID(ctx, docID)
+	require.NoError(t, err)
+	assert.Equal(t, docJSONCompanyID, destCompanyID,
+		"the synced copy must be filed under the company its doc.json names")
+
+	data, err := dest.ReadDocumentVersionFile(ctx, docID, v0, "f0.txt")
+	require.NoError(t, err)
+	assert.Equal(t, []byte("f0.txt"), data)
+}
+
+// TestSyncDocumentStaleVersionInfoSize is the caller-level flow of
+// docdb.ContextWithFileContentWinsOverVersionInfo: a store whose version info
+// records a size its file no longer has cannot be migrated at all, because
+// every read of the document fails on the disagreement. The migrated copy is
+// the point of the mode, so it has to come out with metadata describing the
+// bytes it actually holds — otherwise the copy inherits the defect and the
+// migration fixed nothing.
+func TestSyncDocumentStaleVersionInfoSize(t *testing.T) {
+	var (
+		ctx       = t.Context()
+		companyID = uu.IDFrom("7c1e2f3a-4b5c-4d6e-8f70-aabbccddee44")
+		docID     = uu.IDFrom("88888888-9999-4aaa-8bbb-cccccccccccc")
+		userID    = uu.IDFrom("11111111-2222-4333-8444-555555555556")
+		v0        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+	)
+
+	src, documentsDir, _ := newTestConnDirs(t)
+	require.NoError(t, src.CreateDocument(
+		ctx, companyID, docID, userID, "v0", v0,
+		newTestMemFiles("f0.txt"), noopOnNew,
+	))
+
+	// given: the state a file rewritten in place without updating its version
+	// info leaves behind
+	infoFile := uuiddir.Join(documentsDir, docID).Join(v0.String() + ".json")
+	setVersionInfoFileSize(ctx, t, infoFile, "f0.txt", 4242)
+
+	dest := localfsdb.NewTestConn(t)
+
+	// then: the default refuses the document, which is what makes the store
+	// unmigratable and what the repair mode is asked for
+	require.ErrorContains(t,
+		docdb.SyncDocument(ctx, src, dest, docID, true),
+		"bytes, but expected",
+		"the default must refuse this document for the size disagreement, not for some other reason",
+	)
+
+	// when
+	repairCtx := docdb.ContextWithFileContentWinsOverVersionInfo(ctx)
+	require.NoError(t, docdb.SyncDocument(repairCtx, src, dest, docID, true))
+
+	// then
+	info, err := dest.DocumentVersionInfo(ctx, docID, v0)
+	require.NoError(t, err)
+	assert.Equal(t, newFileInfo("f0.txt", []byte("f0.txt")), info.Files["f0.txt"],
+		"the copy must record the size and hash of the bytes it holds, not the ones the source recorded")
+
+	data, err := dest.ReadDocumentVersionFile(ctx, docID, v0, "f0.txt")
+	require.NoError(t, err)
+	assert.Equal(t, []byte("f0.txt"), data)
+
+	_, err = docdb.ReadHashedDocument(ctx, dest, docID)
+	require.NoError(t, err,
+		"the migrated copy must read without the repair mode, or the migration carried the defect over")
+}
+
+// setVersionInfoFileSize rewrites the recorded size of one file of a version
+// info JSON file, the shape a store has whose files were rewritten in place
+// without updating their version info.
+func setVersionInfoFileSize(ctx context.Context, t *testing.T, infoFile fs.File, filename string, size int64) {
+	t.Helper()
+
+	var versionInfo map[string]any
+	require.NoError(t, infoFile.ReadJSON(ctx, &versionInfo))
+	files, ok := versionInfo["Files"].(map[string]any)
+	require.True(t, ok, "version info JSON must have a Files object")
+	fileInfo, ok := files[filename].(map[string]any)
+	require.True(t, ok, "version info JSON must track %s, or the test proves nothing", filename)
+	require.NotEqual(t, float64(size), fileInfo["Size"],
+		"the recorded size must differ from the real one, or the test proves nothing")
+	fileInfo["Size"] = size
+	require.NoError(t, infoFile.WriteJSON(ctx, versionInfo))
+}
+
+// TestDocumentVersionInfoUnparsableCompanyFile pins that a company.id holding
+// something that is not a UUID is reported, not skipped: falling through to
+// doc.json would answer a corrupt marker with the company a version was written
+// with, and returning uu.IDNil would file the document under the nil company.
+func TestDocumentVersionInfoUnparsableCompanyFile(t *testing.T) {
+	var (
+		ctx              = t.Context()
+		companyID        = uu.IDFrom("7c1e2f3a-4b5c-4d6e-8f70-aabbccddee55")
+		docJSONCompanyID = uu.IDFrom("7c1e2f3a-4b5c-4d6e-8f70-1122334455bb")
+		docID            = uu.IDFrom("99999999-aaaa-4bbb-8ccc-dddddddddddd")
+		userID           = uu.IDFrom("22222222-3333-4444-8555-666666666667")
+		v0               = docdb.MustVersionTimeFromString("2019-11-08_09-00-23.394")
+	)
+
+	conn, documentsDir, _ := newTestConnDirs(t)
+	require.NoError(t, conn.CreateDocument(
+		ctx, companyID, docID, userID, "v0", v0,
+		newTestMemFiles("f0.txt"), noopOnNew,
+	))
+
+	docDir := uuiddir.Join(documentsDir, docID)
+	removeVersionInfoCompanyID(ctx, t, docDir.Join(v0.String()+".json"))
+	require.NoError(t, docDir.Join(v0.String()).Join("doc.json").
+		WriteJSON(ctx, map[string]any{"companyId": docJSONCompanyID}))
+	require.NoError(t, docDir.Join("company.id").WriteAllString("not-a-uuid"))
+
+	info, err := conn.DocumentVersionInfo(ctx, docID, v0)
+
+	require.Error(t, err, "a company.id that cannot be parsed must not be passed over")
+	require.Nil(t, info)
+	assert.Contains(t, err.Error(), "can't read company ID")
+}
