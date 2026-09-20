@@ -5,6 +5,17 @@ All notable changes to `github.com/domonda/go-docdb` are documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.1.5] - 2026-09-20
+
+### Changed
+- **The test suite's S3 backend is `adobe/s3mock` instead of MinIO, because MinIO deleted the `minio/minio` repository from Docker Hub.** The pin added in v1.1.0 did exactly what it was supposed to and still stopped working: `minio/minio:RELEASE.2025-09-07T16-13-09Z` cannot be pulled at all any more — the Docker Hub API answers `object not found` for the repository, not just the tag — so every CI run failed at `docker compose up` before reaching a test. This is the second S3 backend this suite has lost to a vendor withdrawing a free image, after `localstack/localstack:s3-latest` in v0.6.3, which is the reason the replacement was chosen for who publishes it rather than for features: S3Mock is Apache-2.0 and exists only as a test double, so there is no paid tier for it to be moved behind. `quay.io/minio/minio` still serves the same tag and remains a one-line alternative if a real object store is ever wanted back.
+
+  Nothing in the suite changed to accommodate it. S3Mock serves every operation the fixtures use — `ListBuckets`, `CreateBucket`, `DeleteBucket`, paginated `ListObjectsV2`, `PutObject`, `GetObject` and batch `DeleteObjects` — and returns the error codes they branch on (`BucketAlreadyOwnedByYou`, `NoSuchBucket`, `NoSuchKey`), so no test, fixture or `s3store` file was touched. The `s3store` package's tests pass unchanged, including the three that page past the 1000-object `ListObjectsV2` limit, and the package went from 171s to 6s. `seaweedfs` was tried first and rejected: it answers a repeated `CreateBucket` with `BucketAlreadyExists` rather than `BucketAlreadyOwnedByYou`, which would have meant weakening the fixtures to fit the backend.
+
+  **What this costs, stated plainly: the suite no longer verifies credentials.** MinIO was configured with the fixture credentials and rejected anything else; S3Mock authenticates nothing and has no setting to make it — there is no signature or credential property anywhere in its configuration. `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` still have to be set for the AWS SDK to sign a request at all, but their value is no longer exercised, so a wrong one now passes. That is a real reduction: v1.1.0 hardened `s3fixtures.FixtureGlobalS3Client` against precisely the shape where a backend answers its healthcheck while rejecting the fixture credentials. The failure mode is gone rather than better-detected, and only a credential-validating backend brings the check back.
+
+  Three smaller consequences of the swap. `MINIO_REGION` was replaced by `COM_ADOBE_TESTING_S3MOCK_STORE_REGION`, without which a bucket reports no location at all and the `LocationConstraint` the fixtures send becomes write-only. The healthcheck is a `wget` against the S3 API root instead of `mc ready local`, because the image ships no `curl`; hitting `ListBuckets` proves the API answers rather than only that the port is open, and its `start_period` is 30s rather than 5s because this is a Spring Boot JVM rather than a Go binary (measured 11s cold). The port variable is renamed `LOCALSTACK_PORT` to `S3_PORT` — nothing sets either and the default is unchanged, so `AWS_ENDPOINT_URL` still points at the same place, but an override of the old name silently stops taking effect.
+
 ## [v1.1.4] - 2026-09-20
 
 ### Added
@@ -315,6 +326,7 @@ Initial release.
 - `ProxyConn` and `DeprecatedConn` (holding deprecated check-out/in methods).
 - `VersionInfo` with `CompanyID`, `LatestDocumentVersionInfo`, and `VersionTime.SetNull`.
 
+[v1.1.5]: https://github.com/domonda/go-docdb/releases/tag/v1.1.5
 [v1.1.4]: https://github.com/domonda/go-docdb/releases/tag/v1.1.4
 [v1.1.2]: https://github.com/domonda/go-docdb/releases/tag/v1.1.2
 [v1.1.1]: https://github.com/domonda/go-docdb/releases/tag/v1.1.1
