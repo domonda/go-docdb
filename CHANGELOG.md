@@ -5,6 +5,11 @@ All notable changes to `github.com/domonda/go-docdb` are documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.1.5] - 2026-09-20
+
+### Fixed
+- **The audit record of a corrected version is no longer written before the correction is.** `storeconn/pgstore` logged what it had overwritten from inside the transaction that did the overwriting, so a statement failing after the last file correction — the delta update, or anything the caller ran in the same transaction — rolled the writes back and left a log line claiming they happened. Since that line is the only surviving account of the values it replaced, it may not describe a write that never landed. The correction now travels back to `CreateDocumentVersion`, which logs it once the transaction returned without error. One case stays uncovered on purpose: in a transaction the caller opened, the writes end at a released savepoint rather than at a commit, and an outer rollback can still undo what the line reports — nothing tells the store when that transaction ends, and logging after the savepoint is wrong only for a caller that rolls back afterwards, where logging before the write was wrong for every caller.
+
 ## [v1.1.4] - 2026-09-20
 
 ### Added
@@ -315,6 +320,7 @@ Initial release.
 - `ProxyConn` and `DeprecatedConn` (holding deprecated check-out/in methods).
 - `VersionInfo` with `CompanyID`, `LatestDocumentVersionInfo`, and `VersionTime.SetNull`.
 
+[v1.1.5]: https://github.com/domonda/go-docdb/releases/tag/v1.1.5
 [v1.1.4]: https://github.com/domonda/go-docdb/releases/tag/v1.1.4
 [v1.1.2]: https://github.com/domonda/go-docdb/releases/tag/v1.1.2
 [v1.1.1]: https://github.com/domonda/go-docdb/releases/tag/v1.1.1
