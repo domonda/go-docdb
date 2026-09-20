@@ -7,18 +7,41 @@ services:
   # batch DeleteObjects) with the same error codes MinIO returned, so no test
   # or fixture changed with it. It keeps its objects in a temporary directory
   # inside the container, so there is no volume to reset between runs.
+  #
+  # One thing it does NOT do is authenticate: MinIO validated the fixture
+  # credentials and S3Mock accepts any, so the suite no longer notices a wrong
+  # AWS_ACCESS_KEY_ID/SECRET. The fixtures still need them set for the SDK to
+  # sign at all, but their value is not exercised any more.
   s3:
     image: adobe/s3mock:5.2.3
+    environment:
+      # Replaces MINIO_REGION. Without it a bucket reports no location at all,
+      # which makes the CreateBucket LocationConstraint the fixtures send a
+      # write-only setting rather than one the backend is configured for.
+      - COM_ADOBE_TESTING_S3MOCK_STORE_REGION=${AWS_DEFAULT_REGION}
     ports:
+      # Renamed from LOCALSTACK_PORT, which named a service this repo dropped in
+      # v0.6.3. Nothing sets either name, so the default is what runs. Override
+      # it only together with AWS_ENDPOINT_URL in .env.example, which repeats
+      # the port and is what the fixtures actually dial: move one without the
+      # other and the suite talks to whatever else is on the old port. (No
+      # comment can live in .env.example itself - run_tests.sh exports it with
+      # `export $(cat .env.example | xargs)`, which chokes on a `#` line.)
       - "127.0.0.1:${S3_PORT-4566}:9090"
     healthcheck:
-      # The image is busybox-based and ships no curl; wget against the S3 API
-      # root (ListBuckets) proves the API itself answers, not just the port.
+      # The image is busybox-based and ships no curl (wget is a busybox applet);
+      # wget against the S3 API root (ListBuckets) proves the API itself
+      # answers, not just the port.
       test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9090/"]
       interval: 2s
       timeout: 3s
       retries: 15
-      start_period: 5s
+      # 30s, not the 5s MinIO needed: this is a Spring Boot JVM rather than a
+      # Go binary, and it boots on a runner that is starting Postgres too. A
+      # check that passes during the start period marks the service healthy
+      # immediately, so a longer window costs nothing when the boot is quick
+      # (measured 11s cold locally) and only buys room when it is not.
+      start_period: 30s
 
   postgres:
     image: postgres:17.10
