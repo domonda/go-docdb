@@ -262,6 +262,17 @@ whose files do not gets its files written; the duplicate metadata insert that a
 non-verifying store rejects is expected there and does not fail the restore, and
 that version stays out of the rollback because this call did not create it.
 
+Skipping is decided on a version's files being present, never on the stored
+record of them being right, so a restore under
+`docdb.ContextWithFileContentWinsOverVersionInfo` must not be resumed with
+`recreate=false`. The correction that mode exists for runs per version in
+`metadataStore.CreateDocumentVersion`, which a skipped version never reaches:
+after a partial run, a version whose files were all written by a neighbouring
+version is skipped on every rerun and keeps its stale record while the restore
+reports success. Repeat such a run with `recreate=true`, which clears the
+skipping — at the cost of deleting the document from the destination
+`DocumentStore` first, and not atomically.
+
 For middle versions it calls `metadataStore.CreateDocumentVersion` **directly**
 (not `conn.AddDocumentVersion`) so the strictly-after ordering check is bypassed —
 restoring versions out of "latest" order is expected. It diffs each version
@@ -340,11 +351,14 @@ entirely around avoiding it.
 ## `versions-exist` copy mode (`pgstore`)
 
 `pgstore.ContextWithMetadataStoreVersionsExist(ctx)` switches the metadata store
-into an **immutable, check-only** mode for copying a document's blobs into a *new*
-`DocumentStore` while *reusing* the shared Postgres metadata:
+into a **check-only** mode that inserts and deletes nothing, for copying a
+document's blobs into a *new* `DocumentStore` while *reusing* the shared Postgres
+metadata:
 
 - `CreateDocumentVersion` inserts nothing; it verifies the already-stored version
   matches what it would have inserted (error if missing or any field differs).
+  The one thing it may still write is the record of an existing version's files,
+  and only under `docdb.ContextWithFileContentWinsOverVersionInfo` — see below.
 - `DeleteDocument` / `DeleteDocumentVersion` delete nothing; they verify existence
   and still report the `leftVersions` / hashes a real delete would, so the
   `conn` rollback can clean up the *content* store.
@@ -353,6 +367,33 @@ This is exactly why `CreateDocument`'s existence guard targets the
 `documentStore` and not the `metadataStore`: with a fresh content store and a
 populated metadata store, the document "exists" in metadata but not in blobs, and
 the copy must be allowed to proceed.
+
+### The one write: correcting a stale file record
+
+A context that also carries `docdb.ContextWithFileContentWinsOverVersionInfo`
+turns the check of a version's *file content record* into a correction.
+`ReadHashedDocument` under that mode reads a file whose recorded size or hash
+disagrees with its bytes and takes the bytes as the truth, and this store holds a
+second record of those same files — written, for a document whose versions were
+mirrored here from the source store, from the same stale version info. Without
+the correction the read that was just fixed one layer up is refused here: the
+same document, one layer down.
+
+So `CreateDocumentVersion` writes instead of erroring when what differs is only
+that record — the files' sizes and hashes, and the added/modified/removed lists
+derived from the hashes — and logs what it overwrote next to what replaced it.
+Anything else is still refused, a different file set above all: a file only one
+side has is content invented or dropped, not a stale record of content that is
+there. The gate is derived from `docdb.VersionInfo.Equal` rather than restating
+its field list, so a field added to `VersionInfo` later cannot silently stop
+being compared.
+
+A correction is committed when it is made, not when the restore that triggered it
+finishes, and the rollback cannot take it back: it undoes a version through
+`DeleteDocumentVersion`, which deletes nothing in this mode. Wrap the restore in
+your own transaction if the corrections have to be undone with it. The root
+[README](../README.md#blob-only-migration-versions-exist-mode) has the rest of
+what an operator needs before running a migration this way.
 
 ## Concurrency
 

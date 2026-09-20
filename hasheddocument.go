@@ -9,6 +9,8 @@ import (
 
 	"github.com/domonda/go-errs"
 	"github.com/domonda/go-types/uu"
+
+	"github.com/domonda/go-docdb/internal/ctxflag"
 )
 
 // HashedDocument is an in-memory representation of a complete document
@@ -188,9 +190,57 @@ func CheckRestoreCompanyID(doc *HashedDocument, destVersions []VersionTime, dest
 	return nil
 }
 
+// ContextWithFileContentWinsOverVersionInfo returns a context in which
+// ReadHashedDocument stops failing when the content of a file in storage
+// disagrees with the size or content hash recorded for it in the VersionInfo.
+// Each disagreement is logged as an error instead, and the file in storage is
+// taken as the truth.
+//
+// The bytes in storage are what the result is built from either way: a
+// HashedDocument keys its file content by the hash of the content actually
+// read, and RestoreDocument derives the FileInfo it writes from those bytes.
+// So a document read in this mode is restored with metadata that matches its
+// files, while the source store keeps its wrong record — nothing is written
+// back there, the Conn interface has no operation for it.
+//
+// This exists for migrating a store that historically had files rewritten in
+// place without updating their version info, where failing the whole document
+// loses more than trusting the bytes that are actually there. It covers only
+// the recorded size and hash of a file that exists in storage and in the
+// version info. A file that exists in only one of the two is still an error:
+// taking either side as the truth there invents or drops file content instead
+// of correcting a record of it.
+//
+// A destination store that keeps a record of the same files applies the mode to
+// that record too, because reading the file is only half of a migration: the
+// version info a restore is verified against on the other side was written from
+// the same stale record, so without this the corrected read is refused one
+// layer down instead of here. storeconn/pgstore does that in versions-exist
+// mode, see its assertStoredVersionEquals. That correction is committed when it
+// is made and is not undone by a restore that fails afterwards.
+//
+// A run of a migration that was interrupted has to be repeated with
+// recreate=true. A merge-restore skips a version whose files are all present in
+// the destination's DocumentStore already, and a version skipped that way never
+// reaches the destination's record of its files, so a rerun would leave that
+// record stale for good while reporting success. See storeconn's
+// versionsFullyStored, and note that recreate=true deletes the document from
+// the destination before rewriting it, not atomically.
+//
+// The source must keep its own record of its files, the way localfsdb does. A
+// source that resolves a file through the same record the destination corrects
+// — a storeconn sharing its MetadataStore with the destination — stops being
+// able to read that file the moment its hash is corrected there, because that
+// hash is what addresses the blob.
+func ContextWithFileContentWinsOverVersionInfo(parent context.Context) context.Context {
+	return ctxflag.ContextWithFileContentWinsOverVersionInfo(parent)
+}
+
 // ReadHashedDocument reads a complete document with all versions and file content
 // from a Conn into a HashedDocument. It validates file sizes and content hashes
-// against the VersionInfo metadata.
+// against the VersionInfo metadata, unless the context was derived from
+// ContextWithFileContentWinsOverVersionInfo, which downgrades a disagreement
+// between the two to a logged error and reads the file as it is in storage.
 //
 // Every version keeps the company it was committed with, so a document that was
 // moved between companies is backed up with its move history intact. The
@@ -217,6 +267,7 @@ func ReadHashedDocument(ctx context.Context, conn Conn, docID uu.ID) (doc *Hashe
 	if err != nil {
 		return nil, err
 	}
+	storageWins := ctxflag.FileContentWinsOverVersionInfo(ctx)
 	for _, version := range versions {
 		versionInfo, err := conn.DocumentVersionInfo(ctx, docID, version)
 		if err != nil {
@@ -247,11 +298,29 @@ func ReadHashedDocument(ctx context.Context, conn Conn, docID uu.ID) (doc *Hashe
 				return nil, err
 			}
 			if int64(len(data)) != fileInfo.Size {
-				return nil, errs.Errorf("document %s version %s file %q has %d bytes, but expected %d bytes according to version info", docID, version, filename, len(data), fileInfo.Size)
+				if !storageWins {
+					return nil, errs.Errorf("document %s version %s file %q has %d bytes, but expected %d bytes according to version info", docID, version, filename, len(data), fileInfo.Size)
+				}
+				log.ErrorCtx(ctx, "Document version file has a different size in storage than in the version info, using the file in storage").
+					UUID("docID", docID).
+					Stringer("version", version).
+					Str("file", filename).
+					Int64("storageSize", int64(len(data))).
+					Int64("versionInfoSize", fileInfo.Size).
+					Log()
 			}
 			hash := ContentHash(data)
 			if hash != fileInfo.Hash {
-				return nil, errs.Errorf("document %s version %s file %q has hash %s, but expected %s according to version info", docID, version, filename, hash, fileInfo.Hash)
+				if !storageWins {
+					return nil, errs.Errorf("document %s version %s file %q has hash %s, but expected %s according to version info", docID, version, filename, hash, fileInfo.Hash)
+				}
+				log.ErrorCtx(ctx, "Document version file has a different content hash in storage than in the version info, using the file in storage").
+					UUID("docID", docID).
+					Stringer("version", version).
+					Str("file", filename).
+					Str("storageHash", hash).
+					Str("versionInfoHash", fileInfo.Hash).
+					Log()
 			}
 			doc.HashedFiles[hash] = data
 			v.FileHashes[filename] = hash
@@ -280,8 +349,10 @@ func ReadHashedDocument(ctx context.Context, conn Conn, docID uu.ID) (doc *Hashe
 //
 // The document is read from srcConn into an in-memory HashedDocument via
 // ReadHashedDocument, which verifies every file's size and content hash
-// against the version metadata, and is then written to destConn via
-// Conn.RestoreDocument.
+// against the version metadata — unless the context was derived from
+// ContextWithFileContentWinsOverVersionInfo, which logs a disagreement between
+// the two and reads the file as it is in storage — and is then written to
+// destConn via Conn.RestoreDocument.
 //
 // The recreate flag is passed through to Conn.RestoreDocument and controls
 // how an already existing document on destConn is handled:

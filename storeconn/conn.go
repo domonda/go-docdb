@@ -973,6 +973,15 @@ func isAlreadyExistsErr(err error) bool {
 // of a document that is fully present costs one round trip rather than one per
 // version or per file.
 //
+// A version is skipped on its files being present, never on its stored record
+// of them being right, so a restore under
+// docdb.ContextWithFileContentWinsOverVersionInfo must not be resumed with
+// recreate=false: the correction that mode exists for runs per version in
+// CreateDocumentVersion, which a skipped version never reaches. After a partial
+// run, a version whose files were all written by a neighbouring version is
+// skipped on every rerun and keeps the stale record while the restore reports
+// success. Repeating such a run with recreate=true clears the skipping.
+//
 // The presence check covers the files of every version of the backup, not only
 // of the versions that can be skipped. Only a version the MetadataStore already
 // holds can be skipped, but the answer for the other versions' files is what

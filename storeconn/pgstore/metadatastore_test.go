@@ -476,6 +476,251 @@ func TestCreateDocumentVersionVersionsExistMode(t *testing.T) {
 	})
 }
 
+func TestCreateDocumentVersionFileContentWinsOverVersionInfo(t *testing.T) {
+	fileInfo := func(name, content string) *docdb.FileInfo {
+		return &docdb.FileInfo{Name: name, Size: int64(len(content)), Hash: docdb.ContentHash([]byte(content))}
+	}
+	// makeFileRecordStale rewrites what Postgres records about a file without
+	// touching the content that record describes. That is the state this mode
+	// exists for: a store whose files were rewritten in place while the version
+	// info these rows were mirrored from kept the size and hash of the content
+	// before the rewrite.
+	makeFileRecordStale := func(t *testing.T, ctx context.Context, docID uu.ID, version docdb.VersionTime, stale *docdb.FileInfo) {
+		t.Helper()
+		err := db.Exec(ctx,
+			/* sql */ `
+				update docdb.document_version_file
+				set size = $3, hash = $4
+				where name = $5 and document_version_id = (
+					select id from docdb.document_version
+					where document_id = $1 and version = $2
+				)
+			`,
+			docID,      // $1
+			version,    // $2
+			stale.Size, // $3
+			stale.Hash, // $4
+			stale.Name, // $5
+		)
+		require.NoError(t, err)
+	}
+
+	t.Run("Corrects a stale size and hash instead of refusing the version", func(t *testing.T) {
+		// given
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		docID := uu.IDv7()
+		companyID := uu.IDv7()
+		userID := uu.IDv7()
+		version := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
+		file := fileInfo("doc.json", "the content the file actually has")
+		input := storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "reason",
+			NewVersion: version, AddedFiles: []*docdb.FileInfo{file},
+		}
+		_, err := store.CreateDocumentVersion(ctx, input)
+		require.NoError(t, err)
+		makeFileRecordStale(t, ctx, docID, version, fileInfo("doc.json", "shorter content from before the rewrite"))
+
+		// when: the version is restored with the file as it is in storage
+		repairCtx := docdb.ContextWithFileContentWinsOverVersionInfo(pgstore.ContextWithMetadataStoreVersionsExist(ctx))
+		verified, err := store.CreateDocumentVersion(repairCtx, input)
+
+		// then
+		require.NoError(t, err)
+		require.Equal(t, *file, verified.Files[file.Name])
+
+		stored, err := store.DocumentVersionInfo(ctx, docID, version)
+		require.NoError(t, err)
+		require.Equal(t, *file, stored.Files[file.Name], "the stale record must be corrected, not merely accepted")
+
+		// The correction is an update of the record of an existing version, so
+		// versions-exist mode still inserted nothing.
+		fileCount, err := db.QueryRowAs[int](ctx,
+			/* sql */ `
+				select count(*) from docdb.document_version_file dvf
+				join docdb.document_version dv on dvf.document_version_id = dv.id
+				where dv.document_id = $1 and dv.version = $2
+			`,
+			docID,   // $1
+			version, // $2
+		)
+		require.NoError(t, err)
+		require.Equal(t, 1, fileCount)
+	})
+
+	t.Run("Corrects file deltas that still describe the stale content", func(t *testing.T) {
+		// given: a version whose own file record is right, but whose delta
+		// lists were derived from the stale record of its predecessor. Refusing
+		// it would move the abort to the version after the one just corrected.
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		docID := uu.IDv7()
+		companyID := uu.IDv7()
+		userID := uu.IDv7()
+		v1 := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
+		v2 := docdb.MustVersionTimeFromString("2024-01-01_00-00-02.000")
+		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "v1", NewVersion: v1,
+			AddedFiles: []*docdb.FileInfo{fileInfo("doc.json", "first")},
+		})
+		require.NoError(t, err)
+		input := storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "v2", NewVersion: v2, PreviousVersion: &v1,
+			ModifiedFiles: []*docdb.FileInfo{fileInfo("doc.json", "second")},
+		}
+		_, err = store.CreateDocumentVersion(ctx, input)
+		require.NoError(t, err)
+		err = db.Exec(ctx,
+			/* sql */ `
+				update docdb.document_version
+				set modified_files = null
+				where document_id = $1 and version = $2
+			`,
+			docID, // $1
+			v2,    // $2
+		)
+		require.NoError(t, err)
+
+		// when
+		repairCtx := docdb.ContextWithFileContentWinsOverVersionInfo(pgstore.ContextWithMetadataStoreVersionsExist(ctx))
+		_, err = store.CreateDocumentVersion(repairCtx, input)
+
+		// then
+		require.NoError(t, err)
+		stored, err := store.DocumentVersionInfo(ctx, docID, v2)
+		require.NoError(t, err)
+		require.Equal(t, []string{"doc.json"}, stored.ModifiedFiles)
+	})
+
+	t.Run("Refuses a different file set even when file content wins", func(t *testing.T) {
+		// given: a file the stored version has and the restored one does not is
+		// content dropped, not a stale record of content that is there.
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		docID := uu.IDv7()
+		companyID := uu.IDv7()
+		userID := uu.IDv7()
+		version := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
+		fileA := fileInfo("a.pdf", "a")
+		fileB := fileInfo("b.pdf", "b")
+		_, err := store.CreateDocumentVersion(ctx, storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "reason", NewVersion: version,
+			AddedFiles: []*docdb.FileInfo{fileA, fileB},
+		})
+		require.NoError(t, err)
+
+		// when
+		repairCtx := docdb.ContextWithFileContentWinsOverVersionInfo(pgstore.ContextWithMetadataStoreVersionsExist(ctx))
+		_, err = store.CreateDocumentVersion(repairCtx, storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "reason", NewVersion: version,
+			AddedFiles: []*docdb.FileInfo{fileA},
+		})
+
+		// then
+		require.ErrorContains(t, err, "does not match what would have been inserted")
+	})
+
+	t.Run("Refuses a stale record without the mode", func(t *testing.T) {
+		// given
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		docID := uu.IDv7()
+		companyID := uu.IDv7()
+		userID := uu.IDv7()
+		version := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
+		file := fileInfo("doc.json", "the content the file actually has")
+		input := storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "reason",
+			NewVersion: version, AddedFiles: []*docdb.FileInfo{file},
+		}
+		_, err := store.CreateDocumentVersion(ctx, input)
+		require.NoError(t, err)
+		stale := fileInfo("doc.json", "shorter content from before the rewrite")
+		makeFileRecordStale(t, ctx, docID, version, stale)
+
+		// when
+		assumeCtx := pgstore.ContextWithMetadataStoreVersionsExist(ctx)
+		_, err = store.CreateDocumentVersion(assumeCtx, input)
+
+		// then
+		require.ErrorContains(t, err, "does not match what would have been inserted")
+		stored, err := store.DocumentVersionInfo(ctx, docID, version)
+		require.NoError(t, err)
+		require.Equal(t, *stale, stored.Files[file.Name], "a refused version must leave the record as it was")
+	})
+
+	t.Run("Writes the whole delta triple of a corrected version", func(t *testing.T) {
+		// given: a genesis version, whose added_files names every file it has
+		// and whose other two lists are empty. The correction rewrites all
+		// three unconditionally, so this is the version where a delta written
+		// into the wrong column is observable at all.
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		docID := uu.IDv7()
+		companyID := uu.IDv7()
+		userID := uu.IDv7()
+		version := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
+		fileA := fileInfo("a.pdf", "the content a.pdf actually has")
+		fileB := fileInfo("b.pdf", "b")
+		input := storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "reason",
+			NewVersion: version, AddedFiles: []*docdb.FileInfo{fileA, fileB},
+		}
+		_, err := store.CreateDocumentVersion(ctx, input)
+		require.NoError(t, err)
+		makeFileRecordStale(t, ctx, docID, version, fileInfo("a.pdf", "shorter content from before the rewrite"))
+
+		// when
+		repairCtx := docdb.ContextWithFileContentWinsOverVersionInfo(pgstore.ContextWithMetadataStoreVersionsExist(ctx))
+		_, err = store.CreateDocumentVersion(repairCtx, input)
+
+		// then: the correction must not cost the version the record of what it
+		// added. A restore reads those lists back and a later version is
+		// verified against them.
+		require.NoError(t, err)
+		stored, err := store.DocumentVersionInfo(ctx, docID, version)
+		require.NoError(t, err)
+		require.ElementsMatch(t, []string{"a.pdf", "b.pdf"}, stored.AddedFiles)
+		require.Empty(t, stored.ModifiedFiles)
+		require.Empty(t, stored.RemovedFiles)
+	})
+
+	t.Run("Refuses a version differing in more than its file records", func(t *testing.T) {
+		// given: a stale file record, and a version that is not the stored one.
+		// The mode corrects the record of a version both sides agree on; it is
+		// not a licence to overwrite the row of a version that differs in what
+		// it is.
+		t.Parallel()
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		docID := uu.IDv7()
+		companyID := uu.IDv7()
+		userID := uu.IDv7()
+		version := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
+		file := fileInfo("doc.json", "the content the file actually has")
+		input := storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "reason",
+			NewVersion: version, AddedFiles: []*docdb.FileInfo{file},
+		}
+		_, err := store.CreateDocumentVersion(ctx, input)
+		require.NoError(t, err)
+		stale := fileInfo("doc.json", "shorter content from before the rewrite")
+		makeFileRecordStale(t, ctx, docID, version, stale)
+
+		// when: everything but the file record matches, except the reason
+		differing := input
+		differing.Reason = "a reason the stored version was not committed with"
+		repairCtx := docdb.ContextWithFileContentWinsOverVersionInfo(pgstore.ContextWithMetadataStoreVersionsExist(ctx))
+		_, err = store.CreateDocumentVersion(repairCtx, differing)
+
+		// then
+		require.ErrorContains(t, err, "does not match what would have been inserted")
+		stored, err := store.DocumentVersionInfo(ctx, docID, version)
+		require.NoError(t, err)
+		require.Equal(t, *stale, stored.Files[file.Name], "a refused version must leave the record as it was")
+	})
+}
+
 func TestCreateDocumentVersionMissingPreviousVersion(t *testing.T) {
 	t.Parallel()
 	ctx := pgfixtures.FixtureCtxWithTestTx(t)

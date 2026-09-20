@@ -5,6 +5,15 @@ All notable changes to `github.com/domonda/go-docdb` are documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.1.4] - 2026-09-20
+
+### Added
+- **A migration can take the file content in storage as the truth when the size or hash recorded for it disagrees.** `docdb.ContextWithFileContentWinsOverVersionInfo(ctx)` switches `ReadHashedDocument` from failing on such a disagreement to logging it as an error and reading the file as it is. The bytes in storage are what the result is built from either way — a `HashedDocument` keys its content by the hash of what was actually read, and `RestoreDocument` derives the `FileInfo` it writes from those bytes — so the restored copy gets metadata that matches its files while the source store keeps its wrong record. Nothing is written back there; the `Conn` interface has no operation for it. It exists for a store that historically had files rewritten in place without updating their version info, where failing the whole document loses more than trusting the bytes that are actually there. It covers only the recorded size and hash of a file that exists in storage and in the version info: a file that exists in only one of the two is still an error, because taking either side as the truth there invents or drops file content instead of correcting a record of it.
+
+- **`storeconn/pgstore` corrects its own stale record of a version's files under that mode instead of refusing the version.** Reading the file is only half of a migration. The Postgres `MetadataStore` keeps a second record of the same files, and for a document whose versions were mirrored there from the source store that record was written from the same stale version info, so versions-exist mode refused the corrected read one layer down — the same document, one level lower. Under the mode it rewrites the sizes and hashes of the files both sides name, and the added/modified/removed lists derived from those hashes, and logs what it overwrote next to what replaced it. A stored version that differs in anything else, a different file set above all, is still refused; that gate is derived from `VersionInfo.Equal` rather than restating its field list, so a field added to `VersionInfo` later cannot silently stop being compared.
+
+  Three things to know before running a migration this way, all spelled out in the README: each correction is committed when it is made and is **not** undone by a restore that fails afterwards; an interrupted run has to be repeated with `recreate=true`, because a merge-restore skips a version whose files are already present in the destination and a skipped version never reaches the correction; and the source must keep its own record of its files the way `localfsdb` does, never resolve them through the same `MetadataStore` the destination corrects — a `storeconn` sharing that store loses access to the file the moment its hash is corrected there, because that hash is what addresses the blob.
+
 ## [v1.1.2] - 2026-09-04
 
 ### Fixed
@@ -306,6 +315,7 @@ Initial release.
 - `ProxyConn` and `DeprecatedConn` (holding deprecated check-out/in methods).
 - `VersionInfo` with `CompanyID`, `LatestDocumentVersionInfo`, and `VersionTime.SetNull`.
 
+[v1.1.4]: https://github.com/domonda/go-docdb/releases/tag/v1.1.4
 [v1.1.2]: https://github.com/domonda/go-docdb/releases/tag/v1.1.2
 [v1.1.1]: https://github.com/domonda/go-docdb/releases/tag/v1.1.1
 [v1.1.0]: https://github.com/domonda/go-docdb/releases/tag/v1.1.0

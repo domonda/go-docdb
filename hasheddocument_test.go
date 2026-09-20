@@ -99,6 +99,67 @@ func TestReadHashedDocument_StorageMetadataMismatch(t *testing.T) {
 		_, err := ReadHashedDocument(ctx, conn, docID)
 		require.ErrorContains(t, err, "missing from storage")
 	})
+
+	// A file rewritten in place without updating its version info leaves both
+	// the recorded size and the recorded hash stale. Reading it as it is in
+	// storage is what makes such a document migratable at all: the alternative
+	// is failing the whole document forever, and the content the read yields is
+	// the content the file actually has.
+	t.Run("stale size and hash are read from storage when storage wins", func(t *testing.T) {
+		beforeRewrite := []byte("content before the rewrite")
+		staleInfo := FileInfo{Name: "a.txt", Size: int64(len(beforeRewrite)), Hash: ContentHash(beforeRewrite)}
+		conn := newMock(
+			[]fs.FileReader{fs.NewMemFile("a.txt", data)},
+			map[string]FileInfo{"a.txt": staleInfo},
+		)
+		doc, err := ReadHashedDocument(ContextWithFileContentWinsOverVersionInfo(ctx), conn, docID)
+		require.NoError(t, err)
+		require.Equal(t, goodInfo.Hash, doc.Versions[version].FileHashes["a.txt"], "version must reference the hash of the content in storage, not the stale one")
+		require.Equal(t, data, doc.HashedFiles[goodInfo.Hash])
+		require.NotContains(t, doc.HashedFiles, staleInfo.Hash, "the stale hash names content that does not exist")
+	})
+
+	// A recorded size that drifted from a file whose recorded hash still names
+	// its content is the case this mode was built for: a store that addresses
+	// its file content by hash cannot disagree about the hash, only about the
+	// size recorded next to it. Such a file must be read on the size
+	// disagreement alone, without a hash disagreement to carry it.
+	t.Run("stale size alone is read from storage when storage wins", func(t *testing.T) {
+		conn := newMock(
+			[]fs.FileReader{fs.NewMemFile("a.txt", data)},
+			map[string]FileInfo{"a.txt": {Name: "a.txt", Size: goodInfo.Size + 100, Hash: goodInfo.Hash}},
+		)
+		doc, err := ReadHashedDocument(ContextWithFileContentWinsOverVersionInfo(ctx), conn, docID)
+		require.NoError(t, err)
+		require.Equal(t, goodInfo.Hash, doc.Versions[version].FileHashes["a.txt"])
+		require.Equal(t, data, doc.HashedFiles[goodInfo.Hash])
+	})
+
+	// Storage winning over the version info corrects the record of a file that
+	// both sides have. It must not extend to a file only one side has: adopting
+	// an untracked file invents version content, and dropping a tracked file
+	// that is not in storage would restore a document as if the missing content
+	// had never existed.
+	t.Run("file set mismatches stay errors when storage wins", func(t *testing.T) {
+		repairCtx := ContextWithFileContentWinsOverVersionInfo(ctx)
+
+		untracked := newMock(
+			[]fs.FileReader{fs.NewMemFile("a.txt", data), fs.NewMemFile("extra.txt", []byte("x"))},
+			map[string]FileInfo{"a.txt": goodInfo},
+		)
+		_, err := ReadHashedDocument(repairCtx, untracked, docID)
+		require.ErrorContains(t, err, "not tracked in version info")
+
+		missing := newMock(
+			[]fs.FileReader{fs.NewMemFile("a.txt", data)},
+			map[string]FileInfo{
+				"a.txt":       goodInfo,
+				"missing.txt": {Name: "missing.txt", Size: 1, Hash: ContentHash([]byte("z"))},
+			},
+		)
+		_, err = ReadHashedDocument(repairCtx, missing, docID)
+		require.ErrorContains(t, err, "missing from storage")
+	})
 }
 
 // TestHashedDocument_Validate covers every branch of HashedDocument.Validate.

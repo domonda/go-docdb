@@ -291,6 +291,25 @@ err = backup.Validate()
 err = conn.RestoreDocument(ctx, backup, recreate)
 ```
 
+`ReadHashedDocument` refuses a document whose file bytes disagree with the size or content hash recorded for them in the `VersionInfo`. `docdb.ContextWithFileContentWinsOverVersionInfo(ctx)` downgrades that refusal to a logged error and reads the file as it is in storage:
+
+```go
+// Migrate a store whose old version info records sizes its files no longer have
+ctx = docdb.ContextWithFileContentWinsOverVersionInfo(ctx)
+err := docdb.SyncDocument(ctx, srcConn, destConn, docID, recreate)
+```
+
+The bytes in storage are what the result is built from either way — a `HashedDocument` keys its content by the hash of what was actually read, and `RestoreDocument` derives the `FileInfo` it writes from those bytes — so the restored copy gets metadata that matches its files. Nothing is written back to the source store; the `Conn` interface has no operation for it. The mode covers only the recorded size and hash of a file that exists on both sides. A file in storage that the version info does not track, or a tracked file that is not in storage, is still an error: taking either side as the truth there invents or drops file content instead of correcting a record of it.
+
+A destination store that keeps a record of the same files applies the mode to that record too, because reading the file is only half of a migration. `storeconn/pgstore` in versions-exist mode verifies a restored version against the `docdb.document_version` rows it holds, and for a document mirrored into Postgres from the source store those rows were written from the same stale version info — so without this the corrected read is refused one layer down instead. Under the mode it corrects the stored sizes, hashes and file deltas of that version. A stored version that differs in anything else, a different file set above all, is still refused.
+
+Four things an operator has to know before running a migration under this mode:
+
+- **Each correction is committed when it is made**, not when the restore finishes. `RestoreDocument` opens no transaction of its own, and its rollback undoes a version through `DeleteDocumentVersion`, which deletes nothing in versions-exist mode. A restore that fails at a later version leaves the earlier corrections in place. That state is not worse than the one before them — the record they replaced named a content hash the blob store did not hold either — and a rerun repairs it. Wrap the restore in your own transaction if you need the corrections to be undone with it.
+- **Repeat an interrupted run with `recreate=true`.** A merge-restore (`recreate=false`) skips a version whose files are all already present in the destination's `DocumentStore`, and a skipped version never reaches the metadata store, so its record is never corrected. After a partial run, a version whose files happen to have been written by a neighbouring version is skipped on every rerun and keeps its stale record while the sync reports success. What that leaves is worse than one stale row once the version after it was corrected: the two versions then record different hashes for the same unchanged file while the change lists still say it was not modified, so the history contradicts itself. Note what the remedy costs: `recreate=true` deletes the document from the destination `DocumentStore` before rewriting it, and not atomically, so a rerun that fails again leaves the document absent there until the next one.
+- **The destination half applies in versions-exist mode only.** A destination `MetadataStore` that really inserts refuses a version it already holds whose stored files differ, whatever the context says. Set both `pgstore.ContextWithMetadataStoreVersionsExist` and `docdb.ContextWithFileContentWinsOverVersionInfo`, or the corrected read is refused by the destination instead.
+- **Never point the mode at a source that resolves its own files through the `MetadataStore` being corrected.** A `storeconn` addresses a blob by the hash its `MetadataStore` records, so a source sharing that store with the destination — the very setup versions-exist mode is for — stops being able to read the file the moment its hash is corrected. The mode is for a source that keeps its own record of its files, `localfsdb` above all. Give the source its own `MetadataStore` otherwise.
+
 `Validate` enforces two version invariants: every version has at least one file, and the latest version names the document's current `CompanyID`. It deliberately does **not** reject a version whose files and company are identical to its predecessor's. Creating one is refused where versions are created (`AddDocumentVersion` returns `ErrNoChanges`), but a stored document can end up holding one anyway — `DeleteDocumentVersion` removing the middle of `v0(F), v1(G), v2(F)` leaves two adjacent versions with the same files. Since every `RestoreDocument` starts by validating, rejecting such a document here would not undo it; it would only make it impossible to back up, sync or migrate. A backup has to be able to represent what a store actually holds.
 
 Each version carries its own company, so a document that was moved between companies is restored with its move history instead of having every version filed under its current company:
@@ -389,13 +408,14 @@ A document's versions form a chain, so a version has at most one successor. An i
 
 ### Blob-only migration (versions-exist mode)
 
-`pgstore.ContextWithMetadataStoreVersionsExist(ctx)` switches the Postgres `MetadataStore` into versions-exist mode, where it is immutable: it verifies versions instead of inserting them and verifies existence instead of deleting. It exists for one job — copying a document's file blobs to a *different* `DocumentStore` while reusing a `MetadataStore` that already holds the versions (for example moving blobs to a new S3 bucket without rewriting Postgres):
+`pgstore.ContextWithMetadataStoreVersionsExist(ctx)` switches the Postgres `MetadataStore` into versions-exist mode, where it is immutable: it verifies versions instead of inserting them and verifies existence instead of deleting. The one thing it may still write is the record of an existing version's files, and only when the context also carries `docdb.ContextWithFileContentWinsOverVersionInfo` — see the exception below. It exists for one job — copying a document's file blobs to a *different* `DocumentStore` while reusing a `MetadataStore` that already holds the versions (for example moving blobs to a new S3 bucket without rewriting Postgres):
 
 ```go
 // Same shared Postgres metadata, new blob store.
 dest := storeconn.New(newDocStore, sharedMetaStore)
 
-// In versions-exist mode the metadata is read and verified, never mutated.
+// In versions-exist mode the metadata is read and verified, not inserted or
+// deleted (the one exception is noted below).
 ctx = pgstore.ContextWithMetadataStoreVersionsExist(ctx)
 
 // Drives newDocStore to write the blobs; verifies each version against the
@@ -405,9 +425,9 @@ err := docdb.SyncDocument(ctx, srcConn, dest, docID, false)
 
 In this mode:
 
-- `CreateDocumentVersion` inserts nothing; it errors if the stored version is missing or any field differs from what it would have written.
+- `CreateDocumentVersion` inserts nothing; it errors if the stored version is missing or any field differs from what it would have written. Under `docdb.ContextWithFileContentWinsOverVersionInfo` a difference that is only the record of the files' content — their sizes and hashes, and the added/modified/removed lists derived from the hashes — is written rather than returned, because that record was written from the same stale version info the read side is correcting. A stored version that differs in anything else, a different file set above all, is still refused.
 - `DeleteDocument` / `DeleteDocumentVersion` delete nothing; they verify existence (returning `ErrDocumentNotFound` if missing). `DeleteDocumentVersion` still reports the same leftover versions and blob hashes a real delete would, so the caller can clean up the `DocumentStore`.
-- The shared metadata is never mutated, even when a copy fails and rolls back.
+- The shared metadata is not inserted into or deleted from, even when a copy fails and rolls back. The file-record correction above is the only write, and it is not undone by a rollback.
 
 ## Debugging
 
@@ -445,6 +465,6 @@ Document: 0c4e8f2a-…  Company: 7b1d…  Versions: 2
 | `localfsdb`         | Filesystem-based `Conn` storing files and metadata together (see [localfsdb/README.md](localfsdb/README.md)) |
 | `storeconn`         | Split-store `Conn` composing a `DocumentStore` and `MetadataStore` (see [storeconn/README.md](storeconn/README.md)) |
 | `storeconn/s3store` | `DocumentStore` implementation backed by AWS S3    |
-| `storeconn/pgstore` | `MetadataStore` backed by PostgreSQL; supports an immutable versions-exist mode via `ContextWithMetadataStoreVersionsExist` |
+| `storeconn/pgstore` | `MetadataStore` backed by PostgreSQL; supports a versions-exist mode via `ContextWithMetadataStoreVersionsExist` that inserts and deletes nothing |
 | `routerconn`        | Routing `Conn` selecting a backend per document via a callback; refuses a company change that would move a document to a company on another backend |
 | `integrationtests`  | Shared integration test suite runnable against any `Conn` implementation |
