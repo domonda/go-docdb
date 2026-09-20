@@ -4,7 +4,7 @@
 //
 //	DOCDB_BUCKET_NAME    bucket used by the fixtures
 //	AWS_DEFAULT_REGION   region used when creating buckets
-//	AWS_ENDPOINT_URL     optional custom endpoint (e.g. LocalStack)
+//	AWS_ENDPOINT_URL     optional custom endpoint (e.g. the compose S3 service)
 package s3fixtures
 
 import (
