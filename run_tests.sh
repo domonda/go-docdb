@@ -3,7 +3,7 @@
 set -eou pipefail
 
 # given
-# The suite needs Docker for the Postgres and MinIO services and psql to load
+# The suite needs Docker for the Postgres and S3 services and psql to load
 # the schema. Both are preinstalled on GitHub-hosted Ubuntu runners; say which
 # one is missing instead of failing later with a cryptic error.
 for cmd in docker psql; do
@@ -29,7 +29,7 @@ exit_code=0
 echo ""
 echo "Running tests..."
 # -p 1 runs one package at a time: the s3store and integrationtests packages
-# share the single bucket of the MinIO service and the single Postgres database,
+# share the single bucket of the S3 service and the single Postgres database,
 # and each clears its bucket, so running them concurrently makes them delete
 # each other's objects.
 ( \
