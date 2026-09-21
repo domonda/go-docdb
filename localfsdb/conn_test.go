@@ -3435,3 +3435,78 @@ func TestDocumentVersionInfoUnparsableCompanyFile(t *testing.T) {
 	require.Nil(t, info)
 	assert.Contains(t, err.Error(), "can't read company ID")
 }
+
+// TestVersionWithUnparseableInfoFileIsSkipped pins the enumeration contract for
+// a half-written version info JSON: a file that exists but holds no decodable
+// VersionInfo must be skipped like a missing one, so reads of the document keep
+// working from the versions that are intact.
+//
+// Screening with a stat honored that contract only for an absent file. An empty
+// or truncated info JSON — what an interrupted write leaves behind — stat'ed
+// fine, so the enumeration handed the version back as readable and every read of
+// it then failed with "can't unmarshal JSON because: unexpected end of JSON
+// input". The version being corrupt is exactly why nothing can have used it, so
+// failing the whole document over it trades a version no reader ever saw for the
+// ones that are still there: it aborted a client company's S3 migration in
+// production on a single such file.
+//
+// The corrupt version here is the newest one, which is the case that costs
+// something: it is dropped from the document rather than reported, so
+// LatestDocumentVersion answers with the newest version that is actually
+// readable.
+func TestVersionWithUnparseableInfoFileIsSkipped(t *testing.T) {
+	var (
+		ctx       = t.Context()
+		companyID = uu.IDFrom("3a4f1c2e-7b8d-4e9a-b1c2-d3e4f5a6b7c8")
+		docID     = uu.IDFrom("11111111-2222-4333-8444-555555555555")
+		userID    = uu.IDFrom("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
+		v0        = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+		v1        = docdb.MustVersionTimeFromString("2024-01-02_00-00-00.000")
+	)
+
+	for _, scenario := range []struct {
+		name    string
+		content []byte
+	}{
+		{name: "empty info file", content: nil},
+		{name: "truncated info file", content: []byte(`{"Version":"2024-01-02_00-00-00.0`)},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			conn, documentsDir, _ := newTestConnDirs(t)
+			require.NoError(t, conn.CreateDocument(
+				ctx, companyID, docID, userID, "v0", v0,
+				newTestMemFiles("f0.txt"), noopOnNew,
+			))
+			require.NoError(t, conn.AddDocumentVersion(ctx, docID, userID, "v1",
+				func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+					return &docdb.CreateVersionResult{Version: v1, WriteFiles: newTestMemFiles("f1.txt")}, nil
+				},
+				noopOnNew,
+			))
+
+			docDir := uuiddir.Join(documentsDir, docID)
+			require.NoError(t, os.WriteFile(docDir.Join(v1.String()+".json").LocalPath(), scenario.content, 0o644))
+
+			versions, err := conn.DocumentVersions(ctx, docID)
+			require.NoError(t, err, "one unusable version must not fail the listing")
+			require.Equal(t, []docdb.VersionTime{v0}, versions,
+				"the version whose info JSON does not decode is not a version of the document")
+
+			latest, err := conn.LatestDocumentVersion(ctx, docID)
+			require.NoError(t, err, "the document stays readable through its intact version")
+			require.Equal(t, v0, latest)
+
+			// The production chain: a document written before company.id existed
+			// resolves its company through the latest version info and that
+			// version's doc.json, so an undecodable newest version made the whole
+			// document unreadable and aborted the S3 migration pre-flight of every
+			// company holding one.
+			require.NoError(t, docDir.Join(v0.String()).Join("doc.json").
+				WriteJSON(ctx, map[string]any{"companyId": companyID}))
+			require.NoError(t, os.Remove(docDir.Join("company.id").LocalPath()))
+			gotCompanyID, err := conn.DocumentCompanyID(ctx, docID)
+			require.NoError(t, err)
+			require.Equal(t, companyID, gotCompanyID)
+		})
+	}
+}

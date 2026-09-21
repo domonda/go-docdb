@@ -510,13 +510,25 @@ func enumVersionDirs(ctx context.Context, docDir fs.File, docID uu.ID, callback 
 				Log()
 			return nil
 		}
-		// Stat rather than Exists — and rather than CheckExists, which is
-		// built on Exists — so the log says whether the info file is missing
-		// or could not be read. Both are skipped and counted either way, but
-		// an operator reading "has no info file" about a file that is right
-		// there looks in the wrong place.
+		// Decoded, not stat'ed — and not Exists, nor CheckExists which is built
+		// on it — so the log says whether the info file is missing, could not
+		// be read, or holds no usable VersionInfo. All three are skipped and
+		// counted either way, but an operator reading "has no info file" about
+		// a file that is right there looks in the wrong place.
+		//
+		// A stat only proves the file exists, which is less than the contract
+		// above promises: an empty or truncated info JSON — what an interrupted
+		// write leaves behind — passed that screen, was handed back as a
+		// readable version, and then failed every read of it with "can't
+		// unmarshal JSON because: unexpected end of JSON input". That is the
+		// read this function exists to keep from failing, and it aborted whole
+		// client company migrations on a single half-written file.
+		//
+		// The cost is reading one small JSON file per version directory instead
+		// of stat'ing it, paid on every enumeration. The alternative is an
+		// enumeration that promises more than it checked.
 		infoFile := docDir.Join(version.String() + ".json")
-		if _, infoErr := infoFile.Stat(); infoErr != nil {
+		if infoErr := checkVersionInfoFileDecodable(ctx, infoFile); infoErr != nil {
 			versionFiles, listErr := dirInfo.File.ListDirMax(20)
 			if listErr != nil {
 				log.ErrorCtx(ctx, "Error listing document version directory").Err(listErr).Log()
@@ -536,6 +548,23 @@ func enumVersionDirs(ctx context.Context, docDir fs.File, docID uu.ID, callback 
 		return nil
 	})
 	return skipped, err
+}
+
+// checkVersionInfoFileDecodable reports why a version info JSON file cannot be
+// used, or nil when it decodes. It is the screen enumVersionDirs applies, so it
+// must answer the same question the later read asks: whether readAndFixVersionInfoJSON
+// would succeed.
+//
+// Decoding here never rewrites a legacy-format file the way
+// readAndFixVersionInfoJSON does with writeFixedVersion. Enumerating a document
+// must not write to it, and the rewrite still happens on the read that follows.
+func checkVersionInfoFileDecodable(ctx context.Context, file fs.File) error {
+	data, err := file.ReadAllContext(ctx)
+	if err != nil {
+		return err
+	}
+	_, _, err = unmarshalVersionInfoJSON(data)
+	return err
 }
 
 func (c *Conn) documentVersionInfo(ctx context.Context, docID uu.ID, version docdb.VersionTime) (versionInfo *docdb.VersionInfo, docDir fs.File, err error) {
