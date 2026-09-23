@@ -1,61 +1,16 @@
 package pgstore
 
 import (
-	"bufio"
-	"bytes"
-	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/domonda/go-errs"
 	"github.com/domonda/go-types/uu"
-	"github.com/domonda/golog"
-	rootlog "github.com/domonda/golog/log"
 
 	"github.com/domonda/go-docdb"
+	"github.com/domonda/go-docdb/internal/logcapture"
 )
-
-// captureLog redirects what this package's logger writes into a buffer for the
-// duration of one test and returns a function decoding what was collected.
-//
-// The package logger derives from the process-wide rootlog.Config (see
-// rootlog.NewPackageLogger), so capturing means replacing that variable. A test
-// doing so must not run while another one logs, which is why nothing here calls
-// t.Parallel(): a test that does is held back until every sequential one has
-// finished, so this one has the config to itself.
-//
-// The correction is also the only thing this package logs at all, so what a
-// capture collects is correction lines and nothing else.
-func captureLog(t *testing.T) (decode func() []map[string]any) {
-	t.Helper()
-	var buf bytes.Buffer
-	format := *golog.NewDefaultFormat()
-	restore := rootlog.Config
-	rootlog.Config = golog.NewConfig(
-		rootlog.Levels,
-		// Everything, so that "nothing was logged" is an assertion about the
-		// code rather than about the level filter it ran under.
-		rootlog.Levels.Trace.FilterOutBelow(),
-		golog.NewJSONWriterConfig(&buf, &format),
-	)
-	t.Cleanup(func() { rootlog.Config = restore })
-
-	return func() []map[string]any {
-		var messages []map[string]any
-		scanner := bufio.NewScanner(bytes.NewReader(buf.Bytes()))
-		for scanner.Scan() {
-			line := bytes.TrimSpace(scanner.Bytes())
-			if len(line) == 0 {
-				continue
-			}
-			var message map[string]any
-			require.NoError(t, json.Unmarshal(line, &message), "log line: %s", line)
-			messages = append(messages, message)
-		}
-		require.NoError(t, scanner.Err())
-		return messages
-	}
-}
 
 // TestVersionRecordCorrectionLog covers the audit record of a corrected version
 // at the point it is written.
@@ -69,13 +24,16 @@ func TestVersionRecordCorrectionLog(t *testing.T) {
 	t.Run("Writes nothing for a version that needed no correction", func(t *testing.T) {
 		// given: the nil correction CreateDocumentVersion holds for every
 		// version it did not have to correct, which is almost all of them. It
-		// logs unconditionally after the transaction returned, so the nil
-		// receiver is the normal case rather than a defensive check.
-		decode := captureLog(t)
+		// logs unconditionally after the transaction returned, whether that
+		// transaction failed or not, so the nil receiver is the normal case
+		// rather than a defensive check — and a failed call that corrected
+		// nothing must stay silent about corrections.
+		decode := logcapture.Start(t)
 		var correction *versionRecordCorrection
 
 		// when
-		correction.log(t.Context())
+		correction.log(t.Context(), nil)
+		correction.log(t.Context(), errs.New("commit failed"))
 
 		// then
 		require.Empty(t, decode())
@@ -87,7 +45,7 @@ func TestVersionRecordCorrectionLog(t *testing.T) {
 		// whenever a correction happens at all, so a version whose own file
 		// records were already right has an empty correctedFiles and the delta
 		// write as the only thing that happened to it.
-		decode := captureLog(t)
+		decode := logcapture.Start(t)
 		docID := uu.IDv7()
 		version := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
 		correction := &versionRecordCorrection{
@@ -101,7 +59,7 @@ func TestVersionRecordCorrectionLog(t *testing.T) {
 		}
 
 		// when
-		correction.log(t.Context())
+		correction.log(t.Context(), nil)
 
 		// then
 		messages := decode()
@@ -127,7 +85,7 @@ func TestVersionRecordCorrectionLog(t *testing.T) {
 		// correctedFiles and corrections are empty. The line still has to be
 		// written and still has to carry the deltas: they are what was
 		// overwritten, and nothing else records the values they replaced.
-		decode := captureLog(t)
+		decode := logcapture.Start(t)
 		correction := &versionRecordCorrection{
 			docID:          uu.IDv7(),
 			version:        docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000"),
@@ -139,7 +97,7 @@ func TestVersionRecordCorrectionLog(t *testing.T) {
 		}
 
 		// when
-		correction.log(t.Context())
+		correction.log(t.Context(), nil)
 
 		// then
 		messages := decode()
@@ -147,6 +105,49 @@ func TestVersionRecordCorrectionLog(t *testing.T) {
 		message := messages[0]
 		require.Equal(t, []any{}, message["correctedFiles"])
 		require.Equal(t, []any{}, message["corrections"])
+		require.Equal(t, []any{"added.pdf"}, message["addedFiles"])
+		require.Equal(t, []any{"modified.pdf"}, message["modifiedFiles"])
+		require.Equal(t, []any{"removed.pdf"}, message["removedFiles"])
+	})
+
+	t.Run("Keeps the record of a correction whose transaction failed", func(t *testing.T) {
+		// given: a correction that was written and whose transaction then
+		// returned an error. The error does not mean the writes are gone — a
+		// COMMIT the server applied but could not acknowledge, a released
+		// savepoint in a transaction the caller still commits, and a caller
+		// with no transaction that autocommitted each write all leave them
+		// stored (see versionRecordCorrection). Dropping the line here would
+		// lose the only account of the overwritten values in precisely those
+		// cases, so it is written and says the fate is unknown instead.
+		decode := logcapture.Start(t)
+		correction := &versionRecordCorrection{
+			docID:          uu.IDv7(),
+			version:        docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000"),
+			correctedFiles: []string{"doc.json"},
+			corrections:    []string{"doc.json: 10 bytes hash-before -> 20 bytes hash-after"},
+			addedFiles:     []string{"added.pdf"},
+			modifiedFiles:  []string{"modified.pdf"},
+			removedFiles:   []string{"removed.pdf"},
+		}
+
+		// when
+		correction.log(t.Context(), errs.New("commit failed"))
+
+		// then
+		messages := decode()
+		require.Len(t, messages, 1)
+		message := messages[0]
+		require.Equal(t, "ERROR", message["level"])
+		// The same opening sentence as the successful wording, so one search
+		// over the logs finds every correction either way, followed by what
+		// distinguishes this one.
+		require.Contains(t, message["message"], "Corrected the stored record of a document version to the file content it is restored with")
+		require.Contains(t, message["message"], "may be stored in whole or in part, or may have been rolled back")
+		require.Contains(t, message["error"], "commit failed")
+		// The overwritten values are what the line exists for and are carried
+		// unchanged: an uncertain outcome is not a reason to record less.
+		require.Equal(t, []any{"doc.json"}, message["correctedFiles"])
+		require.Equal(t, []any{"doc.json: 10 bytes hash-before -> 20 bytes hash-after"}, message["corrections"])
 		require.Equal(t, []any{"added.pdf"}, message["addedFiles"])
 		require.Equal(t, []any{"modified.pdf"}, message["modifiedFiles"])
 		require.Equal(t, []any{"removed.pdf"}, message["removedFiles"])
