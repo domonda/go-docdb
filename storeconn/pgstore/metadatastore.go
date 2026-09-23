@@ -292,9 +292,7 @@ func (store *postgresMetadataStore) CreateDocumentVersion(ctx context.Context, i
 	if errors.Is(err, errSuccessorIndexViolation) {
 		return nil, store.resolveSuccessorIndexViolation(ctx, in)
 	}
-	if err == nil {
-		correction.log(ctx)
-	}
+	correction.log(ctx, err)
 	return info, err
 }
 
@@ -349,7 +347,8 @@ func (store *postgresMetadataStore) resolveSuccessorIndexViolation(ctx context.C
 // only the record of the files' content is not a mismatch but the stale record
 // that mode exists to correct, and is written instead of returned. What was
 // written comes back for the caller to log once the transaction it was part of
-// has returned, see versionRecordCorrection.
+// has returned, whether or not that transaction failed, see
+// versionRecordCorrection.
 func (store *postgresMetadataStore) assertStoredVersionEquals(ctx context.Context, expected *docdb.VersionInfo) (correction *versionRecordCorrection, err error) {
 	stored, err := store.DocumentVersionInfo(ctx, expected.DocID, expected.Version)
 	if err != nil {
@@ -364,7 +363,10 @@ func (store *postgresMetadataStore) assertStoredVersionEquals(ctx context.Contex
 	if ctxflag.FileContentWinsOverVersionInfo(ctx) {
 		correction, err = store.reconcileStoredVersionFileRecords(ctx, stored, expected)
 		if err != nil {
-			return nil, err
+			// The record of what was already written comes back with the
+			// error, because the error does not mean it was undone. See
+			// versionRecordCorrection.
+			return correction, err
 		}
 		if correction != nil {
 			return correction, nil
@@ -378,22 +380,29 @@ func (store *postgresMetadataStore) assertStoredVersionEquals(ctx context.Contex
 
 // versionRecordCorrection is what reconcileStoredVersionFileRecords wrote, kept
 // for CreateDocumentVersion to log once the transaction those writes are part
-// of has returned without error.
+// of has returned.
 //
 // The record is not logged where it is written. What it holds is the only
-// surviving account of the values it overwrote, so it must not describe a write
-// that never landed: the commit those writes end at can still fail, and a
-// caller's transaction can fail after this store is done with it, and either
-// rolls the corrections back while the line claiming them stays in the log.
-// A statement of this store's own failing between the corrections and the end
-// of the transaction was never one of those cases — it returns the error, and
-// the old log line sat after that return.
+// surviving account of the values it overwrote, so a line claiming a write that
+// is still open can end up claiming one that was rolled back.
 //
-// One case it cannot cover: in a transaction the caller opened, the writes end
-// at a released savepoint rather than at a commit, and an outer rollback can
-// still undo what the line reports. Nothing tells this store when that
-// transaction ends. Logging after the savepoint is wrong only for a caller that
-// rolls back afterwards; logging before the write was wrong for every caller.
+// It is logged whether or not that transaction returned an error, because an
+// error does not mean the corrections are gone. A failed COMMIT rolls them
+// back, but a COMMIT the server applied and could not acknowledge does not, and
+// neither does a failed RELEASE SAVEPOINT in a transaction the caller goes on
+// to commit. A statement of this store's own failing is the same question one
+// level down: reconcileStoredVersionFileRecords hands back what it had already
+// written along with the error, and where the caller opened no transaction (see
+// db.ContextWithoutTransactions) each of those writes autocommitted by itself.
+// Dropping the record whenever an error came back would lose it in exactly the
+// cases where the corrections outlived the call, so the error picks the wording
+// — the correction reported as made, or as of unknown fate — and never whether
+// there is a line at all.
+//
+// One case neither wording covers: in a transaction the caller opened, the
+// writes end at a released savepoint rather than at a commit, and an outer
+// rollback can still undo what a line reporting success claims. Nothing tells
+// this store when that transaction ends.
 type versionRecordCorrection struct {
 	docID          uu.ID
 	version        docdb.VersionTime
@@ -406,23 +415,39 @@ type versionRecordCorrection struct {
 
 // log writes the audit record of a correction. A nil receiver writes nothing,
 // which is the version that needed none.
-func (c *versionRecordCorrection) log(ctx context.Context) {
+//
+// err is what the transaction the corrections were part of returned. It decides
+// what the line claims, not whether there is one: with an error the corrections
+// may be stored and may have been rolled back, and this store cannot tell which
+// (see versionRecordCorrection), so the line says so and carries the error. It
+// reports the correction as a whole rather than statement by statement — a
+// failure partway through leaves some of what it lists written and the rest
+// not. Both wordings open with the same sentence, so one search finds every
+// correction either way.
+func (c *versionRecordCorrection) log(ctx context.Context, err error) {
 	if c == nil {
 		return
+	}
+	message := "Corrected the stored record of a document version to the file content it is restored with"
+	if err != nil {
+		message += ", but the transaction the correction was part of failed: it may be stored in whole or in part, or may have been rolled back"
 	}
 	// The delta lists are logged too, not only the corrected files: they are
 	// written whenever a correction happens at all, so a version whose own file
 	// records were already right has an empty correctedFiles and that write as
 	// the only thing that happened to it.
-	log.ErrorCtx(ctx, "Corrected the stored record of a document version to the file content it is restored with").
+	m := log.ErrorCtx(ctx, message).
 		UUID("docID", c.docID).
 		Stringer("version", c.version).
 		Strs("correctedFiles", c.correctedFiles).
 		Strs("corrections", c.corrections).
 		Strs("addedFiles", c.addedFiles).
 		Strs("modifiedFiles", c.modifiedFiles).
-		Strs("removedFiles", c.removedFiles).
-		Log()
+		Strs("removedFiles", c.removedFiles)
+	if err != nil {
+		m.Err(err)
+	}
+	m.Log()
 }
 
 // reconcileStoredVersionFileRecords corrects the stored record of a version's
@@ -449,7 +474,10 @@ func (c *versionRecordCorrection) log(ctx context.Context) {
 //
 // It writes but does not log: the record of what it overwrote goes back to
 // CreateDocumentVersion, which logs it once the transaction the writes are part
-// of has returned, see versionRecordCorrection.
+// of has returned, see versionRecordCorrection. A failure partway through
+// returns that record too, holding the updates made before it. Only a
+// transaction undoes those, and there is none when the caller opened none (see
+// db.ContextWithoutTransactions), where each of them autocommitted by itself.
 //
 // The correction is committed when it is made, not when the restore that
 // triggered it finishes. CreateDocumentVersion runs it in the caller's
@@ -486,6 +514,27 @@ func (store *postgresMetadataStore) reconcileStoredVersionFileRecords(ctx contex
 	// left of what the row held before.
 	correctedFiles := make([]string, 0, len(expected.Files))
 	corrections := make([]string, 0, len(expected.Files))
+
+	// record is what goes back to the caller, on the error paths below as well
+	// as on success: an update already made is not known to be undone by a
+	// later one failing, and the caller decides what to claim from the error it
+	// gets with it. An error before the first update is the one case with
+	// nothing to report.
+	record := func(err error) (*versionRecordCorrection, error) {
+		if err != nil && len(correctedFiles) == 0 {
+			return nil, err
+		}
+		return &versionRecordCorrection{
+			docID:          expected.DocID,
+			version:        expected.Version,
+			correctedFiles: correctedFiles,
+			corrections:    corrections,
+			addedFiles:     expected.AddedFiles,
+			modifiedFiles:  expected.ModifiedFiles,
+			removedFiles:   expected.RemovedFiles,
+		}, err
+	}
+
 	for name, expectedFile := range expected.Files {
 		storedFile := stored.Files[name]
 		if storedFile == expectedFile {
@@ -503,7 +552,7 @@ func (store *postgresMetadataStore) reconcileStoredVersionFileRecords(ctx contex
 			expectedFile.Hash, // $4
 		)
 		if err != nil {
-			return nil, err
+			return record(err)
 		}
 		correctedFiles = append(correctedFiles, name)
 		corrections = append(corrections, fmt.Sprintf(
@@ -532,18 +581,10 @@ func (store *postgresMetadataStore) reconcileStoredVersionFileRecords(ctx contex
 		expected.ModifiedFiles, // $4
 	)
 	if err != nil {
-		return nil, err
+		return record(err)
 	}
 
-	return &versionRecordCorrection{
-		docID:          expected.DocID,
-		version:        expected.Version,
-		correctedFiles: correctedFiles,
-		corrections:    corrections,
-		addedFiles:     expected.AddedFiles,
-		modifiedFiles:  expected.ModifiedFiles,
-		removedFiles:   expected.RemovedFiles,
-	}, nil
+	return record(nil)
 }
 
 // onlyFileContentRecordsDiffer reports whether stored and expected describe the

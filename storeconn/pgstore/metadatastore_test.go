@@ -3,9 +3,11 @@ package pgstore_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"maps"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,10 +15,12 @@ import (
 	"github.com/ungerik/go-fs"
 
 	"github.com/domonda/go-errs"
+	"github.com/domonda/go-sqldb"
 	"github.com/domonda/go-sqldb/db"
 	"github.com/domonda/go-types/uu"
 
 	"github.com/domonda/go-docdb"
+	"github.com/domonda/go-docdb/internal/logcapture"
 	"github.com/domonda/go-docdb/storeconn"
 	"github.com/domonda/go-docdb/storeconn/pgstore"
 	"github.com/domonda/go-docdb/storeconn/pgstore/pgfixtures"
@@ -719,6 +723,129 @@ func TestCreateDocumentVersionFileContentWinsOverVersionInfo(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, *stale, stored.Files[file.Name], "a refused version must leave the record as it was")
 	})
+
+	// The two subtests below deliberately do not call t.Parallel(): they
+	// capture the process-wide logger config, which must not be replaced while
+	// another test logs. A sibling that called t.Parallel() is held back until
+	// this function's body has returned, so a sequential subtest has the config
+	// to itself. See logcapture.Start.
+
+	t.Run("Logs what it overwrote after the correcting transaction returned", func(t *testing.T) {
+		// given: a stale file record, as above. The log line is the only
+		// surviving account of the values the correction replaces — the source
+		// store they came from is the one the migration exists to retire — so
+		// the correction reaching CreateDocumentVersion and being logged there
+		// is as much of the behaviour as the corrected rows are, and nothing
+		// asserting on the rows alone would notice the line going missing.
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		docID := uu.IDv7()
+		companyID := uu.IDv7()
+		userID := uu.IDv7()
+		version := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
+		file := fileInfo("doc.json", "the content the file actually has")
+		input := storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "reason",
+			NewVersion: version, AddedFiles: []*docdb.FileInfo{file},
+		}
+		_, err := store.CreateDocumentVersion(ctx, input)
+		require.NoError(t, err)
+		stale := fileInfo("doc.json", "shorter content from before the rewrite")
+		makeFileRecordStale(t, ctx, docID, version, stale)
+		decode := logcapture.Start(t)
+
+		// when
+		repairCtx := docdb.ContextWithFileContentWinsOverVersionInfo(pgstore.ContextWithMetadataStoreVersionsExist(ctx))
+		_, err = store.CreateDocumentVersion(repairCtx, input)
+
+		// then
+		require.NoError(t, err)
+		messages := decode()
+		require.Len(t, messages, 1)
+		message := messages[0]
+		require.Equal(t, "ERROR", message["level"])
+		require.Contains(t, message["message"], "Corrected the stored record of a document version to the file content it is restored with")
+		require.NotContains(t, message, "error", "a correction whose transaction returned cleanly is reported as made")
+		require.Equal(t, docID.String(), message["docID"])
+		require.Equal(t, version.String(), message["version"])
+		require.Equal(t, []any{"doc.json"}, message["correctedFiles"])
+		// Both sides of the overwrite, taken from the row and from the content:
+		// what the line is for is telling an operator what the record held
+		// before, and nothing else holds those values afterwards.
+		require.Equal(t,
+			[]any{fmt.Sprintf("doc.json: %d bytes %s -> %d bytes %s", stale.Size, stale.Hash, file.Size, file.Hash)},
+			message["corrections"],
+		)
+		require.Equal(t, []any{"doc.json"}, message["addedFiles"])
+	})
+
+	t.Run("Logs the corrections it had made when a later statement fails", func(t *testing.T) {
+		// given: the same stale record, and the delta update that follows the
+		// per-file corrections made to fail. An error does not mean those
+		// corrections are gone — here the savepoint takes them back, but a
+		// caller without a transaction autocommits each of them, and a COMMIT
+		// the server applied and could not acknowledge keeps them too. The
+		// store cannot tell those apart, and dropping the record whenever an
+		// error came back would lose it in exactly the cases where the writes
+		// outlived the call, so the line is written and says the fate is
+		// unknown. See versionRecordCorrection in the pgstore package.
+		ctx := pgfixtures.FixtureCtxWithTestTx(t)
+		docID := uu.IDv7()
+		companyID := uu.IDv7()
+		userID := uu.IDv7()
+		version := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
+		file := fileInfo("doc.json", "the content the file actually has")
+		input := storeconn.CreateDocumentVersionInput{
+			DocID: docID, CompanyID: companyID, UserID: userID, Reason: "reason",
+			NewVersion: version, AddedFiles: []*docdb.FileInfo{file},
+		}
+		_, err := store.CreateDocumentVersion(ctx, input)
+		require.NoError(t, err)
+		makeFileRecordStale(t, ctx, docID, version, fileInfo("doc.json", "shorter content from before the rewrite"))
+		failingCtx := db.ContextWithConn(ctx, &failingExecConn{
+			Connection: db.Conn(ctx),
+			match:      "set added_files",
+			err:        errs.New("connection lost"),
+		})
+		decode := logcapture.Start(t)
+
+		// when
+		repairCtx := docdb.ContextWithFileContentWinsOverVersionInfo(pgstore.ContextWithMetadataStoreVersionsExist(failingCtx))
+		_, err = store.CreateDocumentVersion(repairCtx, input)
+
+		// then
+		require.ErrorContains(t, err, "connection lost")
+		messages := decode()
+		require.Len(t, messages, 1, "the file correction made before the failure must still be recorded")
+		message := messages[0]
+		require.Equal(t, "ERROR", message["level"])
+		// The same opening sentence as a correction that went through, so one
+		// search over the logs finds every correction either way, followed by
+		// what makes this one different.
+		require.Contains(t, message["message"], "Corrected the stored record of a document version to the file content it is restored with")
+		require.Contains(t, message["message"], "may be stored in whole or in part, or may have been rolled back")
+		require.Contains(t, message["error"], "connection lost")
+		require.Equal(t, []any{"doc.json"}, message["correctedFiles"])
+	})
+}
+
+// failingExecConn fails every Exec whose query contains match and passes
+// everything else through to the connection it wraps.
+//
+// It is how a test puts a statement failure in the middle of an operation that
+// has already written something. No fixture state provokes one: every statement
+// the correction runs is valid SQL against a schema a test cannot break without
+// breaking the statements around it too.
+type failingExecConn struct {
+	sqldb.Connection
+	match string
+	err   error
+}
+
+func (conn *failingExecConn) Exec(ctx context.Context, query string, args ...any) error {
+	if strings.Contains(query, conn.match) {
+		return conn.err
+	}
+	return conn.Connection.Exec(ctx, query, args...)
 }
 
 func TestCreateDocumentVersionMissingPreviousVersion(t *testing.T) {
