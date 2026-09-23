@@ -5,6 +5,15 @@ All notable changes to `github.com/domonda/go-docdb` are documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.1.6] - 2026-09-21
+
+### Fixed
+- **The audit record of a corrected version is no longer written before the correction is.** `storeconn/pgstore` logged what it had overwritten from inside the transaction that did the overwriting, so anything failing after the last file correction — the commit those writes end at, or anything the caller ran in the same transaction — rolled the writes back and left a log line claiming they happened. Since that line is the only surviving account of the values it replaced, it may not describe a write that never landed. The correction now travels back to `CreateDocumentVersion`, which logs it once the transaction has returned.
+
+  **It is logged whether or not that transaction returned an error**, because an error does not mean the corrections are gone. A failed `COMMIT` rolls them back, but a `COMMIT` the server applied and could not acknowledge does not, and neither does a failed `RELEASE SAVEPOINT` in a transaction the caller goes on to commit. A statement of the store's own failing is the same question one level down: `reconcileStoredVersionFileRecords` now hands back what it had already written along with the error, and where the caller opened no transaction (`db.ContextWithoutTransactions`) each of those writes autocommitted by itself. Gating the line on a nil error would have lost the record in exactly the cases where the corrections outlived the call. The error therefore picks the wording — the correction reported as made, or as possibly stored in whole or in part and possibly rolled back, with the error on the line — and never whether there is a line at all. Both wordings open with the same sentence, so one search finds every correction either way.
+
+  One case stays uncovered on purpose: in a transaction the caller opened, the writes end at a released savepoint rather than at a commit, and an outer rollback can still undo what a line reporting success claims — nothing tells the store when that transaction ends.
+
 ## [v1.1.5] - 2026-09-21
 
 ### Fixed
@@ -333,6 +342,7 @@ Initial release.
 - `ProxyConn` and `DeprecatedConn` (holding deprecated check-out/in methods).
 - `VersionInfo` with `CompanyID`, `LatestDocumentVersionInfo`, and `VersionTime.SetNull`.
 
+[v1.1.6]: https://github.com/domonda/go-docdb/releases/tag/v1.1.6
 [v1.1.5]: https://github.com/domonda/go-docdb/releases/tag/v1.1.5
 [v1.1.4]: https://github.com/domonda/go-docdb/releases/tag/v1.1.4
 [v1.1.2]: https://github.com/domonda/go-docdb/releases/tag/v1.1.2
