@@ -10,9 +10,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **`storeconn/pgstore` records what a correction overwrote in a new table, `docdb.document_version_correction`, written by the same statement as the correction.** Under `docdb.ContextWithFileContentWinsOverVersionInfo` the store rewrites the stale sizes and hashes of a version's file records and the delta lists derived from them, and the values it replaces are the last ones left of the source store the migration retires. Their only record was a log line, and a log line is not part of the transaction it reports on. Written from inside the transaction, it claimed corrections that a failing commit then rolled back. Written after the transaction and only on success, it missed corrections that outlived an error — a `COMMIT` the server applied but could not acknowledge, or a failed `RELEASE SAVEPOINT` in a transaction the caller goes on to commit. Moving the line around trades one of those for the other. Each correction is now a single statement, whose data-modifying CTEs rewrite the file records and the delta lists while it inserts the row with the sizes, hashes and delta lists from before and after. The row therefore exists exactly when the correction does, also for a caller that opened no transaction (`db.ContextWithoutTransactions`), where the several statements the correction used to be committed one by one and a failure between them left part of it in place.
 
-  **Deploying this needs a migration:** create the table from `storeconn/pgstore/schema/document_version_correction.sql` first. Without it every version that needs a correction fails, and writes nothing.
+  **Deploying this needs a migration**, applied before the new code runs: without the table every version that needs a correction fails, and writes nothing. It is the DDL of `storeconn/pgstore/schema/document_version_correction.sql` without its comments:
+
+  ```sql
+  begin;
+
+  create table docdb.document_version_correction (
+      id                  uuid primary key,
+      document_version_id uuid not null references docdb.document_version (id) on delete cascade,
+      corrected_at        timestamptz not null default now(),
+
+      corrected_files text[]   not null,
+      old_sizes       bigint[] not null,
+      old_hashes      text[]   not null,
+      new_sizes       bigint[] not null,
+      new_hashes      text[]   not null,
+      check (
+          cardinality(old_sizes) = cardinality(corrected_files) and
+          cardinality(old_hashes) = cardinality(corrected_files) and
+          cardinality(new_sizes) = cardinality(corrected_files) and
+          cardinality(new_hashes) = cardinality(corrected_files)
+      ),
+
+      old_added_files    text[],
+      old_removed_files  text[],
+      old_modified_files text[],
+      new_added_files    text[],
+      new_removed_files  text[],
+      new_modified_files text[]
+  );
+
+  create index document_version_correction_document_version_id_idx
+      on docdb.document_version_correction (document_version_id);
+
+  comment on table docdb.document_version_correction is 'What correcting a stored version record to its file content overwrote';
+
+  commit;
+  ```
+
+  Versions before this one do not use the table, so it can be created ahead of the deploy, and rolling the code back does not need it dropped. Where new tables in `docdb` do not get the application role's privileges by default, grant it the ones it has on `docdb.document_version_file`.
 
   The row is cascaded with its version, like the version's file records, and is not kept for a version that is deleted.
+- Updated `aws-sdk-go-v2` (core to v1.47.3, `service/s3` to v1.114.3, `config` to v1.33.9), `go-fs` from a pseudo-version to its first tagged release v0.1.0, `testify` to v1.12.1, and the remaining module dependencies to their current releases.
 
 ### Fixed
 - **The log line reporting a correction is written once the transaction it was part of has returned, whether or not it returned an error, and names the correction's row.** It was written from inside the transaction, before the commit that could still undo what it reported. It is now written by `CreateDocumentVersion` after the transaction, as an error carrying `correctionID`. An error does not mean the correction is gone, so the error picks the wording rather than whether there is a line: a line reporting one adds that the correction is stored if and only if `docdb.document_version_correction` holds the named row, and carries the error. Both wordings open with the same sentence, so one search finds every correction either way. In a transaction the caller opened, the correction ends at a released savepoint rather than at a commit, so an outer rollback can still undo what a line reporting success claims; nothing tells the store when that transaction ends, and the row, undone with the correction, is the one to trust.
