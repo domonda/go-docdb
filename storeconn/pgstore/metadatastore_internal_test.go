@@ -28,7 +28,7 @@ func TestVersionRecordCorrectionLog(t *testing.T) {
 		// transaction failed or not, so the nil receiver is the normal case
 		// rather than a defensive check — and a failed call that corrected
 		// nothing must stay silent about corrections.
-		decode := logcapture.Start(t)
+		decode := logcapture.Start(t, "pgstore")
 		var correction *versionRecordCorrection
 
 		// when
@@ -45,7 +45,7 @@ func TestVersionRecordCorrectionLog(t *testing.T) {
 		// whenever a correction happens at all, so a version whose own file
 		// records were already right has an empty correctedFiles and the delta
 		// write as the only thing that happened to it.
-		decode := logcapture.Start(t)
+		decode := logcapture.Start(t, "pgstore")
 		docID := uu.IDv7()
 		version := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
 		correction := &versionRecordCorrection{
@@ -85,7 +85,7 @@ func TestVersionRecordCorrectionLog(t *testing.T) {
 		// correctedFiles and corrections are empty. The line still has to be
 		// written and still has to carry the deltas: they are what was
 		// overwritten, and nothing else records the values they replaced.
-		decode := logcapture.Start(t)
+		decode := logcapture.Start(t, "pgstore")
 		correction := &versionRecordCorrection{
 			docID:          uu.IDv7(),
 			version:        docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000"),
@@ -119,7 +119,7 @@ func TestVersionRecordCorrectionLog(t *testing.T) {
 		// stored (see versionRecordCorrection). Dropping the line here would
 		// lose the only account of the overwritten values in precisely those
 		// cases, so it is written and says the fate is unknown instead.
-		decode := logcapture.Start(t)
+		decode := logcapture.Start(t, "pgstore")
 		correction := &versionRecordCorrection{
 			docID:          uu.IDv7(),
 			version:        docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000"),
