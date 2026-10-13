@@ -12,14 +12,12 @@ import (
 	"github.com/domonda/go-docdb/internal/logcapture"
 )
 
-// TestVersionRecordCorrectionLog covers the audit record of a corrected version
-// at the point it is written.
+// TestVersionRecordCorrectionLog covers the line reporting a corrected version.
 //
-// The line is the only surviving account of the values the correction
-// overwrote, see versionRecordCorrection: the source store those values came
-// from is the one the migration exists to retire, so a field logged under the
-// wrong key or dropped is not a cosmetic defect but the loss of the record
-// itself, and nothing downstream would notice.
+// The record of a correction is its docdb.document_version_correction row; the
+// line is how an operator learns that a correction happened at all, and names
+// that row by its id. A field logged under the wrong key sends whoever reads it
+// to the wrong file or the wrong list, and nothing downstream would notice.
 func TestVersionRecordCorrectionLog(t *testing.T) {
 	t.Run("Writes nothing for a version that needed no correction", func(t *testing.T) {
 		// given: the nil correction CreateDocumentVersion holds for every
@@ -39,23 +37,21 @@ func TestVersionRecordCorrectionLog(t *testing.T) {
 		require.Empty(t, decode())
 	})
 
-	t.Run("Writes what the correction overwrote and what replaced it", func(t *testing.T) {
+	t.Run("Writes what the correction overwrote, what replaced it, and its row", func(t *testing.T) {
 		// given: the three delta lists carry different values, so a list
-		// logged under another list's key is visible here. They are written
-		// whenever a correction happens at all, so a version whose own file
-		// records were already right has an empty correctedFiles and the delta
-		// write as the only thing that happened to it.
+		// logged under another list's key is visible here.
 		decode := logcapture.Start(t, "pgstore")
-		docID := uu.IDv7()
-		version := docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000")
 		correction := &versionRecordCorrection{
-			docID:          docID,
-			version:        version,
+			id: uu.IDv7(),
+			version: &docdb.VersionInfo{
+				DocID:         uu.IDv7(),
+				Version:       docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000"),
+				AddedFiles:    []string{"added.pdf"},
+				ModifiedFiles: []string{"modified.pdf"},
+				RemovedFiles:  []string{"removed.pdf"},
+			},
 			correctedFiles: []string{"doc.json"},
 			corrections:    []string{"doc.json: 10 bytes hash-before -> 20 bytes hash-after"},
-			addedFiles:     []string{"added.pdf"},
-			modifiedFiles:  []string{"modified.pdf"},
-			removedFiles:   []string{"removed.pdf"},
 		}
 
 		// when
@@ -70,8 +66,10 @@ func TestVersionRecordCorrectionLog(t *testing.T) {
 		// has to survive a production log level that drops anything below.
 		require.Equal(t, "ERROR", message["level"])
 		require.Contains(t, message["message"], "Corrected the stored record of a document version")
-		require.Equal(t, docID.String(), message["docID"])
-		require.Equal(t, version.String(), message["version"])
+		require.NotContains(t, message, "error")
+		require.Equal(t, correction.id.String(), message["correctionID"])
+		require.Equal(t, correction.version.DocID.String(), message["docID"])
+		require.Equal(t, correction.version.Version.String(), message["version"])
 		require.Equal(t, []any{"doc.json"}, message["correctedFiles"])
 		require.Equal(t, []any{"doc.json: 10 bytes hash-before -> 20 bytes hash-after"}, message["corrections"])
 		require.Equal(t, []any{"added.pdf"}, message["addedFiles"])
@@ -83,17 +81,20 @@ func TestVersionRecordCorrectionLog(t *testing.T) {
 		// given: the case reconcileStoredVersionFileRecords singles out, where
 		// the delta write is the only thing that happened to the version, so
 		// correctedFiles and corrections are empty. The line still has to be
-		// written and still has to carry the deltas: they are what was
-		// overwritten, and nothing else records the values they replaced.
+		// written and still has to carry the deltas, or a correction of the
+		// delta lists alone is invisible to anyone reading the logs.
 		decode := logcapture.Start(t, "pgstore")
 		correction := &versionRecordCorrection{
-			docID:          uu.IDv7(),
-			version:        docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000"),
+			id: uu.IDv7(),
+			version: &docdb.VersionInfo{
+				DocID:         uu.IDv7(),
+				Version:       docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000"),
+				AddedFiles:    []string{"added.pdf"},
+				ModifiedFiles: []string{"modified.pdf"},
+				RemovedFiles:  []string{"removed.pdf"},
+			},
 			correctedFiles: []string{},
 			corrections:    []string{},
-			addedFiles:     []string{"added.pdf"},
-			modifiedFiles:  []string{"modified.pdf"},
-			removedFiles:   []string{"removed.pdf"},
 		}
 
 		// when
@@ -110,24 +111,25 @@ func TestVersionRecordCorrectionLog(t *testing.T) {
 		require.Equal(t, []any{"removed.pdf"}, message["removedFiles"])
 	})
 
-	t.Run("Keeps the record of a correction whose transaction failed", func(t *testing.T) {
+	t.Run("Reports a correction whose transaction failed as stored only if its row is", func(t *testing.T) {
 		// given: a correction that was written and whose transaction then
-		// returned an error. The error does not mean the writes are gone — a
-		// COMMIT the server applied but could not acknowledge, a released
-		// savepoint in a transaction the caller still commits, and a caller
-		// with no transaction that autocommitted each write all leave them
-		// stored (see versionRecordCorrection). Dropping the line here would
-		// lose the only account of the overwritten values in precisely those
-		// cases, so it is written and says the fate is unknown instead.
+		// returned an error. The error does not mean the correction is gone —
+		// a COMMIT the server applied but could not acknowledge keeps it, and
+		// so does a released savepoint in a transaction the caller still
+		// commits (see versionRecordCorrection). Dropping the line would hide
+		// a correction in precisely those cases, so it is written, and says
+		// where to look for whether it was kept: the row is written by the
+		// same statement as the correction and exists exactly when it does.
 		decode := logcapture.Start(t, "pgstore")
 		correction := &versionRecordCorrection{
-			docID:          uu.IDv7(),
-			version:        docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000"),
+			id: uu.IDv7(),
+			version: &docdb.VersionInfo{
+				DocID:      uu.IDv7(),
+				Version:    docdb.MustVersionTimeFromString("2024-01-01_00-00-01.000"),
+				AddedFiles: []string{"doc.json"},
+			},
 			correctedFiles: []string{"doc.json"},
 			corrections:    []string{"doc.json: 10 bytes hash-before -> 20 bytes hash-after"},
-			addedFiles:     []string{"added.pdf"},
-			modifiedFiles:  []string{"modified.pdf"},
-			removedFiles:   []string{"removed.pdf"},
 		}
 
 		// when
@@ -142,14 +144,10 @@ func TestVersionRecordCorrectionLog(t *testing.T) {
 		// over the logs finds every correction either way, followed by what
 		// distinguishes this one.
 		require.Contains(t, message["message"], "Corrected the stored record of a document version to the file content it is restored with")
-		require.Contains(t, message["message"], "may be stored in whole or in part, or may have been rolled back")
+		require.Contains(t, message["message"], "it is stored if and only if docdb.document_version_correction holds the row named by correctionID")
 		require.Contains(t, message["error"], "commit failed")
-		// The overwritten values are what the line exists for and are carried
-		// unchanged: an uncertain outcome is not a reason to record less.
+		require.Equal(t, correction.id.String(), message["correctionID"])
 		require.Equal(t, []any{"doc.json"}, message["correctedFiles"])
 		require.Equal(t, []any{"doc.json: 10 bytes hash-before -> 20 bytes hash-after"}, message["corrections"])
-		require.Equal(t, []any{"added.pdf"}, message["addedFiles"])
-		require.Equal(t, []any{"modified.pdf"}, message["modifiedFiles"])
-		require.Equal(t, []any{"removed.pdf"}, message["removedFiles"])
 	})
 }
