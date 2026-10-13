@@ -13,6 +13,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE SCHEMA IF NOT EXISTS docdb;
 \ir $schema_dir/document_version.sql
 \ir $schema_dir/document_version_file.sql
+\ir $schema_dir/document_version_correction.sql
 \ir $schema_dir/lock.sql
 
 COMMIT;
