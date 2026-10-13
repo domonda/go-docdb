@@ -751,7 +751,7 @@ func TestCreateDocumentVersionFileContentWinsOverVersionInfo(t *testing.T) {
 		require.NoError(t, err)
 		stale := fileInfo("doc.json", "shorter content from before the rewrite")
 		makeFileRecordStale(t, ctx, docID, version, stale)
-		decode := logcapture.Start(t)
+		decode := logcapture.Start(t, "pgstore")
 
 		// when
 		repairCtx := docdb.ContextWithFileContentWinsOverVersionInfo(pgstore.ContextWithMetadataStoreVersionsExist(ctx))
@@ -806,7 +806,7 @@ func TestCreateDocumentVersionFileContentWinsOverVersionInfo(t *testing.T) {
 			match:      "set added_files",
 			err:        errs.New("connection lost"),
 		})
-		decode := logcapture.Start(t)
+		decode := logcapture.Start(t, "pgstore")
 
 		// when
 		repairCtx := docdb.ContextWithFileContentWinsOverVersionInfo(pgstore.ContextWithMetadataStoreVersionsExist(failingCtx))
