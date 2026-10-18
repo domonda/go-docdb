@@ -5,6 +5,21 @@ All notable changes to `github.com/domonda/go-docdb` are documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.1.6] - 2026-10-18
+
+### Changed
+- **go-docdb now requires `github.com/domonda/go-types` `v1.0.0-beta.2`, and so does every module that upgrades to this release.** Go builds a module with the highest version of a dependency that anything in its build requires, so upgrading go-docdb moves the whole build of a service onto this prerelease of go-types v1, including the service's own code that uses go-types directly. go-types `v1.0.0-beta.1` and `v1.0.0-beta.2` contain breaking changes; read their entries in the [go-types changelog](https://github.com/domonda/go-types/blob/v1.0.0-beta.2/CHANGELOG.md) before upgrading. The changes most likely to matter are listed under Upgrading below. Inside go-docdb only `routerconn` needed a change: `CompanyIDs` uses `IDSet.InsertAll` and `IDSet.Sorted` in place of the removed `AddSlice` and `AsSortedSlice`, with the same result.
+- **`CompanyIDs` and `CompanyDocumentIDs` list IDs in canonical UUID byte order, the order Postgres sorts `uuid` values in.** localfsdb and routerconn sort with `uu.ID.Less`, which go-types now defines as a byte-by-byte comparison, the same as comparing the ID strings. It compared two native-endian 64-bit halves before, starting with bytes 8 to 15, so the same store now returns its IDs in a different order. localfsdb and routerconn now agree with pgstore, which always returned this order. Code that kept a position in the old order across the upgrade, like a resumable batch job or a progress index taken from a log, skips or repeats entries after it.
+
+### Upgrading
+- **Code that uses go-types directly can stop compiling.** The deprecated set methods are removed: `AddSlice(s)` becomes `InsertAll(slices.Values(s))`, `AddSet` becomes `UnionWith`, `DeleteSlice(s)` becomes `DeleteAll(slices.Values(s))`, `DeleteSet` becomes `DifferenceWith` and `IDSet.AsSortedSlice` becomes `Sorted`. `uu.ID.V7Time` returns a second `ok bool` result. The go-types changelog lists the other removals.
+- **Some go-types behavior changes compile without a warning.** The ones most likely to change a service's data:
+  - An ambiguous date with slashes and the year last is read month first: `"03/04/2024"` is 2024-03-04, where it was 2024-04-03. Dots and dashes stay day first.
+  - `Value` of the normalizing types writes the normalized form and returns an error for an invalid value instead of writing it. Because `Value` also encodes query parameters, `WHERE bic = $1` with `bank.BIC("DEUTDEFF")` now sends `DEUTDEFFXXX`.
+  - `uu.IDMust`, `IDSliceMust`, `IDSetMust` and `NullableIDMust` panic, and `IDFromAny` returns an error, for a string that parses but is not a valid UUID.
+  - New version 7 UUIDs from `uu.NewID` and `uu.IDv7` store their timestamp big-endian as RFC 9562 requires. IDs made before the upgrade have those bytes reversed, so they don't sort by time against new ones and `V7Time` misreads them. In pgstore this applies to the `id` column of `document_version`, which go-docdb only stores; SQL outside go-docdb should not order by it or read a time from it across the upgrade.
+- **A 16-character ID string in stored JSON no longer decodes.** go-types read such a string as the raw bytes of an ID and now rejects it, so localfsdb skips a version whose info JSON holds one, like any other version it cannot decode. No version of go-docdb or go-types ever wrote an ID that way, since both always write the 36-character form, so only JSON written by other tools or by hand is affected.
+
 ## [v1.1.5] - 2026-09-21
 
 ### Fixed
@@ -333,6 +348,7 @@ Initial release.
 - `ProxyConn` and `DeprecatedConn` (holding deprecated check-out/in methods).
 - `VersionInfo` with `CompanyID`, `LatestDocumentVersionInfo`, and `VersionTime.SetNull`.
 
+[v1.1.6]: https://github.com/domonda/go-docdb/releases/tag/v1.1.6
 [v1.1.5]: https://github.com/domonda/go-docdb/releases/tag/v1.1.5
 [v1.1.4]: https://github.com/domonda/go-docdb/releases/tag/v1.1.4
 [v1.1.2]: https://github.com/domonda/go-docdb/releases/tag/v1.1.2
