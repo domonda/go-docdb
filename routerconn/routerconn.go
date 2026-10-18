@@ -44,6 +44,7 @@ package routerconn
 
 import (
 	"context"
+	"slices"
 
 	"github.com/ungerik/go-fs"
 
@@ -119,12 +120,12 @@ func (r *routerConn) CompanyIDs(ctx context.Context) (uu.IDSlice, error) {
 		if err != nil {
 			return nil, err
 		}
-		companyIDs.AddSlice(ids)
+		companyIDs.InsertAll(slices.Values(ids))
 	}
 	if companyIDs.IsEmpty() {
 		return nil, nil
 	}
-	return companyIDs.AsSortedSlice(), nil
+	return companyIDs.Sorted(), nil
 }
 
 func (r *routerConn) CompanyDocumentIDs(ctx context.Context, companyID uu.ID) (uu.IDSlice, error) {
