@@ -94,7 +94,7 @@ func CheckConnDocumentVersionFiles(ctx context.Context, conn Conn, docID uu.ID, 
 		if !hasFile {
 			return errs.Errorf("document %s version %s is missing file %s", docID, version, expectedFile.Name())
 		}
-		expectedData, err := expectedFile.ReadAll()
+		expectedData, err := expectedFile.ReadAll(ctx)
 		if err != nil {
 			return err
 		}

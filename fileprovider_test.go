@@ -305,7 +305,7 @@ func TestReadMemFile(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 				assert.Equal(t, tt.wantFilename, memFile.Name())
-				content, err := memFile.ReadAll()
+				content, err := memFile.ReadAll(ctx)
 				require.NoError(t, err)
 				assert.Equal(t, tt.wantContent, content)
 			}
@@ -374,7 +374,7 @@ func TestTempFileCopy(t *testing.T) {
 				assert.True(t, tempFile.Exists())
 
 				// Read and verify content
-				content, err := tempFile.ReadAll()
+				content, err := tempFile.ReadAll(ctx)
 				require.NoError(t, err)
 				assert.Equal(t, tt.wantContent, content)
 			}
@@ -385,12 +385,12 @@ func TestTempFileCopy(t *testing.T) {
 func TestDirFileProvider_HasFile(t *testing.T) {
 	dir := fs.TempDir().Join("TestDirFileProvider_HasFile")
 	dir.MakeDir()
-	defer dir.RemoveRecursive()
+	defer dir.RemoveRecursive(context.Background())
 
 	// Create test files
-	dir.Join("file1.txt").WriteAllString("content 1")
-	dir.Join("file2.json").WriteAllString(`{"key": "value"}`)
-	dir.Join(".DS_Store").WriteAllString("hidden")
+	dir.Join("file1.txt").WriteAllString(context.Background(), "content 1")
+	dir.Join("file2.json").WriteAllString(context.Background(), `{"key": "value"}`)
+	dir.Join(".DS_Store").WriteAllString(context.Background(), "hidden")
 	subDir := dir.Join("subdir")
 	subDir.MakeDir()
 
@@ -445,7 +445,7 @@ func TestDirFileProvider_HasFile(t *testing.T) {
 func TestDirFileProvider_ListFiles(t *testing.T) {
 	dir := fs.TempDir().Join("TestDirFileProvider_ListFiles")
 	dir.MakeDir()
-	defer dir.RemoveRecursive()
+	defer dir.RemoveRecursive(context.Background())
 
 	tests := []struct {
 		name      string
@@ -460,16 +460,16 @@ func TestDirFileProvider_ListFiles(t *testing.T) {
 		{
 			name: "single file",
 			setup: func() {
-				dir.Join("test.txt").WriteAllString("content")
+				dir.Join("test.txt").WriteAllString(context.Background(), "content")
 			},
 			wantFiles: []string{"test.txt"},
 		},
 		{
 			name: "multiple files sorted",
 			setup: func() {
-				dir.Join("zebra.txt").WriteAllString("z")
-				dir.Join("apple.txt").WriteAllString("a")
-				dir.Join("middle.json").WriteAllString("m")
+				dir.Join("zebra.txt").WriteAllString(context.Background(), "z")
+				dir.Join("apple.txt").WriteAllString(context.Background(), "a")
+				dir.Join("middle.json").WriteAllString(context.Background(), "m")
 			},
 			wantFiles: []string{"apple.txt", "middle.json", "zebra.txt"},
 		},
@@ -479,8 +479,8 @@ func TestDirFileProvider_ListFiles(t *testing.T) {
 			// version to readers like ReadHashedDocument.
 			name: "subdirectories are not listed",
 			setup: func() {
-				dir.Join("file1.txt").WriteAllString("content")
-				dir.Join("file2.pdf").WriteAllString("content")
+				dir.Join("file1.txt").WriteAllString(context.Background(), "content")
+				dir.Join("file2.pdf").WriteAllString(context.Background(), "content")
 				dir.Join("subdir").MakeDir()
 			},
 			wantFiles: []string{"file1.txt", "file2.pdf"},
@@ -492,9 +492,9 @@ func TestDirFileProvider_ListFiles(t *testing.T) {
 			// would make every reader of the document fail.
 			name: "hidden files are not listed",
 			setup: func() {
-				dir.Join("file1.txt").WriteAllString("content")
-				dir.Join(".DS_Store").WriteAllString("cruft")
-				dir.Join(".file1.txt.4Xk9pQ").WriteAllString("interrupted rsync")
+				dir.Join("file1.txt").WriteAllString(context.Background(), "content")
+				dir.Join(".DS_Store").WriteAllString(context.Background(), "cruft")
+				dir.Join(".file1.txt.4Xk9pQ").WriteAllString(context.Background(), "interrupted rsync")
 				dir.Join(".hiddendir").MakeDir()
 			},
 			wantFiles: []string{"file1.txt"},
@@ -503,7 +503,7 @@ func TestDirFileProvider_ListFiles(t *testing.T) {
 			// Not an empty slice: callers compare the returned lists directly.
 			name: "only hidden files",
 			setup: func() {
-				dir.Join(".DS_Store").WriteAllString("cruft")
+				dir.Join(".DS_Store").WriteAllString(context.Background(), "cruft")
 			},
 			wantFiles: nil,
 		},
@@ -512,7 +512,7 @@ func TestDirFileProvider_ListFiles(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Clean directory
-			dir.RemoveRecursive()
+			dir.RemoveRecursive(context.Background())
 			dir.MakeDir()
 
 			// Setup test files
@@ -531,14 +531,14 @@ func TestDirFileProvider_ListFiles(t *testing.T) {
 func TestDirFileProvider_ReadFile(t *testing.T) {
 	dir := fs.TempDir().Join("TestDirFileProvider_ReadFile")
 	dir.MakeDir()
-	defer dir.RemoveRecursive()
+	defer dir.RemoveRecursive(context.Background())
 
 	// Create test files
-	dir.Join("text.txt").WriteAllString("hello world")
-	dir.Join("json.json").WriteAllString(`{"data": "value"}`)
-	dir.Join("binary.dat").WriteAll([]byte{0x00, 0xFF, 0xAB, 0xCD})
-	dir.Join("empty.txt").WriteAll([]byte{})
-	dir.Join(".DS_Store").WriteAllString("cruft")
+	dir.Join("text.txt").WriteAllString(context.Background(), "hello world")
+	dir.Join("json.json").WriteAllString(context.Background(), `{"data": "value"}`)
+	dir.Join("binary.dat").WriteAll(context.Background(), []byte{0x00, 0xFF, 0xAB, 0xCD})
+	dir.Join("empty.txt").WriteAll(context.Background(), []byte{})
+	dir.Join(".DS_Store").WriteAllString(context.Background(), "cruft")
 	dir.Join("subdir").MakeDir()
 
 	provider := DirFileProvider(dir)
@@ -610,9 +610,9 @@ func TestDirFileProvider_ReadFile(t *testing.T) {
 func TestDirFileProvider_ContextCancellation(t *testing.T) {
 	dir := fs.TempDir().Join("TestDirFileProvider_ContextCancellation")
 	dir.MakeDir()
-	defer dir.RemoveRecursive()
+	defer dir.RemoveRecursive(context.Background())
 
-	dir.Join("test.txt").WriteAllString("content")
+	dir.Join("test.txt").WriteAllString(context.Background(), "content")
 
 	provider := DirFileProvider(dir)
 
@@ -633,12 +633,12 @@ func TestDirFileProvider_ContextCancellation(t *testing.T) {
 func TestDirFileProvider_Integration(t *testing.T) {
 	dir := fs.TempDir().Join("TestDirFileProvider_Integration")
 	dir.MakeDir()
-	defer dir.RemoveRecursive()
+	defer dir.RemoveRecursive(context.Background())
 
 	// Create test files
-	dir.Join("doc1.txt").WriteAllString("document one")
-	dir.Join("doc2.pdf").WriteAllString("document two")
-	dir.Join("doc3.json").WriteAllString(`{"key": "value"}`)
+	dir.Join("doc1.txt").WriteAllString(context.Background(), "document one")
+	dir.Join("doc2.pdf").WriteAllString(context.Background(), "document two")
+	dir.Join("doc3.json").WriteAllString(context.Background(), `{"key": "value"}`)
 
 	provider := DirFileProvider(dir)
 	ctx := context.Background()
@@ -682,13 +682,13 @@ func TestDirFileProvider_Integration(t *testing.T) {
 func TestDirFileProvider_NestedPaths(t *testing.T) {
 	dir := fs.TempDir().Join("TestDirFileProvider_NestedPaths")
 	dir.MakeDir()
-	defer dir.RemoveRecursive()
+	defer dir.RemoveRecursive(context.Background())
 
 	// Create subdirectory with files
 	subDir := dir.Join("subdir")
 	subDir.MakeDir()
-	subDir.Join("nested.txt").WriteAllString("nested content")
-	dir.Join("root.txt").WriteAllString("root content")
+	subDir.Join("nested.txt").WriteAllString(context.Background(), "nested content")
+	dir.Join("root.txt").WriteAllString(context.Background(), "root content")
 
 	provider := DirFileProvider(dir)
 	ctx := context.Background()
@@ -953,10 +953,10 @@ func TestExtFileProvider_Integration(t *testing.T) {
 	// Create a base provider with some files
 	dir := fs.TempDir().Join("TestExtFileProvider_Integration")
 	dir.MakeDir()
-	defer dir.RemoveRecursive()
+	defer dir.RemoveRecursive(context.Background())
 
-	dir.Join("file1.txt").WriteAllString("original file 1")
-	dir.Join("file2.txt").WriteAllString("original file 2")
+	dir.Join("file1.txt").WriteAllString(context.Background(), "original file 1")
+	dir.Join("file2.txt").WriteAllString(context.Background(), "original file 2")
 
 	baseProvider := DirFileProvider(dir)
 
@@ -1181,12 +1181,12 @@ func TestRemoveFileProvider_Integration(t *testing.T) {
 	// Create a directory with files
 	dir := fs.TempDir().Join("TestRemoveFileProvider_Integration")
 	dir.MakeDir()
-	defer dir.RemoveRecursive()
+	defer dir.RemoveRecursive(context.Background())
 
-	dir.Join("keep1.txt").WriteAllString("keep this 1")
-	dir.Join("remove1.txt").WriteAllString("remove this 1")
-	dir.Join("keep2.txt").WriteAllString("keep this 2")
-	dir.Join("remove2.txt").WriteAllString("remove this 2")
+	dir.Join("keep1.txt").WriteAllString(context.Background(), "keep this 1")
+	dir.Join("remove1.txt").WriteAllString(context.Background(), "remove this 1")
+	dir.Join("keep2.txt").WriteAllString(context.Background(), "keep this 2")
+	dir.Join("remove2.txt").WriteAllString(context.Background(), "remove this 2")
 
 	baseProvider := DirFileProvider(dir)
 
@@ -1228,11 +1228,11 @@ func TestCombinedProviders(t *testing.T) {
 	// Test combining ExtFileProvider and RemoveFileProvider
 	dir := fs.TempDir().Join("TestCombinedProviders")
 	dir.MakeDir()
-	defer dir.RemoveRecursive()
+	defer dir.RemoveRecursive(context.Background())
 
-	dir.Join("base1.txt").WriteAllString("base content 1")
-	dir.Join("base2.txt").WriteAllString("base content 2")
-	dir.Join("remove.txt").WriteAllString("will be removed")
+	dir.Join("base1.txt").WriteAllString(context.Background(), "base content 1")
+	dir.Join("base2.txt").WriteAllString(context.Background(), "base content 2")
+	dir.Join("remove.txt").WriteAllString(context.Background(), "will be removed")
 
 	baseProvider := DirFileProvider(dir)
 

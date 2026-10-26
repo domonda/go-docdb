@@ -338,7 +338,7 @@ func CopyDocumentFiles(ctx context.Context, conn Conn, docID uu.ID, backupDir fs
 	}
 	companyIDFile := destDocDir.Join("company.id")
 	log.Debug("Writing file").Stringer("file", companyIDFile).Log()
-	err = companyIDFile.WriteAllString(companyID.String())
+	err = companyIDFile.WriteAllString(ctx, companyID.String())
 	if err != nil {
 		return "", err
 	}
@@ -350,7 +350,7 @@ func CopyDocumentFiles(ctx context.Context, conn Conn, docID uu.ID, backupDir fs
 		}
 		versionInfoFile := destDocDir.Join(version.String() + ".json")
 		log.Debug("Writing file").Stringer("file", versionInfoFile).Log()
-		err = versionInfoFile.WriteJSON(ctx, versionInfo, "  ")
+		err = versionInfoFile.WriteJSONIndent(ctx, versionInfo, "  ")
 		if err != nil {
 			return "", err
 		}
@@ -376,7 +376,7 @@ func CopyDocumentFiles(ctx context.Context, conn Conn, docID uu.ID, backupDir fs
 			}
 			file := versionDir.Join(filename)
 			log.Debug("Writing file").Stringer("file", file).Log()
-			err = file.WriteAllContext(ctx, data)
+			err = file.WriteAll(ctx, data)
 			if err != nil {
 				return "", err
 			}

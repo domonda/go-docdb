@@ -34,7 +34,7 @@ func ContentHash(data []byte) string {
 func ReadFileInfo(ctx context.Context, file fs.FileReader) (info FileInfo, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, file)
 
-	data, err := file.ReadAllContext(ctx)
+	data, err := file.ReadAll(ctx)
 	if err != nil {
 		return FileInfo{}, err
 	}

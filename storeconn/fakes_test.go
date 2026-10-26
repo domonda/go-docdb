@@ -164,7 +164,7 @@ func (d *fakeDocumentStore) CreateDocumentVersion(ctx context.Context, _ uu.ID, 
 	d.writtenVersions = append(d.writtenVersions, version)
 	fileInfos := make([]*docdb.FileInfo, len(files))
 	for i, file := range files {
-		data, err := file.ReadAll()
+		data, err := file.ReadAll(ctx)
 		if err != nil {
 			return nil, err
 		}

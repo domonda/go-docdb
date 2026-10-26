@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"slices"
-	"syscall"
 	"testing"
 
 	"github.com/ungerik/go-fs"
@@ -65,7 +64,7 @@ func NewTestConn(t *testing.T) *Conn {
 	}
 
 	t.Cleanup(func() {
-		cleanupErr := dir.RemoveDirContentsRecursive()
+		cleanupErr := dir.RemoveDirContentsRecursive(context.Background())
 		if cleanupErr != nil {
 			t.Errorf("can't clean up docdb test-dir %s because of: %s", dir.Path(), cleanupErr)
 		}
@@ -118,17 +117,15 @@ func (c *Conn) documentDir(docID uu.ID) fs.File {
 //
 // A path that exists but is not a directory is a corrupt store rather than a
 // missing document and is reported as an [fs.ErrIsNotDirectory] error. go-fs
-// only produces that type when the leaf itself stats as a non-directory; a
-// non-directory higher up the path fails the stat with a raw ENOTDIR instead.
-// Both mean the same broken layout, so the raw one is joined with the typed
-// one and callers have a single thing to test for. Note that either error
-// names the path that was looked up, not the component that is actually not a
-// directory — the OS does not report which one it was.
+// reports a non-directory higher up the path, which fails the stat with
+// ENOTDIR, as that type too, so callers have a single thing to test for. Note
+// that the error names the path that was looked up, not the component that is
+// actually not a directory — the OS does not report which one it was.
 //
 // Unix only: Windows defines syscall.ENOTDIR as ERROR_PATH_NOT_FOUND, which
-// [syscall.Errno.Is] also reports as [os.ErrNotExist], so the absence case
-// above matches first and a non-directory above the leaf is reported there as
-// a missing document. Distinguishing the two on Windows needs a walk up the
+// [syscall.Errno.Is] also reports as [os.ErrNotExist], so go-fs reports a
+// non-directory above the leaf as a missing path and so does this, as a
+// missing document. Distinguishing the two on Windows needs a walk up the
 // path rather than the errno.
 func checkDir(dir fs.File, notFound error) error {
 	exists, err := dirState(dir)
@@ -154,8 +151,6 @@ func dirState(dir fs.File) (exists bool, err error) {
 		return true, nil
 	case errors.Is(err, os.ErrNotExist):
 		return false, nil
-	case errors.Is(err, syscall.ENOTDIR):
-		return false, errors.Join(fs.NewErrIsNotDirectory(dir), err)
 	default:
 		return false, err
 	}
@@ -201,7 +196,7 @@ func (c *Conn) CompanyIDs(ctx context.Context) (companyIDs uu.IDSlice, err error
 
 	// companiesDir holds one sub-directory per company, named by the company's
 	// UUID. List those directory names and parse each back into a company ID.
-	err = c.companiesDir.ListDirInfoContext(ctx, func(info *fs.FileInfo) error {
+	err = c.companiesDir.ListDirInfo(ctx, func(info *fs.FileInfo) error {
 		if !info.IsDir || info.IsHidden {
 			return nil
 		}
@@ -273,7 +268,7 @@ func (c *Conn) makeCompanyDocumentDir(companyID, docID uu.ID) error {
 	return c.companyDocumentDir(companyID, docID).MakeAllDirs()
 }
 
-func (c *Conn) removeCompanyDocumentDirIfExists(companyID, docID uu.ID) error {
+func (c *Conn) removeCompanyDocumentDirIfExists(ctx context.Context, companyID, docID uu.ID) error {
 	docDir := c.companyDocumentDir(companyID, docID)
 	// Not Exists: a stat that failed would make this a silent no-op and leave
 	// the company still mapped to a document its caller has moved or deleted,
@@ -283,7 +278,7 @@ func (c *Conn) removeCompanyDocumentDirIfExists(companyID, docID uu.ID) error {
 		return err
 	}
 	companyDir := c.companiesDir.Join(companyID.String())
-	return uuiddir.RemoveDir(companyDir, docDir)
+	return uuiddir.RemoveDir(ctx, companyDir, docDir)
 }
 
 func (c *Conn) latestDocumentVersionInfo(ctx context.Context, docID uu.ID) (versionInfo *docdb.VersionInfo, versionDir fs.File, err error) {
@@ -344,7 +339,7 @@ func (c *Conn) documentCompanyID(ctx context.Context, docID uu.ID) (companyID uu
 	// from a version's doc.json, which names the company that version was
 	// written with rather than the current one.
 	file := c.documentDir(docID).Join("company.id")
-	uuidStr, err := file.ReadAllString()
+	uuidStr, err := file.ReadAllString(ctx)
 	switch {
 	case err == nil:
 		return uu.IDFromString(uuidStr)
@@ -420,13 +415,13 @@ func (c *Conn) setDocumentCompanyID(ctx context.Context, docID, companyID uu.ID)
 	}
 
 	if currCompanyDocumentDirExists {
-		err = uuiddir.RemoveDir(currCompanyDir, currCompanyDocumentDir)
+		err = uuiddir.RemoveDir(ctx, currCompanyDir, currCompanyDocumentDir)
 		if err != nil {
 			return err
 		}
 	}
 
-	err = docDir.Join("company.id").WriteAllString(companyID.String())
+	err = docDir.Join("company.id").WriteAllString(ctx, companyID.String())
 	if err != nil {
 		return err
 	}
@@ -496,7 +491,7 @@ func (c *Conn) documentVersions(ctx context.Context, docID uu.ID) (versions []do
 // counting it kept a document with no versions left alive forever, in a state
 // newVersionInfo rejects and only DeleteDocument could clear.
 func enumVersionDirs(ctx context.Context, docDir fs.File, docID uu.ID, callback func(version docdb.VersionTime, dir fs.File)) (skipped int, err error) {
-	err = docDir.ListDirInfo(func(dirInfo *fs.FileInfo) error {
+	err = docDir.ListDirInfo(ctx, func(dirInfo *fs.FileInfo) error {
 		if !dirInfo.IsDir || dirInfo.IsHidden {
 			return nil
 		}
@@ -529,7 +524,7 @@ func enumVersionDirs(ctx context.Context, docDir fs.File, docID uu.ID, callback 
 		// enumeration that promises more than it checked.
 		infoFile := docDir.Join(version.String() + ".json")
 		if infoErr := checkVersionInfoFileDecodable(ctx, infoFile); infoErr != nil {
-			versionFiles, listErr := dirInfo.File.ListDirMax(20)
+			versionFiles, listErr := dirInfo.File.ListDirMax(ctx, 20)
 			if listErr != nil {
 				log.ErrorCtx(ctx, "Error listing document version directory").Err(listErr).Log()
 			}
@@ -559,7 +554,7 @@ func enumVersionDirs(ctx context.Context, docDir fs.File, docID uu.ID, callback 
 // readAndFixVersionInfoJSON does with writeFixedVersion. Enumerating a document
 // must not write to it, and the rewrite still happens on the read that follows.
 func checkVersionInfoFileDecodable(ctx context.Context, file fs.File) error {
-	data, err := file.ReadAllContext(ctx)
+	data, err := file.ReadAll(ctx)
 	if err != nil {
 		return err
 	}
@@ -623,7 +618,7 @@ func (c *Conn) documentVersionInfo(ctx context.Context, docID uu.ID, version doc
 func (c *Conn) versionCompanyIDFallback(ctx context.Context, docID uu.ID, version docdb.VersionTime, docDir fs.File) (companyID uu.ID, err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, version, docDir)
 
-	uuidStr, err := docDir.Join("company.id").ReadAllString()
+	uuidStr, err := docDir.Join("company.id").ReadAllString(ctx)
 	switch {
 	case err == nil:
 		companyID, err = uu.IDFromString(uuidStr)
@@ -700,7 +695,7 @@ func (c *Conn) ReadDocumentVersionFile(ctx context.Context, docID uu.ID, version
 	// turned a file it could not stat into ErrDocumentFileNotFound, which
 	// matches os.ErrNotExist, so an unreadable version directory read as a
 	// version that simply does not hold the file.
-	data, err = versionDir.Join(filename).ReadAllContext(ctx)
+	data, err = versionDir.Join(filename).ReadAll(ctx)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, docdb.NewErrDocumentFileNotFound(docID, filename)
 	}
@@ -757,12 +752,12 @@ func (c *Conn) DeleteDocument(ctx context.Context, docID uu.ID) (err error) {
 	}
 	// Dropping only "it was not there": a marker that is already gone leaves
 	// nothing inconsistent behind, so it is not a reason to refuse the delete.
-	err = fs.RemoveErrDoesNotExist(uuiddir.Remove(c.companiesDir.Join(companyID.String()), docID))
+	err = fs.RemoveErrDoesNotExist(uuiddir.Remove(ctx, c.companiesDir.Join(companyID.String()), docID))
 	if err != nil {
 		return err
 	}
 
-	return uuiddir.RemoveDir(c.documentsDir, docDir)
+	return uuiddir.RemoveDir(ctx, c.documentsDir, docDir)
 }
 
 func (c *Conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version docdb.VersionTime) (leftVersions []docdb.VersionTime, err error) {
@@ -821,7 +816,7 @@ func (c *Conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version d
 		deletedPrevVersion = deletedInfo.PrevVersion
 	}
 
-	err = versionDir.RemoveRecursive()
+	err = versionDir.RemoveRecursive(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -881,10 +876,10 @@ func (c *Conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version d
 		// gone, and nothing removes that mapping afterwards.
 		companyID, e := c.documentCompanyID(ctx, docID)
 		if e == nil {
-			e = fs.RemoveErrDoesNotExist(uuiddir.Remove(c.companiesDir.Join(companyID.String()), docID))
+			e = fs.RemoveErrDoesNotExist(uuiddir.Remove(ctx, c.companiesDir.Join(companyID.String()), docID))
 		}
 		if e == nil {
-			e = uuiddir.RemoveDir(c.documentsDir, docDir)
+			e = uuiddir.RemoveDir(ctx, c.documentsDir, docDir)
 		}
 		err = errors.Join(err, e)
 
@@ -954,7 +949,7 @@ func diagnosePathConflict(companyID, docID uu.ID, basePath, targetPath fs.File) 
 			switch {
 			case info.Mode().IsRegular():
 				entryType = "regular file"
-			case fs.Local.IsSymbolicLink(cur.LocalPath()):
+			case cur.IsSymbolicLink():
 				entryType = "symbolic link"
 			}
 			return docdb.NewErrPathConflict(
@@ -965,7 +960,7 @@ func diagnosePathConflict(companyID, docID uu.ID, basePath, targetPath fs.File) 
 				info.Size(),
 				info.ModTime(),
 			)
-		case errors.Is(err, os.ErrNotExist), errors.Is(err, syscall.ENOTDIR):
+		case errors.Is(err, os.ErrNotExist), errors.Is(err, fs.ErrIsNotDirectory{}):
 			// Genuinely absent, or unreachable because a component above it is
 			// not a directory — which is the conflict this walk is looking for.
 			// Either way it is further up the path.
@@ -992,10 +987,10 @@ func diagnosePathConflict(companyID, docID uu.ID, basePath, targetPath fs.File) 
 // "file is not a directory" / "not a directory" messages still match.
 //
 // Runs unconditionally on any non-nil origErr because the underlying failure
-// can surface as [os.ErrExist] (ErrAlreadyExists wrap), [syscall.ENOTDIR]
-// (raw os.MkdirAll), or [fs.ErrIsNotDirectory] (go-fs Stat path) depending
-// on which code path triggered it. The diagnose walk does its own Stat per
-// component, so a no-op (no non-dir found) leaves origErr untouched.
+// can surface as [os.ErrExist] (ErrAlreadyExists wrap) or
+// [fs.ErrIsNotDirectory] depending on which code path triggered it. The
+// diagnose walk does its own Stat per component, so a no-op (no non-dir found)
+// leaves origErr untouched.
 func wrapMakeAllDirsErr(companyID, docID uu.ID, basePath, targetPath fs.File, origErr error) error {
 	if origErr == nil {
 		return nil
@@ -1059,9 +1054,13 @@ func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.I
 			// Exists check this replaced turned a path it could not stat into
 			// "nothing to roll back", so a half-created document survived a
 			// failed create with nothing said about it.
-			e := fs.RemoveErrDoesNotExist(uuiddir.RemoveDir(c.documentsDir, docDir))
+			//
+			// WithoutCancel because cancellation is one of the failures this
+			// rolls back, and a cancelled ctx would fail the removal too.
+			ctx := context.WithoutCancel(ctx)
+			e := fs.RemoveErrDoesNotExist(uuiddir.RemoveDir(ctx, c.documentsDir, docDir))
 			err = errors.Join(err, e)
-			e = c.removeCompanyDocumentDirIfExists(companyID, docID)
+			e = c.removeCompanyDocumentDirIfExists(ctx, companyID, docID)
 			err = errors.Join(err, e)
 		}
 	}()
@@ -1077,7 +1076,7 @@ func (c *Conn) CreateDocument(ctx context.Context, companyID, docID, userID uu.I
 		return wrapMakeAllDirsErr(companyID, docID, c.documentsDir, newVersionDir, err)
 	}
 
-	err = docDir.Join("company.id").WriteAll(companyID.StringBytes())
+	err = docDir.Join("company.id").WriteAll(ctx, companyID.StringBytes())
 	if err != nil {
 		return err
 	}
@@ -1149,10 +1148,10 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 	// The rollback only ever removes what this call created, which is what
 	// naming the paths after the create below rather than before it
 	// establishes: they stay empty until the version directory has been made,
-	// and an empty fs.File removes as ErrEmptyPath, which is an
-	// ErrDoesNotExist. A pre-existing version directory — the half-written one
-	// this method exists to leave alone — is refused below while these are
-	// still empty, so refusing it cannot delete it.
+	// and an empty fs.File is skipped by the rollback. A pre-existing version
+	// directory — the half-written one this method exists to leave alone — is
+	// refused below while these are still empty, so refusing it cannot delete
+	// it.
 	var (
 		createdVersionDir fs.File
 		createdInfoFile   fs.File
@@ -1162,8 +1161,19 @@ func (c *Conn) AddDocumentVersion(ctx context.Context, docID, userID uu.ID, reas
 			// See CreateDocument's rollback: removed unconditionally, dropping
 			// only "it was not there", so a stat that failed cannot turn into
 			// a half-written version left behind in silence.
-			err = errors.Join(err, fs.RemoveErrDoesNotExist(createdVersionDir.RemoveRecursive()))
-			err = errors.Join(err, fs.RemoveErrDoesNotExist(createdInfoFile.Remove()))
+			//
+			// Skipped while empty rather than removed: go-fs v1 reports the
+			// removal of an empty path as ErrEmptyPath, which is no longer an
+			// ErrDoesNotExist, so every rollback before the create would
+			// otherwise add an "empty file path" error to the one it rolls
+			// back.
+			ctx := context.WithoutCancel(ctx)
+			if createdVersionDir != "" {
+				err = errors.Join(err, fs.RemoveErrDoesNotExist(createdVersionDir.RemoveRecursive(ctx)))
+			}
+			if createdInfoFile != "" {
+				err = errors.Join(err, fs.RemoveErrDoesNotExist(createdInfoFile.Remove()))
+			}
 		}
 	}()
 	// See CreateDocument: a panic must reach the rollback above as an error.
@@ -1426,11 +1436,11 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		if e != nil {
 			return e
 		}
-		e = uuiddir.Remove(c.companiesDir.Join(currCompanyID.String()), doc.ID)
+		e = uuiddir.Remove(ctx, c.companiesDir.Join(currCompanyID.String()), doc.ID)
 		if e != nil {
 			return e
 		}
-		e = uuiddir.RemoveDir(c.documentsDir, docDir)
+		e = uuiddir.RemoveDir(ctx, c.documentsDir, docDir)
 		if e != nil {
 			return e
 		}
@@ -1488,7 +1498,7 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		if err != nil {
 			return err
 		}
-		err = docDir.Join("company.id").WriteAll(doc.CompanyID.StringBytes())
+		err = docDir.Join("company.id").WriteAll(ctx, doc.CompanyID.StringBytes())
 		if err != nil {
 			return err
 		}
@@ -1511,8 +1521,10 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		if err == nil {
 			return
 		}
+		// See CreateDocument's rollback for WithoutCancel.
+		ctx := context.WithoutCancel(ctx)
 		for _, d := range createdVersionDirs {
-			err = errors.Join(err, fs.RemoveErrDoesNotExist(d.RemoveRecursive()))
+			err = errors.Join(err, fs.RemoveErrDoesNotExist(d.RemoveRecursive(ctx)))
 		}
 		for _, f := range createdInfoFiles {
 			err = errors.Join(err, fs.RemoveErrDoesNotExist(f.Remove()))
@@ -1520,11 +1532,11 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		// A relinked successor is a version this call did not create and must
 		// not remove, so its original bytes are written back instead.
 		for _, r := range relinkedInfoFiles {
-			err = errors.Join(err, r.file.WriteAll(r.data))
+			err = errors.Join(err, r.file.WriteAll(ctx, r.data))
 		}
 		if !docExisted {
-			err = errors.Join(err, c.removeCompanyDocumentDirIfExists(doc.CompanyID, doc.ID))
-			err = errors.Join(err, fs.RemoveErrDoesNotExist(uuiddir.RemoveDir(c.documentsDir, docDir)))
+			err = errors.Join(err, c.removeCompanyDocumentDirIfExists(ctx, doc.CompanyID, doc.ID))
+			err = errors.Join(err, fs.RemoveErrDoesNotExist(uuiddir.RemoveDir(ctx, c.documentsDir, docDir)))
 		}
 	}()
 
@@ -1551,7 +1563,7 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 
 		hv := doc.Versions[v]
 		for filename, hash := range hv.FileHashes {
-			if err = versionDir.Join(filename).WriteAllContext(ctx, doc.HashedFiles[hash]); err != nil {
+			if err = versionDir.Join(filename).WriteAll(ctx, doc.HashedFiles[hash]); err != nil {
 				return err
 			}
 		}
@@ -1696,7 +1708,7 @@ func relinkSuccessorInfoFile(ctx context.Context, docDir fs.File, docID uu.ID, s
 	// turned an info file it could not stat into "no successor to relink", so
 	// the successor was left naming a version the document no longer has.
 	infoFile := docDir.Joinf("%s.json", successor)
-	original, err := infoFile.ReadAll()
+	original, err := infoFile.ReadAll(ctx)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 		// A successor whose info file is gone names no predecessor to relink.
@@ -1798,7 +1810,7 @@ func versionTimeSet(versions []docdb.VersionTime) map[int64]bool {
 // If writeFixedVersion is true and the legacy field is found, the file is rewritten
 // with the corrected field name.
 func readAndFixVersionInfoJSON(ctx context.Context, file fs.File, writeFixedVersion bool) (versionInfo *docdb.VersionInfo, err error) {
-	data, err := file.ReadAllContext(ctx)
+	data, err := file.ReadAll(ctx)
 	if err != nil {
 		return nil, err
 	}
