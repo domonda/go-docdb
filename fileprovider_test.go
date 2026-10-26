@@ -207,7 +207,7 @@ func TestFileReaderProvider_ContextCancellation(t *testing.T) {
 	assert.NoError(t, err)
 
 	// ReadFile with cancelled context
-	// fs.MemFile.ReadAllContext checks context and returns error
+	// fs.MemFile.ReadAll(ctx) checks the context and returns its error
 	_, err = provider.ReadFile(ctx, "test.txt")
 	assert.Error(t, err)
 	assert.True(t, errors.Is(err, context.Canceled))

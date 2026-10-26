@@ -241,12 +241,11 @@ resolves a document or version directory:
 | Anything else (permissions, I/O, …)    | The underlying error, unchanged                    |
 
 A path that exists but is not a directory is a corrupt store, not a missing
-document. `go-fs` only produces the typed error when the leaf itself stats as a
-non-directory; a non-directory higher up the path fails the stat with a raw
-`ENOTDIR` instead. Both mean the same broken layout, so the raw one is joined
-with the typed one and there is a single thing to test for:
-`errs.Has[fs.ErrIsNotDirectory](err)`. Either error names the path that was
-looked up, not the component that is actually not a directory — the OS does not
+document. `go-fs` reports a non-directory higher up the path, which fails the
+stat with `ENOTDIR`, as the same typed error as a leaf that stats as a
+non-directory, so there is a single thing to test for:
+`errs.Has[fs.ErrIsNotDirectory](err)`. The error names the path that was looked
+up, not the component that is actually not a directory — the OS does not
 report which one it was.
 
 An empty version list is treated the same way, because it is the answer a caller

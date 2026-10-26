@@ -231,9 +231,8 @@ func (c *Conn) CompanyDocumentIDs(ctx context.Context, companyID uu.ID) (docIDs 
 	//
 	// Through dirState rather than classifying the stat here: that is the one
 	// place this package decides what a failed directory stat means, so a
-	// non-directory above the company directory is reported as an
-	// fs.ErrIsNotDirectory error for this path too instead of as the raw
-	// ENOTDIR that errs.Has[fs.ErrIsNotDirectory] does not match.
+	// non-directory above the company directory is reported as the same
+	// fs.ErrIsNotDirectory error as one above a document directory.
 	companyDirExists, err := dirState(companyDir)
 	if err != nil {
 		// Includes a path that exists but is not a directory: surface this
@@ -249,19 +248,56 @@ func (c *Conn) CompanyDocumentIDs(ctx context.Context, companyID uu.ID) (docIDs 
 		return nil, nil
 	}
 
-	err = uuiddir.Enum(
-		ctx,
-		companyDir,
-		func(docDir fs.File, id [16]byte) error {
-			docIDs = append(docIDs, id)
-			return nil
-		},
-	)
+	docIDs, err = uuidDirIDs(ctx, companyDir)
 	if err != nil {
 		return nil, err
 	}
 	docIDs.Sort() // Sort by ID for a consistent order
 	return docIDs, nil
+}
+
+// uuidDirIDs returns the IDs of all uuiddir directories below baseDir.
+//
+// Not uuiddir.Enum: since go-fs v1 it skips a directory at the UUID level whose
+// path does not parse as a UUID, so a damaged company marker would drop its
+// document from CompanyDocumentIDs without a word, and a sync or backup that
+// drives off that list would leave the document behind. Such a directory is an
+// error here, as it was in uuiddir.Enum before v1. Hidden entries and
+// non-directories are skipped like uuiddir.Enum skips them.
+func uuidDirIDs(ctx context.Context, baseDir fs.File) (ids uu.IDSlice, err error) {
+	const levels = 5 // uuiddir splits a UUID into 5 directory levels
+
+	var walkLevel func(dir fs.File, level int) error
+	walkLevel = func(dir fs.File, level int) error {
+		return dir.ListDirInfo(ctx, func(info *fs.FileInfo) error {
+			if info.IsHidden {
+				return nil
+			}
+			isDir := info.IsDir
+			if info.IsSymlink && !isDir {
+				// A listing describes a symbolic link itself,
+				// so whether it leads to a directory needs a Stat
+				isDir = info.File.IsDir()
+			}
+			if !isDir {
+				return nil
+			}
+			if level < levels {
+				return walkLevel(info.File, level+1)
+			}
+			id, err := uuiddir.Parse(info.File)
+			if err != nil {
+				return err
+			}
+			ids = append(ids, id)
+			return nil
+		})
+	}
+	err = walkLevel(baseDir, 1)
+	if err != nil {
+		return nil, err
+	}
+	return ids, nil
 }
 
 func (c *Conn) makeCompanyDocumentDir(companyID, docID uu.ID) error {
@@ -381,6 +417,14 @@ func (c *Conn) SetDocumentCompanyID(ctx context.Context, docID, companyID uu.ID)
 
 func (c *Conn) setDocumentCompanyID(ctx context.Context, docID, companyID uu.ID) (err error) {
 	defer errs.WrapWithFuncParams(&err, ctx, docID, companyID)
+
+	// Not cancelable, as it was before go-fs took a ctx for these reads and
+	// writes. A move removes the old company's marker before it writes
+	// company.id, so a cancellation between the two would leave the document
+	// listed under no company. This is also the undo AddDocumentVersion runs
+	// when onNewVersion failed, most often because ctx was cancelled, and on
+	// that ctx the undo would fail before it changed anything.
+	ctx = context.WithoutCancel(ctx)
 
 	if err = companyID.Validate(); err != nil {
 		return err
@@ -750,6 +794,10 @@ func (c *Conn) DeleteDocument(ctx context.Context, docID uu.ID) (err error) {
 	if err != nil {
 		return err
 	}
+	// Not cancelable from here on: the marker is removed before the document,
+	// so a cancellation between the two would leave a document on disk that
+	// no company lists.
+	ctx = context.WithoutCancel(ctx)
 	// Dropping only "it was not there": a marker that is already gone leaves
 	// nothing inconsistent behind, so it is not a reason to refuse the delete.
 	err = fs.RemoveErrDoesNotExist(uuiddir.Remove(ctx, c.companiesDir.Join(companyID.String()), docID))
@@ -820,6 +868,11 @@ func (c *Conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version d
 	if err != nil {
 		return nil, err
 	}
+	// Not cancelable once the version is gone: what follows relinks its
+	// successor and removes the document with its last version, and a
+	// cancellation in between would leave a successor naming the removed
+	// version or a document without any versions.
+	ctx = context.WithoutCancel(ctx)
 
 	// Removed unconditionally, dropping only "it was not there": an info file
 	// this could not stat was left behind by the Exists check this replaces,
@@ -1436,6 +1489,9 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		if e != nil {
 			return e
 		}
+		// Not cancelable between the marker and the document, for the reason
+		// DeleteDocument gives.
+		ctx := context.WithoutCancel(ctx)
 		e = uuiddir.Remove(ctx, c.companiesDir.Join(currCompanyID.String()), doc.ID)
 		if e != nil {
 			return e
@@ -1498,7 +1554,11 @@ func (c *Conn) RestoreDocument(ctx context.Context, doc *docdb.HashedDocument, r
 		if err != nil {
 			return err
 		}
-		err = docDir.Join("company.id").WriteAll(ctx, doc.CompanyID.StringBytes())
+		// WithoutCancel because this runs before the rollback below is
+		// registered: a write cancelled here would leave an empty document
+		// directory that every later restore refuses as a document without
+		// versions.
+		err = docDir.Join("company.id").WriteAll(context.WithoutCancel(ctx), doc.CompanyID.StringBytes())
 		if err != nil {
 			return err
 		}
