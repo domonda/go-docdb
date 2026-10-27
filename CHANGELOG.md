@@ -5,10 +5,10 @@ All notable changes to `github.com/domonda/go-docdb` are documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [v1.1.7] - 2026-10-26
+## [v1.1.7] - 2026-10-27
 
 ### Changed
-- **go-docdb now requires `github.com/ungerik/go-fs` `v1.0.0-rc.1`, and so does every module that upgrades to this release.** go-fs keeps the same module path from v0 to v1, so Go's minimal version selection moves the whole build of a service onto this release candidate: the service's own code that uses go-fs, and every go-fs backend module it imports (`s3fs`, `sftpfs`, `ftpfs`, …), which have to move to `v1.0.0-rc.1` in the same step. go-docdb's API takes and returns go-fs types (`fs.File`, `fs.FileReader`, `fs.MemFile`), so a service cannot stay on v0 by not calling go-fs itself. Read go-fs's [`docs/MIGRATION_v1.md`](https://github.com/ungerik/go-fs/blob/v1.0.0-rc.1/docs/MIGRATION_v1.md) before upgrading; the changes most likely to matter are listed under Upgrading below. Inside go-docdb only the call sites changed: reads, writes and listings take the caller's context.
+- **go-docdb now requires `github.com/ungerik/go-fs` `v1.0.0-rc.2`, and so does every module that upgrades to this release.** go-fs keeps the same module path from v0 to v1, so Go's minimal version selection moves the whole build of a service onto this release candidate: the service's own code that uses go-fs, and every go-fs backend module it imports (`s3fs`, `sftpfs`, `ftpfs`, …), which have to move to `v1.0.0-rc.2` in the same step. go-docdb's API takes and returns go-fs types (`fs.File`, `fs.FileReader`, `fs.MemFile`), so a service cannot stay on v0 by not calling go-fs itself. Read go-fs's [`docs/MIGRATION_v1.md`](https://github.com/ungerik/go-fs/blob/v1.0.0-rc.2/docs/MIGRATION_v1.md) before upgrading; the changes most likely to matter are listed under Upgrading below. Inside go-docdb only the call sites changed: reads, writes and listings take the caller's context.
 - **localfsdb reads and listings stop on a cancelled context.** They used go-fs methods without a context and ran to their end. Changes to the store still do once they have started: moving a document between companies, deleting a document or its last version, a recreating `RestoreDocument` and every rollback run their remaining steps on `context.WithoutCancel(ctx)`, because stopping between two of their file operations would leave a document listed under no company, a document without versions or an empty document directory that no later call repairs.
 
 ### Fixed
@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `file://` URIs with a relative path, like `file://data/uploads`, no longer name a local directory, so `localfsdb.NewConn` or `CopyDocumentFiles` fail with such a path.
   - Errors of the local file system come as go-fs's typed errors instead of the raw `os` errors: a permission error reads `file lacks permission: …` instead of `… permission denied`, and the error for a non-directory above a document path no longer wraps `syscall.ENOTDIR`, only `fs.ErrIsNotDirectory`.
   - Objects that `s3fs` v0 wrote with a leading `/` in the key are not visible to v1; see "Migrating from v0" in go-fs's `s3fs/README.md`. go-docdb's own `s3store` uses the AWS SDK directly and is not affected.
+  - Copies and moves from another file system into `s3fs`, `sftpfs`, `ftpfs` or `dropboxfs` fail with an error wrapping `os.ErrInvalid` before they write anything at a name the backend can't write, like a name that is not valid UTF-8, or a backslash or control character into `s3fs`, where v0 wrote the files before it. `fs.Zip` and `fs.ZipMemFiles` reject names that are not valid in a zip archive, and `fs.UnzipToMemFiles` returns entry names as UTF-8 instead of the stored bytes.
 
 ## [v1.1.6] - 2026-10-18
 
