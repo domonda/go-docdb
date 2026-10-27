@@ -201,7 +201,7 @@ If an error occurs, the new version directory and info file are removed during c
 
   The deleted version's **successor is chained onto the deleted version's own predecessor**, so no version is left naming one the document no longer has. This is what `pgstore` does in the same call, and `RestoreDocument` on both implementations undoes exactly this relink when the version is restored (see `storeconn.CreateDocumentVersionInput.RelinkSuccessor`). Successors are found by the predecessor they name rather than by their place in the version order, and every match is relinked, because nothing on this store refuses two versions naming the same predecessor. Deleting a *genesis* version relinks nothing, also as `pgstore` does: it has no predecessor to hand the successor to, which is what lets a merge-restore take the earliest version back as the genesis it was.
 
-  The predecessor is read from the version's `.json` info file *before* the version is removed. An unreadable info file is refused rather than deleted with the relink skipped, since that file is the only record of the predecessor; removing it by hand makes the delete go through with nothing left to relink.
+  The predecessor is read from the version's `.json` info file *before* the version is removed. A version whose info file is missing or unreadable, the state a crash mid-write leaves behind, is deleted anyway, with the relink skipped and the reason logged. That file is the only record of the predecessor, so the successor keeps naming the removed version: the same state a deleted genesis version leaves behind, and one a merge-restore of the deleted version undoes. A read that failed because the context was cancelled is the exception: the same cancellation stops the removal before anything is deleted.
 
   The document is re-assigned to the company of the version that becomes the latest one **only when the deleted version was the latest one**. A document belongs to the company of its latest version, so deleting the version that moved it must move it back — but re-deriving on every delete would overwrite a `company.id` that `SetDocumentCompanyID` moved without committing a version, a marker that deliberately names a company no version names.
 
@@ -241,12 +241,11 @@ resolves a document or version directory:
 | Anything else (permissions, I/O, …)    | The underlying error, unchanged                    |
 
 A path that exists but is not a directory is a corrupt store, not a missing
-document. `go-fs` only produces the typed error when the leaf itself stats as a
-non-directory; a non-directory higher up the path fails the stat with a raw
-`ENOTDIR` instead. Both mean the same broken layout, so the raw one is joined
-with the typed one and there is a single thing to test for:
-`errs.Has[fs.ErrIsNotDirectory](err)`. Either error names the path that was
-looked up, not the component that is actually not a directory — the OS does not
+document. `go-fs` reports a non-directory higher up the path, which fails the
+stat with `ENOTDIR`, as the same typed error as a leaf that stats as a
+non-directory, so there is a single thing to test for:
+`errs.Has[fs.ErrIsNotDirectory](err)`. The error names the path that was looked
+up, not the component that is actually not a directory — the OS does not
 report which one it was.
 
 An empty version list is treated the same way, because it is the answer a caller

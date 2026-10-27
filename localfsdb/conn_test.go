@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net"
 	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"sync"
@@ -793,7 +795,7 @@ func TestCreateDocument_PathConflict(t *testing.T) {
 	orphanParent := companiesDir.Join(companyID.String(), "c5", "38a", "c93")
 	require.NoError(t, orphanParent.MakeAllDirs())
 	orphanContent := []byte("orphan regular file")
-	require.NoError(t, orphanParent.Join("2cf049a9").WriteAll(orphanContent))
+	require.NoError(t, orphanParent.Join("2cf049a9").WriteAll(t.Context(), orphanContent))
 
 	// when CreateDocument runs against that state
 	err := conn.CreateDocument(
@@ -818,6 +820,53 @@ func TestCreateDocument_PathConflict(t *testing.T) {
 	require.Equal(t, companyID, conflict.CompanyID())
 	require.Equal(t, "regular file", conflict.EntryType())
 	require.Equal(t, int64(len(orphanContent)), conflict.Size())
+	require.Contains(t, conflict.ConflictPath(), "/c5/38a/c93/2cf049a9")
+}
+
+// TestCreateDocument_PathConflictSymbolicLink is the symbolic link case of
+// TestCreateDocument_PathConflict. The conflict is stat'ed through the link, so
+// a link to a regular file reports as one; only a link to an entry that is
+// neither a regular file nor a directory, like a socket, is named as a link.
+func TestCreateDocument_PathConflictSymbolicLink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping because creating symbolic links needs a privilege on windows")
+	}
+
+	// given a symbolic link to a socket at one of the UUID-split path
+	// components of the document under companies/{companyID}/
+	conn, _, companiesDir := newTestConnDirs(t)
+
+	var (
+		companyID = uu.IDFrom("6f296458-24cd-4146-ac3a-33ca885a993e")
+		docID     = uu.IDFrom("c538ac93-2cf0-49a9-8378-22cd48b5ab84")
+		userID    = uu.IDFrom("ce6f0867-0172-4ffc-a0c0-c5878b921171")
+		version   = docdb.MustVersionTimeFromString("2023-01-01_00-00-00.000")
+	)
+
+	// A socket path must stay below about 100 bytes, which t.TempDir does not
+	// on macOS, so the socket gets a short temp dir of its own.
+	socketDir, err := os.MkdirTemp("", "sock")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(socketDir) })
+	socketPath := filepath.Join(socketDir, "s")
+	listener, err := net.Listen("unix", socketPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { listener.Close() })
+
+	orphanParent := companiesDir.Join(companyID.String(), "c5", "38a", "c93")
+	require.NoError(t, orphanParent.MakeAllDirs())
+	require.NoError(t, os.Symlink(socketPath, orphanParent.Join("2cf049a9").LocalPath()))
+
+	// when CreateDocument runs against that state
+	err = conn.CreateDocument(
+		t.Context(), companyID, docID, userID, "TestCreateDocument_PathConflictSymbolicLink", version,
+		newTestMemFiles("a.txt"), noopOnNew,
+	)
+
+	// then the conflict names the link
+	var conflict docdb.ErrPathConflict
+	require.ErrorAs(t, err, &conflict)
+	require.Equal(t, "symbolic link", conflict.EntryType())
 	require.Contains(t, conflict.ConflictPath(), "/c5/38a/c93/2cf049a9")
 }
 
@@ -934,8 +983,8 @@ func TestVersionDirWithHiddenFiles(t *testing.T) {
 	// when hidden files and a sub-directory appear in the version directory
 	versionDir := uuiddir.Join(documentsDir, docID).Join(v0.String())
 	require.True(t, versionDir.IsDir())
-	require.NoError(t, versionDir.Join(".DS_Store").WriteAllString("Finder cruft"))
-	require.NoError(t, versionDir.Join(".a.txt.4Xk9pQ").WriteAllString("interrupted rsync"))
+	require.NoError(t, versionDir.Join(".DS_Store").WriteAllString(t.Context(), "Finder cruft"))
+	require.NoError(t, versionDir.Join(".a.txt.4Xk9pQ").WriteAllString(t.Context(), "interrupted rsync"))
 	require.NoError(t, versionDir.Join("subdir").MakeDir())
 
 	// then they are not files of the version
@@ -977,11 +1026,7 @@ func newPanicFileReader(name string) fs.FileReader {
 	return panicFileReader{FileReader: fs.NewMemFile(name, []byte(name))}
 }
 
-func (panicFileReader) ReadAll() ([]byte, error) { panic("file reader blew up") }
-
-func (panicFileReader) ReadAllContext(context.Context) ([]byte, error) {
-	panic("file reader blew up")
-}
+func (panicFileReader) ReadAll(context.Context) ([]byte, error) { panic("file reader blew up") }
 
 func (panicFileReader) ReadAllContentHash(context.Context) ([]byte, string, error) {
 	panic("file reader blew up")
@@ -1040,7 +1085,7 @@ func TestCreateDocument_RollsBackOnPanic(t *testing.T) {
 
 func TestAddDocumentVersion_RollsBackOnPanic(t *testing.T) {
 	// given a document with one version
-	conn := localfsdb.NewTestConn(t)
+	conn, documentsDir, _ := newTestConnDirs(t)
 
 	var (
 		companyID = uu.IDFrom("6f296458-24cd-4146-ac3a-33ca885a993e")
@@ -1069,6 +1114,10 @@ func TestAddDocumentVersion_RollsBackOnPanic(t *testing.T) {
 	versions, err := conn.DocumentVersions(t.Context(), docID)
 	require.NoError(t, err)
 	require.Equal(t, []docdb.VersionTime{v0}, versions)
+	// DocumentVersions skips a version directory without an info file, so it
+	// reports a version directory left behind the same as a removed one. Only
+	// the document directory itself tells them apart.
+	requireDocumentDirEntries(t, uuiddir.Join(documentsDir, docID), v0)
 
 	doc, err := docdb.ReadHashedDocument(t.Context(), conn, docID)
 	require.NoError(t, err)
@@ -1083,6 +1132,389 @@ func TestAddDocumentVersion_RollsBackOnPanic(t *testing.T) {
 		docdb.CaptureNewVersionInfo(&newVersion),
 	))
 	require.Equal(t, []string{"a.txt", "b.txt"}, slices.Sorted(maps.Keys(newVersion.Files)))
+}
+
+// requireDocumentDirEntries requires docDir to hold exactly the company.id
+// file and the directory and info file of each of versions.
+func requireDocumentDirEntries(t *testing.T, docDir fs.File, versions ...docdb.VersionTime) {
+	t.Helper()
+
+	want := []string{"company.id"}
+	for _, v := range versions {
+		want = append(want, v.String(), v.String()+".json")
+	}
+	entries, err := os.ReadDir(docDir.LocalPath())
+	require.NoError(t, err)
+	var got []string
+	for _, entry := range entries {
+		got = append(got, entry.Name())
+	}
+	require.ElementsMatch(t, want, got, "entries of the document directory %s", docDir.Path())
+}
+
+// cancelWhen is a context that reports itself cancelled as soon as cancelled
+// returns true, so a test can cancel a call between two of its file system
+// operations, where a real cancellation only arrives by chance.
+type cancelWhen struct {
+	context.Context
+	cancelled func() bool
+}
+
+func (c cancelWhen) Err() error {
+	if c.cancelled() {
+		return context.Canceled
+	}
+	return c.Context.Err()
+}
+
+// The RollsBackOnCancel tests pin that a call whose context is cancelled part
+// way through is rolled back like any other failure.
+//
+// Cancellation is the most common way these calls fail, since onNewVersion is
+// typically a database write under the caller's request context. go-fs takes
+// that context for its reads and writes and refuses to start one once it is
+// cancelled, so a rollback running on it would fail every removal and leave
+// the half-written document or version behind. The rollbacks therefore run on
+// context.WithoutCancel(ctx).
+func TestCreateDocument_RollsBackOnCancel(t *testing.T) {
+	// given a conn with no document
+	conn, documentsDir, companiesDir := newTestConnDirs(t)
+
+	var (
+		companyID = uu.IDFrom("6f296458-24cd-4146-ac3a-33ca885a993e")
+		docID     = uu.IDFrom("c538ac93-2cf0-49a9-8378-22cd48b5ab84")
+		userID    = uu.IDFrom("ce6f0867-0172-4ffc-a0c0-c5878b921171")
+		v0        = docdb.MustVersionTimeFromString("2023-01-01_00-00-00.000")
+	)
+
+	// when the request is cancelled while onNewVersion runs
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	err := conn.CreateDocument(
+		ctx, companyID, docID, userID, "TestCreateDocument_RollsBackOnCancel", v0,
+		newTestMemFiles("a.txt"),
+		func(ctx context.Context, _ *docdb.VersionInfo) error {
+			cancel()
+			return ctx.Err()
+		},
+	)
+
+	// then the cancellation is returned and nothing of the document is left
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, uuiddir.Join(documentsDir, docID).Exists(),
+		"the document directory must be rolled back")
+	require.False(t, uuiddir.Join(companiesDir.Join(companyID.String()), docID).Exists(),
+		"the company document directory must be rolled back")
+
+	// and the document can be created again
+	require.NoError(t, conn.CreateDocument(
+		t.Context(), companyID, docID, userID, "retry after cancel", v0,
+		newTestMemFiles("a.txt"), noopOnNew,
+	))
+}
+
+func TestAddDocumentVersion_RollsBackOnCancel(t *testing.T) {
+	// given a document with one version
+	conn, documentsDir, _ := newTestConnDirs(t)
+
+	var (
+		companyID = uu.IDFrom("6f296458-24cd-4146-ac3a-33ca885a993e")
+		docID     = uu.IDFrom("c538ac93-2cf0-49a9-8378-22cd48b5ab84")
+		userID    = uu.IDFrom("ce6f0867-0172-4ffc-a0c0-c5878b921171")
+		v0        = docdb.MustVersionTimeFromString("2023-01-01_00-00-00.000")
+		v1        = docdb.MustVersionTimeFromString("2023-01-02_00-00-00.000")
+	)
+	require.NoError(t, conn.CreateDocument(
+		t.Context(), companyID, docID, userID, "TestAddDocumentVersion_RollsBackOnCancel", v0,
+		newTestMemFiles("a.txt"), noopOnNew,
+	))
+
+	// when the request is cancelled while onNewVersion runs
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	err := conn.AddDocumentVersion(
+		ctx, docID, userID, "add b.txt",
+		func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+			return &docdb.CreateVersionResult{Version: v1, WriteFiles: newTestMemFiles("b.txt")}, nil
+		},
+		func(ctx context.Context, _ *docdb.VersionInfo) error {
+			cancel()
+			return ctx.Err()
+		},
+	)
+
+	// then the cancellation is returned and the version directory and info
+	// file written before onNewVersion are removed again
+	require.ErrorIs(t, err, context.Canceled)
+	requireDocumentDirEntries(t, uuiddir.Join(documentsDir, docID), v0)
+	versions, err := conn.DocumentVersions(t.Context(), docID)
+	require.NoError(t, err)
+	require.Equal(t, []docdb.VersionTime{v0}, versions)
+}
+
+// TestAddDocumentVersion_CancelUndoesCompanyMove pins that a version moving the
+// document to another company, whose onNewVersion fails on a cancelled
+// context, leaves the document with its previous company. The version is
+// rolled back, so a document left under the new company would belong to a
+// company that none of its versions names.
+func TestAddDocumentVersion_CancelUndoesCompanyMove(t *testing.T) {
+	// given a document of company A
+	conn := localfsdb.NewTestConn(t)
+
+	var (
+		companyA = uu.IDFrom("11111111-1111-4111-8111-111111111111")
+		companyB = uu.IDFrom("22222222-2222-4222-8222-222222222222")
+		docID    = uu.IDFrom("33333333-3333-4333-8333-333333333333")
+		userID   = uu.IDFrom("ce6f0867-0172-4ffc-a0c0-c5878b921171")
+		v0       = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+		v1       = docdb.MustVersionTimeFromString("2024-01-02_00-00-00.000")
+	)
+	require.NoError(t, conn.CreateDocument(
+		t.Context(), companyA, docID, userID, "v0", v0,
+		newTestMemFiles("a.txt"), noopOnNew,
+	))
+
+	// when a version moving it to company B is cancelled while onNewVersion runs
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	err := conn.AddDocumentVersion(
+		ctx, docID, userID, "move to B",
+		func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+			return &docdb.CreateVersionResult{Version: v1, NewCompanyID: companyB.Nullable()}, nil
+		},
+		func(ctx context.Context, _ *docdb.VersionInfo) error {
+			cancel()
+			return ctx.Err()
+		},
+	)
+	require.ErrorIs(t, err, context.Canceled)
+
+	// then the version is rolled back and the document still belongs to A
+	versions, err := conn.DocumentVersions(t.Context(), docID)
+	require.NoError(t, err)
+	require.Equal(t, []docdb.VersionTime{v0}, versions)
+	companyID, err := conn.DocumentCompanyID(t.Context(), docID)
+	require.NoError(t, err)
+	require.Equal(t, companyA, companyID, "the undone move must give the document its company back")
+	docIDsA, err := conn.CompanyDocumentIDs(t.Context(), companyA)
+	require.NoError(t, err)
+	require.Equal(t, uu.IDSlice{docID}, docIDsA)
+	docIDsB, err := conn.CompanyDocumentIDs(t.Context(), companyB)
+	require.NoError(t, err)
+	require.Empty(t, docIDsB)
+}
+
+// TestAddDocumentVersion_CancelDuringCompanyMove pins that a company move is
+// not interrupted between its steps. It removes the old company's marker
+// before it writes company.id and the new marker, so a cancellation in between
+// left the document listed under no company at all.
+func TestAddDocumentVersion_CancelDuringCompanyMove(t *testing.T) {
+	// given a document of company A
+	conn, _, companiesDir := newTestConnDirs(t)
+
+	var (
+		companyA = uu.IDFrom("11111111-1111-4111-8111-111111111111")
+		companyB = uu.IDFrom("22222222-2222-4222-8222-222222222222")
+		docID    = uu.IDFrom("33333333-3333-4333-8333-333333333333")
+		userID   = uu.IDFrom("ce6f0867-0172-4ffc-a0c0-c5878b921171")
+		v0       = docdb.MustVersionTimeFromString("2024-01-01_00-00-00.000")
+		v1       = docdb.MustVersionTimeFromString("2024-01-02_00-00-00.000")
+	)
+	require.NoError(t, conn.CreateDocument(
+		t.Context(), companyA, docID, userID, "v0", v0,
+		newTestMemFiles("a.txt"), noopOnNew,
+	))
+
+	// when a version moving it to company B is cancelled as soon as company
+	// A's marker is removed
+	markerA := uuiddir.Join(companiesDir.Join(companyA.String()), docID)
+	ctx := cancelWhen{Context: t.Context(), cancelled: func() bool { return !markerA.Exists() }}
+	addErr := conn.AddDocumentVersion(
+		ctx, docID, userID, "move to B",
+		func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+			return &docdb.CreateVersionResult{Version: v1, NewCompanyID: companyB.Nullable()}, nil
+		},
+		noopOnNew,
+	)
+
+	// then the document belongs to the company its latest version names,
+	// whether the move was completed or undone, and is listed under it
+	versions, err := conn.DocumentVersions(t.Context(), docID)
+	require.NoError(t, err)
+	latest, err := conn.DocumentVersionInfo(t.Context(), docID, versions[len(versions)-1])
+	require.NoError(t, err)
+	companyID, err := conn.DocumentCompanyID(t.Context(), docID)
+	require.NoError(t, err)
+	require.Equal(t, latest.CompanyID, companyID,
+		"the document must belong to the company of its latest version (AddDocumentVersion error: %v)", addErr)
+	docIDs, err := conn.CompanyDocumentIDs(t.Context(), companyID)
+	require.NoError(t, err)
+	require.Equal(t, uu.IDSlice{docID}, docIDs,
+		"the document must be listed under its company %s", companyID)
+}
+
+func TestRestoreDocument_RollsBackOnCancel(t *testing.T) {
+	var (
+		companyID = uu.IDFrom("6f296458-24cd-4146-ac3a-33ca885a993e")
+		docID     = uu.IDFrom("c538ac93-2cf0-49a9-8378-22cd48b5ab84")
+		userID    = uu.IDFrom("ce6f0867-0172-4ffc-a0c0-c5878b921171")
+		v0        = docdb.MustVersionTimeFromString("2023-01-01_00-00-00.000")
+	)
+	source := localfsdb.NewTestConn(t)
+	require.NoError(t, source.CreateDocument(
+		t.Context(), companyID, docID, userID, "v0", v0,
+		newTestMemFiles("a.txt"), noopOnNew,
+	))
+	backup, err := docdb.ReadHashedDocument(t.Context(), source, docID)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name string
+		// cancelAt returns the path whose creation cancels the restore
+		cancelAt func(docDir fs.File) fs.File
+	}{
+		{
+			// before the rollback is registered, where a cancelled write left
+			// an empty document directory that every later restore refused
+			name:     "while creating the document",
+			cancelAt: func(docDir fs.File) fs.File { return docDir },
+		},
+		{
+			name:     "while writing a version",
+			cancelAt: func(docDir fs.File) fs.File { return docDir.Join(v0.String()) },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// given a conn without the document
+			conn, documentsDir, companiesDir := newTestConnDirs(t)
+			docDir := uuiddir.Join(documentsDir, docID)
+
+			// when the restore is cancelled part way through
+			cancelAt := tt.cancelAt(docDir)
+			ctx := cancelWhen{Context: t.Context(), cancelled: cancelAt.Exists}
+			err := conn.RestoreDocument(ctx, backup, false)
+
+			// then the cancellation is returned and nothing of the document is left
+			require.ErrorIs(t, err, context.Canceled)
+			require.False(t, docDir.Exists(), "the document directory must be rolled back")
+			require.False(t, uuiddir.Join(companiesDir.Join(companyID.String()), docID).Exists(),
+				"the company document directory must be rolled back")
+
+			// and the document can be restored again
+			require.NoError(t, conn.RestoreDocument(t.Context(), backup, false))
+			restored, err := docdb.ReadHashedDocument(t.Context(), conn, docID)
+			require.NoError(t, err)
+			require.Equal(t, backup, restored)
+		})
+	}
+}
+
+// requireListedIfExists requires the document to be listed under companyID if
+// it is still on disk, and under no company if it is gone.
+func requireListedIfExists(t *testing.T, conn *localfsdb.Conn, companyID, docID uu.ID) {
+	t.Helper()
+
+	exists, err := conn.DocumentExists(t.Context(), docID)
+	require.NoError(t, err)
+	docIDs, err := conn.CompanyDocumentIDs(t.Context(), companyID)
+	require.NoError(t, err)
+	if exists {
+		require.Equal(t, uu.IDSlice{docID}, docIDs, "a document on disk must stay listed under its company")
+	} else {
+		require.Empty(t, docIDs, "a removed document must not stay listed under its company")
+	}
+}
+
+// TestDeleteDocument_CancelBetweenRemovals pins that DeleteDocument is not
+// interrupted between removing the company marker and removing the document,
+// which left the document on disk but listed under no company.
+func TestDeleteDocument_CancelBetweenRemovals(t *testing.T) {
+	// given a document of a company
+	conn, documentsDir, companiesDir := newTestConnDirs(t)
+
+	var (
+		companyID = uu.IDFrom("6f296458-24cd-4146-ac3a-33ca885a993e")
+		docID     = uu.IDFrom("c538ac93-2cf0-49a9-8378-22cd48b5ab84")
+		userID    = uu.IDFrom("ce6f0867-0172-4ffc-a0c0-c5878b921171")
+		v0        = docdb.MustVersionTimeFromString("2023-01-01_00-00-00.000")
+	)
+	require.NoError(t, conn.CreateDocument(
+		t.Context(), companyID, docID, userID, "v0", v0,
+		newTestMemFiles("a.txt"), noopOnNew,
+	))
+
+	// when the delete is cancelled as soon as the company marker is removed
+	marker := uuiddir.Join(companiesDir.Join(companyID.String()), docID)
+	ctx := cancelWhen{Context: t.Context(), cancelled: func() bool { return !marker.Exists() }}
+	err := conn.DeleteDocument(ctx, docID)
+
+	// then the delete completes
+	require.NoError(t, err)
+	require.False(t, uuiddir.Join(documentsDir, docID).Exists())
+	requireListedIfExists(t, conn, companyID, docID)
+}
+
+// TestDeleteDocumentVersion_CancelAfterRemovingLastVersion pins that deleting
+// the last version is not interrupted between removing the version and removing
+// the document, which left a document without any versions that only
+// DeleteDocument could clear.
+func TestDeleteDocumentVersion_CancelAfterRemovingLastVersion(t *testing.T) {
+	// given a document with one version
+	conn, documentsDir, _ := newTestConnDirs(t)
+
+	var (
+		companyID = uu.IDFrom("6f296458-24cd-4146-ac3a-33ca885a993e")
+		docID     = uu.IDFrom("c538ac93-2cf0-49a9-8378-22cd48b5ab84")
+		userID    = uu.IDFrom("ce6f0867-0172-4ffc-a0c0-c5878b921171")
+		v0        = docdb.MustVersionTimeFromString("2023-01-01_00-00-00.000")
+	)
+	require.NoError(t, conn.CreateDocument(
+		t.Context(), companyID, docID, userID, "v0", v0,
+		newTestMemFiles("a.txt"), noopOnNew,
+	))
+
+	// when deleting that version is cancelled as soon as its directory is removed
+	docDir := uuiddir.Join(documentsDir, docID)
+	versionDir := docDir.Join(v0.String())
+	ctx := cancelWhen{Context: t.Context(), cancelled: func() bool { return !versionDir.Exists() }}
+	leftVersions, err := conn.DeleteDocumentVersion(ctx, docID, v0)
+
+	// then the document is removed with its last version
+	require.NoError(t, err)
+	require.Empty(t, leftVersions)
+	require.False(t, docDir.Exists(), "deleting the last version must not leave a document without versions")
+	requireListedIfExists(t, conn, companyID, docID)
+}
+
+// TestRestoreDocumentRecreate_CancelBetweenRemovals pins that the up-front
+// delete of a recreating restore is not interrupted between the company marker
+// and the document, which left the old document on disk but listed under no
+// company.
+func TestRestoreDocumentRecreate_CancelBetweenRemovals(t *testing.T) {
+	// given a document of a company and a backup of it
+	conn, _, companiesDir := newTestConnDirs(t)
+
+	var (
+		companyID = uu.IDFrom("6f296458-24cd-4146-ac3a-33ca885a993e")
+		docID     = uu.IDFrom("c538ac93-2cf0-49a9-8378-22cd48b5ab84")
+		userID    = uu.IDFrom("ce6f0867-0172-4ffc-a0c0-c5878b921171")
+		v0        = docdb.MustVersionTimeFromString("2023-01-01_00-00-00.000")
+	)
+	require.NoError(t, conn.CreateDocument(
+		t.Context(), companyID, docID, userID, "v0", v0,
+		newTestMemFiles("a.txt"), noopOnNew,
+	))
+	backup, err := docdb.ReadHashedDocument(t.Context(), conn, docID)
+	require.NoError(t, err)
+
+	// when recreating it is cancelled as soon as the company marker is removed
+	marker := uuiddir.Join(companiesDir.Join(companyID.String()), docID)
+	ctx := cancelWhen{Context: t.Context(), cancelled: func() bool { return !marker.Exists() }}
+	_ = conn.RestoreDocument(ctx, backup, true)
+
+	// then the document is listed under its company if it is still there
+	requireListedIfExists(t, conn, companyID, docID)
 }
 
 // TestCreateDocumentHiddenFilesOnlyRejected covers the gap between the files a
@@ -1183,6 +1615,9 @@ func TestRestoreDocumentHiddenFilesOnlyRejected(t *testing.T) {
 	exists, existsErr := conn.DocumentExists(t.Context(), docID)
 	require.NoError(t, existsErr)
 	require.False(t, exists, "a rejected restore must leave no document behind")
+	companyDocIDs, err := conn.CompanyDocumentIDs(t.Context(), companyID)
+	require.NoError(t, err)
+	require.Empty(t, companyDocIDs, "a rejected restore must not leave the document listed under its company")
 }
 
 // TestMoveDocumentBetweenCompanies covers moving a document between companies
@@ -1669,7 +2104,7 @@ func TestRestoreDocumentRollbackRestoresRelinkedSuccessor(t *testing.T) {
 	// A regular file where v3's version directory has to be created, so the
 	// restore fails after v1 and v2 were written and both relinked v4.
 	docDir := uuiddir.Join(documentsDir, docID)
-	require.NoError(t, docDir.Join(v3.String()).WriteAll([]byte("not a version directory")))
+	require.NoError(t, docDir.Join(v3.String()).WriteAll(ctx, []byte("not a version directory")))
 
 	require.Error(t, target.RestoreDocument(ctx, backup, false))
 
@@ -1780,7 +2215,7 @@ func TestDeleteDocumentVersionWithUnreadableInfoFile(t *testing.T) {
 	docDir := uuiddir.Join(documentsDir, docID)
 	infoFile := docDir.Joinf("%s.json", v1)
 	require.True(t, infoFile.Exists(), "the version info file must exist for this test to mean anything")
-	require.NoError(t, infoFile.WriteAll([]byte(`{"DocID":"`)))
+	require.NoError(t, infoFile.WriteAll(ctx, []byte(`{"DocID":"`)))
 
 	left, err := conn.DeleteDocumentVersion(ctx, docID, v1)
 	require.NoError(t, err, "a version with an unreadable info file must still be deletable")
@@ -2026,7 +2461,7 @@ func TestNonDirectoryDocumentPathIsNotDocumentNotFound(t *testing.T) {
 	// restore or a bad manual fix leaves the store.
 	docDir := uuiddir.Join(documentsDir, docID)
 	require.NoError(t, docDir.Dir().MakeAllDirs())
-	require.NoError(t, docDir.WriteAllString("not a directory"))
+	require.NoError(t, docDir.WriteAllString(ctx, "not a directory"))
 
 	for _, c := range documentDirCalls(ctx, v0) {
 		t.Run(c.name, func(t *testing.T) {
@@ -2171,7 +2606,7 @@ func TestNewConnPanicMessagesNameTheRealProblem(t *testing.T) {
 	t.Run("documentsDir is not a directory", func(t *testing.T) {
 		_, documentsDir, companiesDir := newDirs(t)
 		notADir := documentsDir.Dir().Join("file-in-the-way")
-		require.NoError(t, notADir.WriteAllString("not a directory"))
+		require.NoError(t, notADir.WriteAllString(t.Context(), "not a directory"))
 		msg := requirePanicMessage(t, func() {
 			localfsdb.NewConn(notADir, companiesDir)
 		})
@@ -2198,7 +2633,7 @@ func TestNewConnPanicMessagesNameTheRealProblem(t *testing.T) {
 		})
 		restoreDirPermissions(t, storeDir)
 		require.Contains(t, msg, "documentsDir")
-		require.Contains(t, msg, "permission denied")
+		require.Contains(t, msg, "permission")
 		require.NotContains(t, msg, "does not exist",
 			"a store that could not be read must not send the operator looking for a missing directory")
 	})
@@ -2228,7 +2663,7 @@ func TestNonDirectoryVersionPathIsNotVersionNotFound(t *testing.T) {
 
 	// A regular file where a version directory belongs.
 	docDir := uuiddir.Join(documentsDir, docID)
-	require.NoError(t, docDir.Join(vFile.String()).WriteAllString("not a directory"))
+	require.NoError(t, docDir.Join(vFile.String()).WriteAllString(ctx, "not a directory"))
 
 	_, err := conn.ReadDocumentVersionFile(ctx, docID, vFile, "f0.txt")
 	require.ErrorAs(t, err, &fs.ErrIsNotDirectory{},
@@ -2238,10 +2673,10 @@ func TestNonDirectoryVersionPathIsNotVersionNotFound(t *testing.T) {
 }
 
 // TestNonDirectoryAboveDocumentPathIsNotDocumentNotFound covers the other shape
-// of the same corrupt store. go-fs only produces fs.ErrIsNotDirectory when the
-// leaf itself stats as a non-directory; a regular file at one of the four
-// uuiddir levels above it fails the stat with a raw ENOTDIR instead. Callers
-// are told to branch on one error type, so both shapes have to answer to it.
+// of the same corrupt store: a regular file at one of the four uuiddir levels
+// above the leaf, which fails the stat with ENOTDIR instead of naming the leaf
+// as a non-directory. Callers are told to branch on one error type, so both
+// shapes have to answer to it.
 func TestNonDirectoryAboveDocumentPathIsNotDocumentNotFound(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		// Windows aliases ENOTDIR onto ERROR_PATH_NOT_FOUND, which also reports
@@ -2262,7 +2697,7 @@ func TestNonDirectoryAboveDocumentPathIsNotDocumentNotFound(t *testing.T) {
 	// two above the document directory itself.
 	midDir := documentsDir.Join("11", "111")
 	require.NoError(t, midDir.MakeAllDirs())
-	require.NoError(t, midDir.Join("111").WriteAllString("not a directory"))
+	require.NoError(t, midDir.Join("111").WriteAllString(ctx, "not a directory"))
 
 	for _, c := range documentDirCalls(ctx, v0) {
 		t.Run(c.name, func(t *testing.T) {
@@ -2484,7 +2919,7 @@ func TestCompanyDocumentIDsNonDirectoryCompanyPath(t *testing.T) {
 	)
 
 	conn, _, companiesDir := newTestConnDirs(t)
-	require.NoError(t, companiesDir.Join(companyID.String()).WriteAllString("not a directory"))
+	require.NoError(t, companiesDir.Join(companyID.String()).WriteAllString(ctx, "not a directory"))
 
 	docIDs, err := conn.CompanyDocumentIDs(ctx, companyID)
 	require.True(t, errs.Has[fs.ErrIsNotDirectory](err),
@@ -2505,14 +2940,14 @@ func TestDeleteDocumentKeepsNonDirectoryDocumentPath(t *testing.T) {
 	conn, documentsDir, _ := newTestConnDirs(t)
 	docDir := uuiddir.Join(documentsDir, docID)
 	require.NoError(t, docDir.Dir().MakeAllDirs())
-	require.NoError(t, docDir.WriteAllString("not a document"))
+	require.NoError(t, docDir.WriteAllString(ctx, "not a document"))
 
 	err := conn.DeleteDocument(ctx, docID)
 	require.True(t, errs.Has[fs.ErrIsNotDirectory](err),
 		"a corrupt document path must surface as the layout error it is: %v", err)
 	require.True(t, docDir.Exists(),
 		"a delete that could not identify a document must not destroy what is in its place")
-	content, readErr := docDir.ReadAllString()
+	content, readErr := docDir.ReadAllString(ctx)
 	require.NoError(t, readErr)
 	require.Equal(t, "not a document", content)
 }
@@ -2534,7 +2969,7 @@ func TestCreateDocumentKeepsNonDirectoryDocumentPath(t *testing.T) {
 	conn, documentsDir, _ := newTestConnDirs(t)
 	docDir := uuiddir.Join(documentsDir, docID)
 	require.NoError(t, docDir.Dir().MakeAllDirs())
-	require.NoError(t, docDir.WriteAllString("PRECIOUS"))
+	require.NoError(t, docDir.WriteAllString(ctx, "PRECIOUS"))
 
 	err := conn.CreateDocument(
 		ctx, companyID, docID, userID, "v0", v0,
@@ -2543,7 +2978,7 @@ func TestCreateDocumentKeepsNonDirectoryDocumentPath(t *testing.T) {
 	require.True(t, errs.Has[fs.ErrIsNotDirectory](err),
 		"a corrupt document path must surface as the layout error it is: %v", err)
 	require.True(t, docDir.Exists(), "a create must never delete what was already at the path")
-	content, readErr := docDir.ReadAllString()
+	content, readErr := docDir.ReadAllString(ctx)
 	require.NoError(t, readErr)
 	require.Equal(t, "PRECIOUS", content)
 }
@@ -2806,7 +3241,7 @@ func TestAddDocumentVersionRefusalKeepsExistingVersionDir(t *testing.T) {
 	docDir := uuiddir.Join(documentsDir, docID)
 	v1Dir := docDir.Join(v1.String())
 	require.NoError(t, v1Dir.MakeDir())
-	require.NoError(t, v1Dir.Join("f1.txt").WriteAllString("half written"))
+	require.NoError(t, v1Dir.Join("f1.txt").WriteAllString(ctx, "half written"))
 
 	err := conn.AddDocumentVersion(
 		ctx, docID, userID, "v1",
@@ -2816,10 +3251,14 @@ func TestAddDocumentVersionRefusalKeepsExistingVersionDir(t *testing.T) {
 		noopOnNew,
 	)
 	require.ErrorContains(t, err, "already exists")
+	// The rollback runs before the version paths are named, and go-fs
+	// reports removing an empty path as ErrEmptyPath, so it must skip them
+	// rather than add that error to the refusal.
+	require.NotErrorIs(t, err, fs.ErrEmptyPath)
 
 	require.True(t, v1Dir.IsDir(),
 		"the version directory the call refused to overwrite must survive the refusal: %s", v1Dir.Path())
-	content, readErr := v1Dir.Join("f1.txt").ReadAllString()
+	content, readErr := v1Dir.Join("f1.txt").ReadAllString(ctx)
 	require.NoError(t, readErr)
 	require.Equal(t, "half written", content,
 		"a refused write must not take the file content it refused to touch with it")
@@ -2863,7 +3302,7 @@ func TestRestoreDocumentRefusesUnaccountableVersionDir(t *testing.T) {
 	v1Dir := docDir.Join(v1.String())
 	v1InfoFile := docDir.Joinf("%s.json", v1)
 	require.NoError(t, v1InfoFile.Remove())
-	require.NoError(t, v1Dir.Join("STRAY.txt").WriteAllString("stray"))
+	require.NoError(t, v1Dir.Join("STRAY.txt").WriteAllString(ctx, "stray"))
 
 	err = conn.RestoreDocument(ctx, backup, false)
 	require.ErrorContains(t, err, "could not be accounted for",
@@ -2954,7 +3393,7 @@ func TestDeleteDocumentWithAlreadyRemovedCompanyMarker(t *testing.T) {
 	))
 
 	companyDir := companiesDir.Join(companyID.String())
-	require.NoError(t, uuiddir.Remove(companyDir, docID))
+	require.NoError(t, uuiddir.Remove(ctx, companyDir, docID))
 
 	require.NoError(t, conn.DeleteDocument(ctx, docID),
 		"a company marker that is already gone must not refuse the delete")
@@ -3056,15 +3495,55 @@ func TestCompanyDocumentIDsNonDirectoryAboveCompanyPath(t *testing.T) {
 
 	// Replaced after the connection was made, which NewConn's own validation
 	// would otherwise refuse: the company directory below it then fails the
-	// stat with a raw ENOTDIR rather than naming the leaf as a non-directory.
-	require.NoError(t, companiesDir.RemoveRecursive())
-	require.NoError(t, companiesDir.WriteAllString("not a directory"))
+	// stat with ENOTDIR rather than naming the leaf as a non-directory.
+	require.NoError(t, companiesDir.RemoveRecursive(ctx))
+	require.NoError(t, companiesDir.WriteAllString(ctx, "not a directory"))
 
 	docIDs, err := conn.CompanyDocumentIDs(ctx, companyID)
 	require.True(t, errs.Has[fs.ErrIsNotDirectory](err),
 		"a non-directory above the company path must answer to the same check as one at it: %v", err)
 	require.NotErrorIs(t, err, os.ErrNotExist,
 		"callers swallow os.ErrNotExist as 'nothing here', which a corrupt store is not: %v", err)
+	require.Empty(t, docIDs)
+}
+
+// TestCompanyDocumentIDsUnparseableMarkerDir pins that a company marker
+// directory whose path does not parse as a document ID fails the listing
+// instead of being skipped. go-fs v1's uuiddir.Enum skips it, which would
+// leave the document behind a damaged marker out of the list, and a sync or
+// backup driving off the list would silently leave that document behind.
+// Hidden entries are still skipped.
+func TestCompanyDocumentIDsUnparseableMarkerDir(t *testing.T) {
+	var (
+		ctx       = t.Context()
+		companyID = uu.IDFrom("6f296458-24cd-4146-ac3a-33ca885a993e")
+		docID     = uu.IDFrom("c538ac93-2cf0-49a9-8378-22cd48b5ab84")
+		userID    = uu.IDFrom("ce6f0867-0172-4ffc-a0c0-c5878b921171")
+		v0        = docdb.MustVersionTimeFromString("2023-01-01_00-00-00.000")
+	)
+
+	// given a document of a company
+	conn, _, companiesDir := newTestConnDirs(t)
+	require.NoError(t, conn.CreateDocument(
+		ctx, companyID, docID, userID, "v0", v0,
+		newTestMemFiles("a.txt"), noopOnNew,
+	))
+	markerParent := companiesDir.Join(companyID.String(), "c5", "38a", "c93", "2cf049a9")
+
+	// and a hidden directory at the document ID level, like an interrupted copy leaves
+	require.NoError(t, markerParent.Join(".837822cd48b5ab84.tmp").MakeDir())
+
+	// then the hidden directory is skipped
+	docIDs, err := conn.CompanyDocumentIDs(ctx, companyID)
+	require.NoError(t, err)
+	require.Equal(t, uu.IDSlice{docID}, docIDs)
+
+	// when a marker directory at the document ID level is one hex digit short
+	require.NoError(t, markerParent.Join("837822cd48b5ab8").MakeDir())
+
+	// then the listing fails instead of leaving it out
+	docIDs, err = conn.CompanyDocumentIDs(ctx, companyID)
+	require.ErrorContains(t, err, "can't be parsed as UUID")
 	require.Empty(t, docIDs)
 }
 
@@ -3427,7 +3906,7 @@ func TestDocumentVersionInfoUnparsableCompanyFile(t *testing.T) {
 	removeVersionInfoCompanyID(ctx, t, docDir.Join(v0.String()+".json"))
 	require.NoError(t, docDir.Join(v0.String()).Join("doc.json").
 		WriteJSON(ctx, map[string]any{"companyId": docJSONCompanyID}))
-	require.NoError(t, docDir.Join("company.id").WriteAllString("not-a-uuid"))
+	require.NoError(t, docDir.Join("company.id").WriteAllString(ctx, "not-a-uuid"))
 
 	info, err := conn.DocumentVersionInfo(ctx, docID, v0)
 

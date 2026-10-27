@@ -142,7 +142,7 @@ type twoFacedFile struct {
 	reads      *int
 }
 
-func (f twoFacedFile) ReadAll() ([]byte, error) {
+func (f twoFacedFile) ReadAll(context.Context) ([]byte, error) {
 	*f.reads++
 	if *f.reads > 1 {
 		return f.secondRead, nil

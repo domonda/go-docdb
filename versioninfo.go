@@ -76,7 +76,7 @@ func (vi *VersionInfo) String() string {
 
 // WriteJSON writes the VersionInfo as indented JSON to the given file.
 func (vi *VersionInfo) WriteJSON(file fs.File) error {
-	return file.WriteJSON(context.Background(), vi, "  ")
+	return file.WriteJSONIndent(context.Background(), vi, "  ")
 }
 
 // EqualFiles returns true if both VersionInfos have the same set of files

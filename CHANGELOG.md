@@ -5,6 +5,26 @@ All notable changes to `github.com/domonda/go-docdb` are documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.1.7] - 2026-10-27
+
+### Changed
+- **go-docdb now requires `github.com/ungerik/go-fs` `v1.0.0-rc.2`, and so does every module that upgrades to this release.** go-fs keeps the same module path from v0 to v1, so Go's minimal version selection moves the whole build of a service onto this release candidate: the service's own code that uses go-fs, and every go-fs backend module it imports (`s3fs`, `sftpfs`, `ftpfs`, …), which have to move to `v1.0.0-rc.2` in the same step. go-docdb's API takes and returns go-fs types (`fs.File`, `fs.FileReader`, `fs.MemFile`), so a service cannot stay on v0 by not calling go-fs itself. Read go-fs's [`docs/MIGRATION_v1.md`](https://github.com/ungerik/go-fs/blob/v1.0.0-rc.2/docs/MIGRATION_v1.md) before upgrading; the changes most likely to matter are listed under Upgrading below. Inside go-docdb only the call sites changed: reads, writes and listings take the caller's context.
+- **localfsdb reads and listings stop on a cancelled context.** They used go-fs methods without a context and ran to their end. Changes to the store still do once they have started: moving a document between companies, deleting a document or its last version, a recreating `RestoreDocument` and every rollback run their remaining steps on `context.WithoutCancel(ctx)`, because stopping between two of their file operations would leave a document listed under no company, a document without versions or an empty document directory that no later call repairs.
+
+### Fixed
+- **Cancelling `DeleteDocumentVersion` while it reads the version's info file no longer deletes the version without relinking its successor.** The read failed on the cancelled context and the delete went ahead as if the info file were unreadable, leaving the successor naming a version the document no longer has. The removal now stops on the same cancellation, before anything is deleted. The read failure is still logged as an unreadable info file.
+
+### Upgrading
+- **Code that uses go-fs directly stops compiling where it uses the v0 API.** The `*Context` method twins are gone and the short names take a `ctx` first (`ReadAll(ctx)`, `WriteAll(ctx, data)`, `ListDirInfo(ctx, callback)`, `RemoveRecursive(ctx)`, `uuiddir.Remove(ctx, …)`); `WriteJSON(ctx, v, "  ")` is `WriteJSONIndent(ctx, v, "  ")`; constructors no longer register file systems. A type that implements `fs.FileReader`, for example to pass to `CreateDocument` or `CreateVersionResult.WriteFiles`, needs the v1 method set: `ReadAll`, `ReadAllString` and `ContentHash` take a `ctx`, and `Stat` and `IsSymbolicLink` are new.
+- **Some go-fs changes compile without a warning.** The ones most likely to change a service's behavior:
+  - `fs.ErrEmptyPath` no longer matches `os.ErrNotExist`, so `fs.RemoveErrDoesNotExist(fs.File("").Remove())` is an error, also for the `fs.InvalidFile` that `docdb.TempFileCopy` returns with an error.
+  - A local file name is used as it is: v0 decoded percent escapes when a name was joined onto a local directory, so a file passed as `Rechnung%20123.pdf` was stored as `Rechnung 123.pdf`. localfsdb stores written by earlier versions stay readable, because a version records the names that are on disk, but a caller that asks for a file by its escaped name now gets `ErrDocumentFileNotFound`. A new document file named `Rechnung%20123.pdf` keeps that name.
+  - Deleting a localfsdb document or version whose directory is a symbolic link removes the link and leaves the files it points to; v0 deleted those files too.
+  - `file://` URIs with a relative path, like `file://data/uploads`, no longer name a local directory, so `localfsdb.NewConn` or `CopyDocumentFiles` fail with such a path.
+  - Errors of the local file system come as go-fs's typed errors instead of the raw `os` errors: a permission error reads `file lacks permission: …` instead of `… permission denied`, and the error for a non-directory above a document path no longer wraps `syscall.ENOTDIR`, only `fs.ErrIsNotDirectory`.
+  - Objects that `s3fs` v0 wrote with a leading `/` in the key are not visible to v1; see "Migrating from v0" in go-fs's `s3fs/README.md`. go-docdb's own `s3store` uses the AWS SDK directly and is not affected.
+  - Copies and moves from another file system into `s3fs`, `sftpfs`, `ftpfs` or `dropboxfs` fail with an error wrapping `os.ErrInvalid` before they write anything at a name the backend can't write, like a name that is not valid UTF-8, or a backslash or control character into `s3fs`, where v0 wrote the files before it. `fs.Zip` and `fs.ZipMemFiles` reject names that are not valid in a zip archive, and `fs.UnzipToMemFiles` returns entry names as UTF-8 instead of the stored bytes.
+
 ## [v1.1.6] - 2026-10-18
 
 ### Changed
@@ -348,6 +368,7 @@ Initial release.
 - `ProxyConn` and `DeprecatedConn` (holding deprecated check-out/in methods).
 - `VersionInfo` with `CompanyID`, `LatestDocumentVersionInfo`, and `VersionTime.SetNull`.
 
+[v1.1.7]: https://github.com/domonda/go-docdb/releases/tag/v1.1.7
 [v1.1.6]: https://github.com/domonda/go-docdb/releases/tag/v1.1.6
 [v1.1.5]: https://github.com/domonda/go-docdb/releases/tag/v1.1.5
 [v1.1.4]: https://github.com/domonda/go-docdb/releases/tag/v1.1.4

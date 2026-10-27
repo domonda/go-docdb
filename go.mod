@@ -11,7 +11,7 @@ require (
 	github.com/domonda/go-types v1.0.0-beta.2
 	github.com/domonda/golog v1.1.1
 	github.com/stretchr/testify v1.12.1
-	github.com/ungerik/go-fs v0.0.0-20260629070125-ad84dc607eca
+	github.com/ungerik/go-fs v1.0.0-rc.2
 )
 
 require (

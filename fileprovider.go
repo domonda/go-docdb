@@ -39,7 +39,7 @@ func (p fileReaderProvider) ListFiles(ctx context.Context) (filenames []string, 
 func (p fileReaderProvider) ReadFile(ctx context.Context, filename string) ([]byte, error) {
 	for _, f := range p {
 		if f.Name() == filename {
-			return f.ReadAllContext(ctx)
+			return f.ReadAll(ctx)
 		}
 	}
 	return nil, fs.NewErrPathDoesNotExist(filename)
@@ -62,7 +62,7 @@ func TempFileCopy(ctx context.Context, provider FileProvider, filename string) (
 		return fs.InvalidFile, err
 	}
 	f := fs.TempFile(path.Ext(filename))
-	return f, f.WriteAllContext(ctx, data)
+	return f, f.WriteAll(ctx, data)
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -110,7 +110,7 @@ func (p dirFileProvider) HasFile(filename string) (bool, error) {
 }
 
 func (p dirFileProvider) ListFiles(ctx context.Context) (filenames []string, err error) {
-	err = p.dir.ListDirInfoContext(ctx, func(info *fs.FileInfo) error {
+	err = p.dir.ListDirInfo(ctx, func(info *fs.FileInfo) error {
 		if p.provides(info) {
 			filenames = append(filenames, info.Name)
 		}
@@ -128,7 +128,7 @@ func (p dirFileProvider) ReadFile(ctx context.Context, filename string) ([]byte,
 	if !p.provides(file.Info()) {
 		return nil, fs.NewErrPathDoesNotExist(file.Path())
 	}
-	return file.ReadAllContext(ctx)
+	return file.ReadAll(ctx)
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -176,7 +176,7 @@ func (p extFileProvider) ListFiles(ctx context.Context) (filenames []string, err
 func (p extFileProvider) ReadFile(ctx context.Context, filename string) ([]byte, error) {
 	for _, f := range p.extFiles {
 		if f.Name() == filename {
-			return f.ReadAllContext(ctx)
+			return f.ReadAll(ctx)
 		}
 	}
 	if p.base == nil {
