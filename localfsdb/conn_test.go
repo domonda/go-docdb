@@ -13,6 +13,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -23,6 +24,8 @@ import (
 	"github.com/domonda/go-docdb/localfsdb"
 	"github.com/domonda/go-errs"
 	"github.com/domonda/go-types/uu"
+	"github.com/domonda/golog"
+	rootlog "github.com/domonda/golog/log"
 )
 
 func TestCreateDocument(t *testing.T) {
@@ -1485,6 +1488,79 @@ func TestDeleteDocumentVersion_CancelAfterRemovingLastVersion(t *testing.T) {
 	require.Empty(t, leftVersions)
 	require.False(t, docDir.Exists(), "deleting the last version must not leave a document without versions")
 	requireListedIfExists(t, conn, companyID, docID)
+}
+
+// TestDeleteDocumentVersion_CancelWhileReadingInfo pins that a delete whose
+// context is cancelled while it reads the version's info file stops there,
+// before anything is removed, and does not report the read as an unreadable
+// info file. Treated like one, the delete was logged as going ahead without
+// relinking the successor, and only the context check of the removal after it
+// kept the version from being deleted with its successor left naming it.
+func TestDeleteDocumentVersion_CancelWhileReadingInfo(t *testing.T) {
+	// given a document with the versions v0, v1 and v2, where v2 names v1 as
+	// its predecessor
+	conn, documentsDir, _ := newTestConnDirs(t)
+
+	var (
+		companyID = uu.IDFrom("6f296458-24cd-4146-ac3a-33ca885a993e")
+		docID     = uu.IDFrom("c538ac93-2cf0-49a9-8378-22cd48b5ab84")
+		userID    = uu.IDFrom("ce6f0867-0172-4ffc-a0c0-c5878b921171")
+		v0        = docdb.MustVersionTimeFromString("2023-01-01_00-00-00.000")
+		v1        = docdb.MustVersionTimeFromString("2023-01-01_00-00-00.001")
+		v2        = docdb.MustVersionTimeFromString("2023-01-01_00-00-00.002")
+	)
+	require.NoError(t, conn.CreateDocument(
+		t.Context(), companyID, docID, userID, "v0", v0,
+		newTestMemFiles("f0.txt"), noopOnNew,
+	))
+	for _, version := range []docdb.VersionTime{v1, v2} {
+		filename := "f" + version.String() + ".txt"
+		require.NoError(t, conn.AddDocumentVersion(
+			t.Context(), docID, userID, "add "+filename,
+			func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+				return &docdb.CreateVersionResult{Version: version, WriteFiles: newTestMemFiles(filename)}, nil
+			},
+			noopOnNew,
+		))
+	}
+
+	// and every message localfsdb logs is recorded
+	var logged []string
+	prevConfig := rootlog.Config
+	rootlog.Config = golog.NewConfig(
+		rootlog.Levels,
+		golog.AllLevelsActive,
+		golog.NewCallbackWriterConfig(func(_ time.Time, _ golog.Level, _, text string, _ golog.Attribs) {
+			logged = append(logged, text)
+		}),
+	)
+	t.Cleanup(func() { rootlog.Config = prevConfig })
+
+	// when deleting v1 is cancelled after the entry check, so the first thing
+	// to see the cancellation is the read of v1's info file
+	var errCalls int
+	ctx := cancelWhen{Context: t.Context(), cancelled: func() bool {
+		errCalls++
+		return errCalls > 1
+	}}
+	_, err := conn.DeleteDocumentVersion(ctx, docID, v1)
+
+	// then the delete stops with the cancellation and removes nothing
+	require.ErrorIs(t, err, context.Canceled)
+	docDir := uuiddir.Join(documentsDir, docID)
+	require.True(t, docDir.Join(v1.String()).Exists(), "the version directory must not be removed")
+	require.True(t, docDir.Joinf("%s.json", v1).Exists(), "the version info file must not be removed")
+	versions, err := conn.DocumentVersions(t.Context(), docID)
+	require.NoError(t, err)
+	require.Equal(t, []docdb.VersionTime{v0, v1, v2}, versions)
+	v2Info, err := conn.DocumentVersionInfo(t.Context(), docID, v2)
+	require.NoError(t, err)
+	require.Equal(t, &v1, v2Info.PrevVersion, "v2 must keep naming v1, which is still there")
+
+	// and the cancelled read is not reported as an unreadable info file
+	for _, text := range logged {
+		require.NotContains(t, text, "Can't read version info JSON file", "a cancelled read must not be logged as an unreadable info file")
+	}
 }
 
 // TestRestoreDocumentRecreate_CancelBetweenRemovals pins that the up-front

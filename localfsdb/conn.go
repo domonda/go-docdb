@@ -839,6 +839,15 @@ func (c *Conn) DeleteDocumentVersion(ctx context.Context, docID uu.ID, version d
 	// not.
 	var deletedPrevVersion *docdb.VersionTime
 	deletedInfo, infoErr := readAndFixVersionInfoJSON(ctx, versionInfoFile, false)
+	if infoErr != nil && ctx.Err() != nil {
+		// The read failed on the cancellation, not on the file, so there is no
+		// unreadable info file to report or delete around. Nothing has been
+		// removed yet, so stopping here leaves the version and its successor's
+		// link intact for a retry. Left to the branch below, the delete was
+		// logged as relink-less and only stopped because the RemoveRecursive
+		// after it happened to check the context first.
+		return nil, ctx.Err()
+	}
 	if infoErr != nil {
 		// Deleted anyway, with the relink skipped, rather than refused. An
 		// unreadable info file is one of the states a crash mid-write
