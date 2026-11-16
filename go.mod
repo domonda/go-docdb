@@ -11,7 +11,7 @@ require (
 	github.com/domonda/go-types v1.0.0-beta.2
 	github.com/domonda/golog v1.1.1
 	github.com/stretchr/testify v1.12.1
-	github.com/ungerik/go-fs v1.0.0-rc.2
+	github.com/ungerik/go-fs v1.0.0-rc.8
 )
 
 require (
@@ -48,7 +48,7 @@ require (
 	github.com/pb33f/ordered-map/v2 v2.3.2 // indirect
 	github.com/pkg/xattr v0.4.12 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
-	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/sys v0.49.0 // indirect
+	go.yaml.in/yaml/v3 v3.0.6 // indirect
+	golang.org/x/sys v0.50.0 // indirect
 	golang.org/x/term v0.44.0 // indirect
 )
