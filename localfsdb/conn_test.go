@@ -1490,6 +1490,57 @@ func TestDeleteDocumentVersion_CancelAfterRemovingLastVersion(t *testing.T) {
 	requireListedIfExists(t, conn, companyID, docID)
 }
 
+// TestDeleteDocumentVersion_CancelBeforeRelink pins that deleting a version in
+// the middle of the chain is not interrupted between removing the version and
+// relinking its successor onto its predecessor, which left the successor
+// naming a version the document no longer has.
+//
+// Value: protects=the successor of a deleted middle version is relinked even
+// when the context is cancelled once the version directory is gone;
+// fails_when=the relink runs on the cancelled context; why_new=only the
+// last-version branch had a cancel test; seam=none (test-only ctx double);
+// no_claim=race window only in production
+func TestDeleteDocumentVersion_CancelBeforeRelink(t *testing.T) {
+	// given a document with the versions v0, v1 and v2, where v2 names v1 as
+	// its predecessor
+	conn, documentsDir, _ := newTestConnDirs(t)
+
+	var (
+		companyID = uu.IDFrom("6f296458-24cd-4146-ac3a-33ca885a993e")
+		docID     = uu.IDFrom("c538ac93-2cf0-49a9-8378-22cd48b5ab84")
+		userID    = uu.IDFrom("ce6f0867-0172-4ffc-a0c0-c5878b921171")
+		v0        = docdb.MustVersionTimeFromString("2023-01-01_00-00-00.000")
+		v1        = docdb.MustVersionTimeFromString("2023-01-01_00-00-00.001")
+		v2        = docdb.MustVersionTimeFromString("2023-01-01_00-00-00.002")
+	)
+	require.NoError(t, conn.CreateDocument(
+		t.Context(), companyID, docID, userID, "v0", v0,
+		newTestMemFiles("f0.txt"), noopOnNew,
+	))
+	for _, version := range []docdb.VersionTime{v1, v2} {
+		filename := "f" + version.String() + ".txt"
+		require.NoError(t, conn.AddDocumentVersion(
+			t.Context(), docID, userID, "add "+filename,
+			func(context.Context, uu.ID, docdb.VersionTime, docdb.FileProvider) (*docdb.CreateVersionResult, error) {
+				return &docdb.CreateVersionResult{Version: version, WriteFiles: newTestMemFiles(filename)}, nil
+			},
+			noopOnNew,
+		))
+	}
+
+	// when deleting v1 is cancelled as soon as its directory is removed
+	versionDir := uuiddir.Join(documentsDir, docID).Join(v1.String())
+	ctx := cancelWhen{Context: t.Context(), cancelled: func() bool { return !versionDir.Exists() }}
+	leftVersions, err := conn.DeleteDocumentVersion(ctx, docID, v1)
+
+	// then the delete completes and v2 is chained onto v0
+	require.NoError(t, err)
+	require.Equal(t, []docdb.VersionTime{v0, v2}, leftVersions)
+	v2Info, err := conn.DocumentVersionInfo(t.Context(), docID, v2)
+	require.NoError(t, err)
+	require.Equal(t, &v0, v2Info.PrevVersion, "v2 must be relinked onto v0, not keep naming the deleted v1")
+}
+
 // TestDeleteDocumentVersion_CancelWhileReadingInfo pins that a delete whose
 // context is cancelled while it reads the version's info file stops there,
 // before anything is removed, and does not report the read as an unreadable
