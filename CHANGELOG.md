@@ -5,7 +5,7 @@ All notable changes to `github.com/domonda/go-docdb` are documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [v1.1.7] - 2026-10-19
+## [v1.1.8] - 2026-11-16
 
 ### Changed
 - **`storeconn/pgstore` records what a correction overwrote in a new table, `docdb.document_version_correction`, written by the same statement as the correction.** Under `docdb.ContextWithFileContentWinsOverVersionInfo` the store rewrites the stale sizes and hashes of a version's file records and the delta lists derived from them, and the values it replaces are the last ones left of the source store the migration retires. Their only record was a log line, and a log line is not part of the transaction it reports on. Written from inside the transaction, it claimed corrections that a failing commit then rolled back. Written after the transaction and only on success, it missed corrections that outlived an error — a `COMMIT` the server applied but could not acknowledge, or a failed `RELEASE SAVEPOINT` in a transaction the caller goes on to commit. Moving the line around trades one of those for the other. Each correction is now a single statement, whose data-modifying CTEs rewrite the file records and the delta lists while it inserts the row with the sizes, hashes and delta lists from before and after. The row therefore exists exactly when the correction does, also for a caller that opened no transaction (`db.ContextWithoutTransactions`), where the several statements the correction used to be committed one by one and a failure between them left part of it in place.
@@ -399,7 +399,7 @@ Initial release.
 - `ProxyConn` and `DeprecatedConn` (holding deprecated check-out/in methods).
 - `VersionInfo` with `CompanyID`, `LatestDocumentVersionInfo`, and `VersionTime.SetNull`.
 
-[v1.1.7]: https://github.com/domonda/go-docdb/releases/tag/v1.1.7
+[v1.1.8]: https://github.com/domonda/go-docdb/releases/tag/v1.1.8
 [v1.1.6]: https://github.com/domonda/go-docdb/releases/tag/v1.1.6
 [v1.1.5]: https://github.com/domonda/go-docdb/releases/tag/v1.1.5
 [v1.1.4]: https://github.com/domonda/go-docdb/releases/tag/v1.1.4
