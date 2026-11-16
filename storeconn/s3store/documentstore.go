@@ -114,7 +114,7 @@ func (s *docStore) CreateDocumentVersion(ctx context.Context, docID uu.ID, versi
 			return nil, fmt.Errorf("filename '%s' contains '/'", file.Name())
 		}
 
-		data, err := file.ReadAll()
+		data, err := file.ReadAll(ctx)
 		if err != nil {
 			return nil, err
 		}

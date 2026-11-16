@@ -277,7 +277,7 @@ func (c *conn) CreateDocument(
 	addedFiles := make([]*docdb.FileInfo, len(files))
 	var data []byte
 	for i, file := range files {
-		data, err = file.ReadAll()
+		data, err = file.ReadAll(ctx)
 		if err != nil {
 			return err
 		}
@@ -402,7 +402,7 @@ func (c *conn) AddDocumentVersion(
 	writeFiles := make([]fs.FileReader, 0, len(result.WriteFiles))
 	var data []byte
 	for _, file := range result.WriteFiles {
-		data, err = file.ReadAll()
+		data, err = file.ReadAll(ctx)
 		if err != nil {
 			return err
 		}
